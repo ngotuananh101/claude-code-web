@@ -47,7 +47,7 @@
 | `agent-adapter` | SDK option mapping; `resume` by id, never `continue`; lazy import | unit |
 | `runner/daemon` | Identity → loop → controller; `stop()` waits for in-flight runs | unit + integration |
 
-321 unit tests across 33 files, 5 integration probes.
+323 unit tests across 33 files, 5 integration probes.
 
 ## Integration evidence
 
@@ -430,6 +430,16 @@ Four of these are the point:
     returned. A probe showed one command handled and one receipt sent after
     `stop()`; the message handler now returns early once stopped.
 
+35. **A failed terminal write left the workspace locked for the life of the
+    process.** `finishAttempt` and `releaseAttempt` were two statements in one
+    `finally`, so a throw from the first — a busy timeout, a full disk — skipped
+    the second. The row stays `starting` and boot recovery reconciles that, but
+    the lock has no such backstop: nothing else frees it, and it only runs at
+    startup, so the workspace is unusable until restart. Both release paths (the
+    main `finally` and the lock-refusal early return) now release in their own
+    `finally`. Confirmed with a probe: a trigger that aborts the terminal UPDATE
+    left `workspace lock: attempt-1` before, `(free)` after.
+
 
 ## Design decisions worth remembering
 
@@ -533,6 +543,10 @@ Four of these are the point:
   not its shape.** The SDK has two axes: `subtype` says which kind of turn ended,
   and `is_error` says whether it ended badly. Only the second one answers "did
   this run succeed".
+- **A lock is released on every path, including a failing one.** The terminal
+  write and the release are separate concerns: the write can fail and be
+  reconciled at boot, but the lock has no other owner and no TTL, so it is
+  released in its own `finally` rather than after the write.
 - **Stopping is a state the message path also reads.** `#stopped` guards the retry
   chain and now the message handler too: a socket closed at shutdown can still
   deliver what it had buffered, and starting a run there writes to a database the

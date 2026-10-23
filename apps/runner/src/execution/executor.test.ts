@@ -242,6 +242,40 @@ describe("a failing run", () => {
     expect(attemptState(db, "attempt-1")).toBe("failed");
   });
 
+  test("a terminal write that fails still releases the workspace", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        // The terminal write fails the way a busy timeout or an I/O error would.
+        // The release that follows it would still succeed — the question is
+        // whether it is reached. It is the last statement of the last function
+        // that touches this workspace, so skipping it blocks every later run
+        // until the process restarts.
+        db.exec(
+          `CREATE TRIGGER refuse_terminal BEFORE UPDATE ON local_attempts
+           BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+        );
+        yield { type: "result", subtype: "success" };
+      })();
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+    }).catch(() => undefined);
+
+    // The row may remain `starting` — the write did fail — and boot recovery
+    // will reconcile that. The lock is different: nothing else can free it, and
+    // the workspace is unusable for as long as this process lives.
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+
   test("records the failure and frees the workspace", async () => {
     const { db } = setup();
     beginAttempt(db, {
@@ -487,6 +521,39 @@ describe("the workspace lock", () => {
     expect(refusal).toBeDefined();
     expect(refusal!.payload).not.toContain("attempt-0");
     expect(JSON.parse(refusal!.payload)).toEqual({ error: "workspace_locked" });
+  });
+
+  test("a refused run frees its own lock even when the terminal write fails", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-0",
+      sessionId: "session-0",
+      runId: "run-0",
+      workspacePath: "/home/runner/project",
+    });
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/other",
+    });
+    db.exec(
+      `CREATE TRIGGER refuse_terminal BEFORE UPDATE ON local_attempts
+       BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+    );
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk: () => {
+        throw new Error("the SDK must not be reached");
+      },
+    }).catch(() => undefined);
+
+    // The refusal path has its own release, and it needs the same guard: a
+    // failed write here would otherwise leave the refusing attempt holding a
+    // workspace nothing releases.
+    expect(lockHolder(db, "/home/runner/other")).toBeUndefined();
+    expect(lockHolder(db, "/home/runner/project")).toBe("attempt-0");
   });
 
   test("the refusing attempt's own lock is released, not left behind", async () => {

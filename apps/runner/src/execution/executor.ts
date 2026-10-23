@@ -110,11 +110,16 @@ export async function executeRun(
     // no viewer can act on, and publishing it gives a spectator a stable handle
     // on a run they were never shown. `workspace_locked` is the whole fact.
     append("run.failed", { error: "workspace_locked" });
-    finishAttempt(db, { attemptId, state: "failed" });
     // The attempt's own lock, not the holder's: `releaseAttempt` deletes by
     // attempt id, so the workspace this run was refused is untouched. Skipping
-    // this left a terminal attempt owning a lock that nothing would release.
-    releaseAttempt(db, attemptId);
+    // this left a terminal attempt owning a lock that nothing would release —
+    // and it must happen even if recording the outcome throws, for the same
+    // reason as the main path's finally.
+    try {
+      finishAttempt(db, { attemptId, state: "failed" });
+    } finally {
+      releaseAttempt(db, attemptId);
+    }
     return { state: "failed" };
   }
 
@@ -192,8 +197,17 @@ export async function executeRun(
       append("run.failed", { error: sanitizeError(error) });
     }
   } finally {
-    finishAttempt(db, { attemptId, state });
-    releaseAttempt(db, attemptId);
+    // Released even if recording the outcome fails. The two are separate
+    // statements because the terminal write can throw — a busy timeout, a full
+    // disk — and it is the last thing between here and the end of the run. A
+    // throw that skipped the release would leave the workspace locked for the
+    // life of the process, since boot recovery is the only other thing that
+    // frees a lock and it only runs at startup.
+    try {
+      finishAttempt(db, { attemptId, state });
+    } finally {
+      releaseAttempt(db, attemptId);
+    }
   }
 
   return { ...(sdkSessionId === undefined ? {} : { sdkSessionId }), state };
