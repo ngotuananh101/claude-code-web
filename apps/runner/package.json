@@ -1,0 +1,18 @@
+{
+  "name": "@cc-web/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cc-web-runner": "./src/bootstrap/main.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@cc-web/agent-adapter": "workspace:*",
+    "@cc-web/protocol": "workspace:*",
+    "@cc-web/runner-db": "workspace:*",
+    "@cc-web/shared": "workspace:*"
+  }
+}

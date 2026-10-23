@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/protocol" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/agent-adapter" },
+    { "path": "./packages/control-db" },
+    { "path": "./packages/runner-db" },
+    { "path": "./apps/control-server" },
+    { "path": "./apps/runner" }
+  ]
+}

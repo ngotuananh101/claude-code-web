@@ -1,0 +1,54 @@
+# dependencies
+node_modules/
+.pnp.*
+.yarn/
+
+# build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# runtime data — control & runner databases, WAL, spools
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+data/
+spool/
+
+# local config and secrets — never commit runner credentials or env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials/
+secrets/
+
+# logs and coverage
+logs/
+*.log
+coverage/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+
+# tooling caches
+.cache/
+.turbo/
+.vite/
+
+# session memory (local-only, not part of the project)
+.remember/
+
+# playwright / test artifacts
+test-results/
+playwright-report/

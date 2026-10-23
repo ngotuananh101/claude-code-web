@@ -1,0 +1,12 @@
+{
+  "name": "cc-web",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "doctor": "bun run scripts/doctor.ts"
+  }
+}

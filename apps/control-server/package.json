@@ -1,0 +1,14 @@
+{
+  "name": "@cc-web/control-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@cc-web/control-db": "workspace:*",
+    "@cc-web/protocol": "workspace:*",
+    "@cc-web/shared": "workspace:*"
+  }
+}
