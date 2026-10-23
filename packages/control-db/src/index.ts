@@ -5,4 +5,10 @@
  * behind the same repository interface (§18.4).
  */
 
-export {};
+export { migrate } from "./db.ts";
+export {
+  createEnrollment,
+  consumeEnrollment,
+  type CreatedEnrollment,
+  type ConsumedEnrollment,
+} from "./enrollment.ts";
