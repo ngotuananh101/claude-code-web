@@ -48,7 +48,13 @@ is the source of truth. See [ADR-0002](docs/adr/0002-toolchain.md).
 ```sh
 bun install
 bun run doctor        # static runtime/config probe; never calls a model
+bun run spike         # Phase 0 compatibility spike; add --model to spend tokens
+bun run typecheck
+bun test
 ```
+
+Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-results.md)
+for what was proven and what still is not.
 
 ## Decisions
 
