@@ -18,14 +18,26 @@ type Check = {
   detail: string;
 };
 
-const checks: Check[] = [];
+/** Registration order is preserved for output, even though checks run concurrently. */
+const order: string[] = [];
+const results = new Map<string, Check>();
+const pending: Promise<void>[] = [];
 
-function check(name: string, run: () => Omit<Check, "name">): void {
-  try {
-    checks.push({ name, ...run() });
-  } catch (error) {
-    checks.push({ name, status: "fail", detail: (error as Error).message });
-  }
+function check(
+  name: string,
+  run: () => Omit<Check, "name"> | Promise<Omit<Check, "name">>,
+): void {
+  order.push(name);
+  pending.push(
+    Promise.resolve()
+      .then(run)
+      .then((result) => {
+        results.set(name, { name, ...result });
+      })
+      .catch((error: unknown) => {
+        results.set(name, { name, status: "fail", detail: (error as Error).message });
+      }),
+  );
 }
 
 check("bun", () => ({
@@ -62,7 +74,7 @@ check("user settings", () => {
 
 check("provider auth", () => {
   // Presence only. Never print values, never claim the credential is valid.
-  const present = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"].filter(
+  const present = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].filter(
     (key) => (process.env[key]?.length ?? 0) > 0,
   );
   if (present.length === 0) {
@@ -71,6 +83,55 @@ check("provider auth", () => {
   return { status: "ok", detail: `present: ${present.join(", ")}` };
 });
 
+check("provider endpoint", () => {
+  const raw = process.env["ANTHROPIC_BASE_URL"];
+  if (!raw) return { status: "ok", detail: "unset — SDK default (api.anthropic.com)" };
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { status: "fail", detail: "ANTHROPIC_BASE_URL is not a valid URL" };
+  }
+
+  const isLoopback = /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/.test(url.hostname);
+  const isPrivate =
+    isLoopback ||
+    /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(url.hostname);
+  const where = isLoopback ? "loopback" : isPrivate ? "private" : "public";
+
+  // The bearer token is cleartext on the wire under plain http. Loopback is the
+  // host itself, so there is no network hop; a private LAN still has other hosts
+  // on the segment, so that is a warning rather than an outright failure.
+  if (url.protocol === "http:") {
+    if (!isPrivate) {
+      return { status: "fail", detail: `plain http to ${where} host — token in cleartext` };
+    }
+    if (!isLoopback) {
+      return {
+        status: "warn",
+        detail: `plain http to ${where} host — token readable on that network segment`,
+      };
+    }
+  }
+  return { status: "ok", detail: `${url.protocol}//${where} host` };
+});
+
+check("gateway reachable", async () => {
+  const raw = process.env["ANTHROPIC_BASE_URL"];
+  if (!raw) return { status: "ok", detail: "n/a" };
+  try {
+    // Any HTTP status proves something is listening; we assert reachability, not health.
+    await fetch(raw, { method: "HEAD", signal: AbortSignal.timeout(2000) });
+    return { status: "ok", detail: "listening" };
+  } catch {
+    return { status: "warn", detail: "not listening — start the gateway before Phase 0" };
+  }
+});
+
+await Promise.all(pending);
+
+const checks = order.map((name) => results.get(name)!);
 const width = Math.max(...checks.map((c) => c.name.length));
 for (const c of checks) {
   const mark = c.status === "ok" ? "✓" : c.status === "warn" ? "!" : "✗";

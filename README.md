@@ -57,6 +57,17 @@ Architecture decisions that needed more than a table row live in
 
 - [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens + `tokenVersion` revocation
 - [ADR-0002](docs/adr/0002-toolchain.md) — Fedora target, lockfile-over-pins policy
+- [ADR-0003](docs/adr/0003-provider-gateway.md) — provider auth via a private-LAN Anthropic-compatible gateway; never touches the control plane
+
+### Auth boundaries
+
+Three credentials, three boundaries — none crosses another:
+
+| Credential | Held by | Never reaches |
+| --- | --- | --- |
+| Owner JWT | Browser (HttpOnly cookie) | Runner |
+| Runner credential | Runner daemon | Browser, worker processes |
+| Provider token (gateway) | Runner host config | Control Server, browser, journal |
 
 ## Invariants worth remembering
 
