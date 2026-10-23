@@ -1,0 +1,58 @@
+# Two isolated Runners for protocol integration tests.
+#
+# Purpose: prove behaviours that in-process fakes cannot — separate identities,
+# separate local databases, separate filesystems, and independent lifecycle.
+# §22.3 requires at least two Runners, and §13/§14 faults need real processes
+# that can be killed while the other keeps running.
+#
+# Start:  docker compose -f infra/docker/compose.runners.yml up -d
+# Stop:   docker compose -f infra/docker/compose.runners.yml down -v
+
+services:
+  runner-a:
+    image: cc-web-runner:dev
+    container_name: cc-web-runner-a
+    hostname: runner-a
+    environment:
+      CC_WEB_RUNNER_ID: runner-a
+      CC_WEB_RUNNER_DATA: /var/lib/cc-web-runner
+    volumes:
+      - runner-a-data:/var/lib/cc-web-runner
+      - ../..:/app:ro
+    # The protocol under test is loopback-free: each runner dials out. For the
+    # integration harness the control server is a sibling container.
+    depends_on:
+      - control
+    command: ["bun", "run", "apps/runner/src/bootstrap/main.ts"]
+
+  runner-b:
+    image: cc-web-runner:dev
+    container_name: cc-web-runner-b
+    hostname: runner-b
+    environment:
+      CC_WEB_RUNNER_ID: runner-b
+      CC_WEB_RUNNER_DATA: /var/lib/cc-web-runner
+    volumes:
+      - runner-b-data:/var/lib/cc-web-runner
+      - ../..:/app:ro
+    depends_on:
+      - control
+    command: ["bun", "run", "apps/runner/src/bootstrap/main.ts"]
+
+  control:
+    image: cc-web-runner:dev
+    container_name: cc-web-control
+    hostname: control
+    environment:
+      CONTROL_HOST: 0.0.0.0
+      CONTROL_PORT: "8787"
+      CONTROL_DB_PATH: /var/lib/cc-web-control/control.sqlite
+    volumes:
+      - control-data:/var/lib/cc-web-control
+      - ../..:/app:ro
+    command: ["bun", "run", "apps/control-server/src/index.ts"]
+
+volumes:
+  runner-a-data:
+  runner-b-data:
+  control-data:

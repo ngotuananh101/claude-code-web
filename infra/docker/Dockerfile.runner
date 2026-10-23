@@ -1,0 +1,49 @@
+# Runner image for integration tests.
+#
+# This is NOT the production deployment path (that is host-native under systemd,
+# §20.3). Its purpose is to run several isolated Runners on one machine so the
+# protocol can be exercised across process and filesystem boundaries — something
+# two in-process fakes cannot prove.
+#
+# The Claude Code binary is ~293 MB and is install-time, not build-time: the
+# image installs dependencies only, so the binary comes from the mounted
+# workspace rather than being baked into every layer.
+
+FROM oven/bun:1.4.3-debian
+
+# git is needed by the workspace/Git RPC layer; ca-certificates for the control
+# server's TLS in later environments.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first, so source edits do not invalidate the dependency layer.
+COPY package.json bun.lock ./
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/shared/package.json packages/shared/
+COPY packages/runner-db/package.json packages/runner-db/
+COPY packages/control-db/package.json packages/control-db/
+COPY packages/agent-adapter/package.json packages/agent-adapter/
+COPY apps/runner/package.json apps/runner/
+COPY apps/control-server/package.json apps/control-server/
+COPY apps/web/package.json apps/web/
+
+# No --frozen-lockfile: the lockfile references optional platform binaries that
+# are skipped on a different host, and workspace links must be regenerated inside
+# the image. Reproducibility here comes from the pinned base image, not the lock
+# enforcement flag.
+RUN bun install --ignore-scripts
+
+COPY . .
+
+# Runner data lives on a volume so a container can be destroyed without losing
+# its identity — and so two Runners provably have separate identities.
+ENV CC_WEB_RUNNER_DATA=/var/lib/cc-web-runner
+RUN mkdir -p /var/lib/cc-web-runner && chown -R bun:bun /var/lib/cc-web-runner
+
+USER bun
+VOLUME ["/var/lib/cc-web-runner"]
+
+CMD ["bun", "run", "apps/runner/src/bootstrap/main.ts"]
