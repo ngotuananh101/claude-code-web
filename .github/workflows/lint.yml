@@ -1,0 +1,37 @@
+name: Lint
+
+# Separate from CI so a formatting or lint failure is named as such in the
+# checks list, rather than being one more red step inside a job called "test".
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: biome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # `biome check` is formatter + linter + import order in one pass. It is
+      # read-only here: CI reports what is wrong, it never rewrites the tree.
+      - name: Lint and format check
+        run: bun run lint

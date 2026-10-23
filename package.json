@@ -2,6 +2,7 @@
   "name": "cc-web",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.3",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -10,6 +11,9 @@
     "doctor": "bun run scripts/doctor.ts",
     "spike": "bun run scripts/spike/phase0.ts",
     "typecheck": "tsc -b --pretty",
+    "lint": "biome check .",
+    "lint:fix": "biome check . --write",
+    "format": "biome format . --write",
     "test": "bun test",
     "test:integration": "bun run scripts/integration/enrollment-race.ts && bun run scripts/integration/ack-gap-crash.ts && bun run scripts/integration/reconnect-fence.ts && bun run scripts/integration/daemon-e2e.ts",
     "test:integration:docker": "bun run scripts/integration/enrollment-race.ts --docker && bun run scripts/integration/ack-gap-crash.ts --docker && bun run scripts/integration/reconnect-fence.ts --docker && bun run scripts/integration/daemon-e2e.ts --docker",
@@ -18,6 +22,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.309",
+    "@biomejs/biome": "^2.6.2",
     "@types/bun": "^1.4.4",
     "typescript": "^7.0.2"
   },

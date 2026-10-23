@@ -1,0 +1,50 @@
+name: CI
+
+# Every push to main and every pull request. This is the gate that decides
+# whether a commit is safe, so it runs the same commands a developer runs
+# locally — no CI-only path that could pass while the local one fails.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run for the same ref: the answer for an
+# older commit is no longer interesting once it has been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: test + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # `--frozen-lockfile` makes CI fail when the lockfile and package.json
+      # disagree, instead of silently resolving something different from what
+      # was tested locally.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test
+
+      # These probes cross real process boundaries. They need no Docker: the
+      # container variants are run by hand, because a hosted runner's Docker
+      # is slow and the process variants already exercise the same guarantees.
+      - name: Integration probes
+        run: bun run test:integration
