@@ -14,8 +14,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
-import { AuthService } from "./auth/auth-service.ts";
-import { createSigner } from "./auth/tokens.ts";
+import { buildServerOptions } from "./config.ts";
 import { createServer } from "./server.ts";
 
 export const serverInfo = {
@@ -54,16 +53,7 @@ function main(): void {
     throw new Error("CC_WEB_ALLOWED_ORIGINS must list at least one origin");
   }
 
-  const auth = new AuthService({ db, signer: createSigner(secret) });
-
-  const handle = createServer({
-    db,
-    auth,
-    allowedOrigins,
-    // Runner credential verification against the hashed secrets in the DB is
-    // wired in the next step; until then no runner can authenticate.
-    verifyRunnerCredential: () => ({ ok: false, reason: "unknown" }),
-  });
+  const handle = createServer(buildServerOptions({ db, secret, allowedOrigins }));
 
   console.log(
     `${serverInfo.name} listening on :${handle.server.port} (protocol v${PROTOCOL_VERSION})`,

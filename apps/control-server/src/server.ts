@@ -14,6 +14,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { consumeEnrollment, createEnrollment, issueRunnerCredential } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
 import type { AuthService } from "./auth/auth-service.ts";
@@ -75,6 +76,14 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/auth/login" && request.method === "POST") {
         return handleLogin(request, options, allowed);
+      }
+
+      if (url.pathname === "/api/runner-enrollments" && request.method === "POST") {
+        return handleCreateEnrollment(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/runner-enroll" && request.method === "POST") {
+        return handleRunnerEnroll(request, options);
       }
 
       if (url.pathname === "/ws/runner") {
@@ -201,4 +210,98 @@ async function handleLogin(
 
 function isBrowserSocket(data: unknown): data is BrowserSocketData {
   return typeof data === "object" && data !== null && "userId" in data;
+}
+
+/** How long an operator has to paste the token into `runner enroll`. */
+const ENROLLMENT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The owner mints a one-time token (§6.1).
+ *
+ * Authenticated like any other browser call: Origin first, then the session
+ * cookie. A token minted for a hostile page is a token the attacker can redeem,
+ * so this check is not optional just because the response contains no user data.
+ */
+async function handleCreateEnrollment(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+): Promise<Response> {
+  const origin = request.headers.get("origin") ?? undefined;
+  if (!origin || !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const created = createEnrollment(options.db, {
+    ownerId: authorized.userId,
+    ttlMs: ENROLLMENT_TTL_MS,
+  });
+
+  // The token is in this response and nowhere else. `no-store` keeps it out of
+  // any intermediate cache; the database only ever holds its hash.
+  return new Response(
+    JSON.stringify({
+      token: created.token,
+      enrollmentId: created.id,
+      expiresAt: created.expiresAt,
+    }),
+    {
+      status: 201,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    },
+  );
+}
+
+/**
+ * A runner redeems a token and receives its credential (§6.1).
+ *
+ * No Origin and no cookie: this is a CLI on another machine. The token is the
+ * whole credential, which is why it is short-lived, single-use, and travels in
+ * a body rather than a URL.
+ *
+ * Unknown, consumed and expired all answer 401. Anything else would turn the
+ * endpoint into an oracle for which tokens once existed.
+ */
+async function handleRunnerEnroll(request: Request, options: ServerOptions): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("bad request", { status: 400 });
+  }
+
+  const token = (body as Record<string, unknown>)["token"];
+  if (typeof token !== "string" || token === "") {
+    // A non-string token is a client bug, not a credential failure.
+    return new Response("bad request", { status: 400 });
+  }
+
+  const consumed = consumeEnrollment(options.db, { token });
+  if (!consumed.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const runnerId = `runner_${crypto.randomUUID()}`;
+  const issued = issueRunnerCredential(options.db, {
+    id: runnerId,
+    ownerId: consumed.enrollment.ownerId,
+  });
+
+  return new Response(JSON.stringify({ runnerId, credential: issued.credential }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      // A credential in a cache is a credential on disk we do not control.
+      "Cache-Control": "no-store",
+    },
+  });
 }

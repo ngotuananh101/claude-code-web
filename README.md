@@ -69,8 +69,9 @@ Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-resul
 for what was proven and what still is not.
 
 Phase 1 primitives, transport, auth, outbox, scheduler and the runner daemon are
-implemented and tested — see [`docs/phase1-results.md`](docs/phase1-results.md),
-including the stubs that are still fake.
+implemented and tested, and the entrypoints are wired to real password and
+credential verification — see [`docs/phase1-results.md`](docs/phase1-results.md)
+for what is proven and what is still missing.
 
 ## Decisions
 

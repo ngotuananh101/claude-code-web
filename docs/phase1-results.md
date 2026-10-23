@@ -5,9 +5,10 @@
   generations, command inbox, event outbox with a contiguous ACK watermark,
   reconciliation, runner and browser WebSocket transport, owner authentication,
   the central command outbox, the scheduler, and the runner reconnect loop.
-- Status: **all four Phase 1 surfaces exist and are tested. Two integration
-  seams are still stubbed: runner-credential verification and password
-  verification (see "Known stubs").**
+- Status: **all four Phase 1 surfaces exist and are tested, and the entrypoints
+  are wired to real implementations: owner login verifies argon2id hashes,
+  runner credentials are verified against the stored hashes, and `runner enroll`
+  redeems an enrollment token.**
 
 ## What exists
 
@@ -32,8 +33,12 @@
 | `runner/reconnect-loop` | hello → reconcile → ready; capped exponential backoff; 4000/4001 do not retry | unit |
 | `runner/websocket-link` | Credential in the `Authorization` header, never the URL | unit |
 | `runner/daemon` | Identity → loop, started without blocking on the network | integration |
+| `control-server/password` | argon2id hashing; a malformed stored hash is a refusal, not a throw | unit |
+| `control-server/enrollment-routes` | Owner-minted token, single use, `no-store`, one 401 for unknown/consumed/expired | unit |
+| `control-server/config` | The real composition: login, credential verification, revocation | unit |
+| `runner/enroll` | Token in the body, never argv or the URL; nothing saved unless accepted | unit |
 
-182 unit tests across 20 files, 4 integration probes.
+207 unit tests across 24 files, 4 integration probes.
 
 ## Integration evidence
 
@@ -251,20 +256,24 @@ be `ready`, and it does not.
   next attempt past any useful interval; never resetting punishes a healthy runner
   for an old outage.
 
-## Known stubs
+## Former stubs, now real
 
-These are wired but not real. Each is a seam with an obvious next step, not a
-design gap:
+Both composition seams that were injected-but-refusing are now wired to real
+implementations. They are listed here because "wired but refusing" is
+indistinguishable from "working" until somebody tries to log in or enroll a
+runner, and that is exactly how they survived a phase:
 
-- **Runner-credential verification** is injected into `createServer`, and
-  `apps/control-server/src/index.ts` supplies `() => ({ ok: false, reason:
-  "unknown" })`. Hashed credentials already exist in `control-db/runner-credentials`;
-  this needs the lookup and hash comparison.
-- **Password verification** is injected as `verifyPassword` and defaults to
-  `async () => false`. Login therefore always fails in the real entrypoint until a
-  hash library is wired.
-- **`runner enroll`** is a placeholder that exits non-zero. Enrollment itself
-  works and is tested; the CLI subcommand that calls it is missing.
+- **Password verification** — `Bun.password` (argon2id) via
+  `apps/control-server/src/auth/password.ts`. A malformed or empty stored hash
+  is a refusal rather than a throw, so a corrupt row cannot turn a login into a
+  500. The hash is never hand-rolled.
+- **Runner-credential verification** — `verifyRunnerCredential` from
+  `control-db`, wired in `apps/control-server/src/config.ts`. The gateway now
+  reads the same rows the enrollment endpoint writes, so revocation reaches the
+  transport.
+- **`runner enroll`** — `apps/runner/src/enrollment/enroll.ts`, driven by a real
+  subcommand. The token is read from `CC_WEB_ENROLL_TOKEN` or stdin, never argv,
+  and travels in the request body, never a query string.
 
 ## Not yet built
 

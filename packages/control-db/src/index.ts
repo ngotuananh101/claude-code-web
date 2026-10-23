@@ -5,6 +5,13 @@
  * behind the same repository interface (§18.4).
  */
 
+export {
+  type CommandKind,
+  CommandOutbox,
+  type DeliveryState,
+  type EnqueueInput,
+  type OutboxCommand,
+} from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
   type ConsumedEnrollment,
@@ -12,3 +19,16 @@ export {
   consumeEnrollment,
   createEnrollment,
 } from "./enrollment.ts";
+export {
+  issueRunnerCredential,
+  revokeRunner,
+  type VerifiedRunner,
+  verifyRunnerCredential,
+} from "./runner-credentials.ts";
+export {
+  type DispatchDecision,
+  type DispatchRequest,
+  type RunnerCapacity,
+  type RunnerState,
+  Scheduler,
+} from "./scheduler.ts";
