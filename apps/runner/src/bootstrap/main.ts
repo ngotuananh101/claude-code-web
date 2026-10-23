@@ -57,8 +57,9 @@ switch (command) {
     console.log(`${runnerInfo.name} ready (runner ${daemon.identity.runnerId})`);
 
     const shutdown = () => {
-      daemon.stop();
-      process.exit(0);
+      // Waits for in-flight runs: closing the database underneath one would
+      // lose its events and leave its workspace locked.
+      void daemon.stop().then(() => process.exit(0));
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

@@ -166,6 +166,14 @@ export class ReconnectLoop {
   }
 
   #handleMessage(raw: string): void {
+    // A closed socket does not discard what the runtime had already queued.
+    // Without this guard a command can be handled after `stop()` — and the
+    // daemon closes the database right after waiting for runs to settle, so the
+    // run would start against a closed handle and lose its events and its lock
+    // release. `settle()` cannot catch it: the work had not started when it
+    // returned.
+    if (this.#stopped) return;
+
     let message: unknown;
     try {
       message = JSON.parse(raw);

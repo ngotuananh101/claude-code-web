@@ -4,11 +4,12 @@
 - Scope: enrollment, credentials, identity, hello negotiation, connection
   generations, command inbox, event outbox with a contiguous ACK watermark,
   reconciliation, runner and browser WebSocket transport, owner authentication,
-  the central command outbox, the scheduler, the runner reconnect loop, and
-  dispatch on the live transport.
+  the central command outbox, the scheduler, the runner reconnect loop, dispatch
+  on the live transport, and execution of an accepted command on the runner.
 - Status: **all four Phase 1 surfaces exist and are tested, the entrypoints are
   wired to real implementations, and a command dispatched by the scheduler now
-  reaches a runner over a live socket and is receipted back.**
+  reaches a runner over a live socket, is receipted back, and runs the SDK under
+  a workspace lock with redacted, ordered events.**
 
 ## What exists
 
@@ -32,17 +33,21 @@
 | `control-db/scheduler` | Offline → not-ready → capacity → duplicate → session-busy, in that order | unit |
 | `runner/reconnect-loop` | hello → reconcile → ready; capped exponential backoff; 4000/4001 do not retry | unit |
 | `runner/websocket-link` | Credential in the `Authorization` header, never the URL | unit |
-| `runner/daemon` | Identity → loop, started without blocking on the network | integration |
 | `control-server/password` | argon2id hashing; a malformed stored hash is a refusal, not a throw | unit |
 | `control-server/enrollment-routes` | Owner-minted token, single use, `no-store`, one 401 for unknown/consumed/expired | unit |
 | `control-server/config` | The real composition: login, credential verification, revocation | unit |
 | `runner/enroll` | Token in the body, never argv or the URL; nothing saved unless accepted | unit |
 | `control-server/dispatcher` | Drain to a `ready` socket only; `sent` ≠ delivered; envelope rebuilt from the row | unit |
 | `control-server/dispatcher` (socket) | Queued command delivered on reconnect, receipted, never run twice | integration (real socket) |
-| `runner/command-handler` | Persist → receipt → execute; duplicate answered from the inbox | unit |
-| `runner/reconnect-loop` (commands) | `command` → handler → `command.receipt`, never acknowledged before the commit | unit |
+| `runner/envelope` | One untrusted-frame parser; optionals of the wrong type are dropped, not stored | unit |
+| `runner-db/attempts` | Lock + attempt row in one transaction; terminal written once; boot recovery | unit |
+| `runner/executor` | `run.started` → SDK stream → terminal event once; lock released on every path | unit |
+| `runner/run-controller` | Inbox dedupe → authorization → workspace lock → tracked execution | unit |
+| `runner/redact` | Cost and credential fields stripped from every replayed event | unit |
+| `agent-adapter` | SDK option mapping; `resume` by id, never `continue`; lazy import | unit |
+| `runner/daemon` | Identity → loop → controller; `stop()` waits for in-flight runs | unit + integration |
 
-239 unit tests across 27 files, 5 integration probes.
+321 unit tests across 33 files, 5 integration probes.
 
 ## Integration evidence
 
@@ -158,30 +163,41 @@ server's outbox on one, the runner's inbox on the other — and drives the real
 ```
 PASS  the runner reaches ready before anything is dispatched: state=ready
 PASS  the scheduler accepts the dispatch against a ready runner: commandId=cmd_…
-PASS  the command arrives at the runner: accepted=1
-PASS  the envelope survived both serializations: {"kind":"run.start","sessionId":"session-1","runId":"run-1"}
+PASS  the command reaches the runner and starts a run: calls=1
+PASS  the run uses the dispatched prompt and the registered workspace: {"prompt":"hello from the harness","cwd":"…/project"}
 PASS  the server records the receipt, so delivery is proven and not assumed: deliveryState=accepted
-PASS  a redelivered command id is answered from the inbox, not executed twice: accepted=1 (unchanged)
+PASS  the run reaches a terminal state on the runner: state=finished
+PASS  the run's events are persisted in order: run.started,session.updated,message.completed,run.finished
+PASS  the persisted events carry no cost or credential fields: clean
+PASS  the SDK session id is captured for a later resume: sdkSessionId=sdk-session-1
+PASS  the workspace lock is released: free
+PASS  a redelivered command id is answered from the inbox, not executed twice: calls=1 (unchanged)
 PASS  the duplicate's receipt retires the command again: deliveryState=accepted
 PASS  the server sees the runner go away: state=offline
 PASS  the restarted runner is promoted again: promotions=2
-PASS  the restarted runner does not execute the command a second time: accepted=0
+PASS  the restarted runner does not execute the command a second time: calls=0
 ```
 
-10/10 in both modes. Three of these are the point:
+15/15. The model is faked at the adapter seam — a real one would be slow,
+non-deterministic and need a provider credential — but everything around it is
+the production path: the real daemon, inbox, workspace lock, executor and SQLite
+files. The harness reads the runner's database back through a second connection,
+so "the command was delivered" cannot satisfy the execution checks on its own.
+
+Four of these are the point:
 
 - **Delivery is proven, not assumed.** The check reads the outbox's
   `delivery_state` after the fact. A socket write would have left it `sent`; only
   the runner's receipt moves it to `accepted`.
+- **Delivery is not execution.** The terminal-state, event-order, redaction,
+  session-id and lock checks are all read from the runner's disk after the run
+  finished. An `accepted` receipt with no events fails five of them.
 - **A redelivery does not execute twice.** The harness forces the command back to
   `pending`, which is exactly what a lost ACK looks like, and the runner answers
   from the inbox.
 - **The inbox is on disk.** The restarted process — a new OS process, and in
   Docker a new container — recognises the command it already handled.
 
-What this does not prove: that the command is **executed**. Execution is not
-built yet (§10); the chain stops at the inbox, which is exactly the boundary the
-receipt describes.
 
 ## Bugs found while building this
 
@@ -264,6 +280,157 @@ receipt describes.
     container paths are now separate constants, named for which side they belong
     to.
 
+15. **The workspace lock and the attempt row were written in two transactions.**
+    A crash between them leaves a lock with no attempt, which nothing can
+    reconcile: the workspace looks busy forever. Both writes are now one
+    `db.transaction()`, and boot recovery additionally deletes locks whose attempt
+    no longer exists.
+
+16. **Boot recovery freed orphaned locks but not the lock of the attempt it
+    interrupted.** The attempt was marked `interrupted` and its workspace stayed
+    locked until the next boot. Found by the recovery test, which asserted the
+    workspace was usable after recovery, not just that the row said
+    `interrupted`.
+
+17. **A fire-and-forget run let `stop()` close the database underneath it.**
+    `void executeRun(...)` meant shutdown could close SQLite while the run was
+    still appending events, losing them and leaving the lock held. In-flight runs
+    are now tracked and `stop()` awaits `settle()`. Verified by mutating
+    `await runs.settle()` back to `void runs.settle()` and watching the daemon
+    test fail.
+
+18. **The expiry test passed for the wrong reason.** It used a past expiry date,
+    so the wall clock rejected the command whether or not the injected clock was
+    consulted — the test would have passed with the clock parameter deleted.
+    Mutation testing found this: dropping `now` from `acceptCommand` still passed.
+    The test now uses future dates on both sides, so only the injected clock can
+    make it fail.
+
+19. **A test asserted on `undefined` for a row that was `null`.** `bun:sqlite`'s
+    `.get()` returns `null`, so "the workspace lock is released" failed while the
+    lock was in fact free. Fixed the assertion, not the production code — the
+    first step when a new check disagrees with reality is to decide which one is
+    wrong.
+
+20. **A thrown SDK error reached the event outbox unredacted.** `sanitizeError`
+    truncated the message and dropped the stack, but performed no redaction — so
+    a CLI failure that echoed its environment (`ANTHROPIC_API_KEY=sk-ant-…`) put
+    the provider key into a row that is replayed to the browser and copied into
+    the server journal. §19.4 forbids exactly this. Error text now goes through
+    `redactErrorText`, which masks credential assignments and key-shaped tokens
+    while keeping the rest of the message readable. Found by the review pass, not
+    by the tests: the existing test used a literal `"boom"` error and asserted
+    `"ANTHROPIC"` was absent, which was true for a reason unrelated to
+    redaction.
+
+21. **The first redaction rule over-redacted ordinary prose.** Requiring only a
+    whitespace separator turned "the secret key was rejected" into "the secret
+    [REDACTED] was rejected" — unreadable, and no safer. The separator is now
+    `=` or `:`, which is the shape an assignment actually takes. Over-redaction
+    is not the safe direction: an operator who cannot read the failure cannot act
+    on it.
+
+22. **The SDK's `cwd` reached the outbox.** `SDKSystemMessage` carries the
+    absolute workspace path, and the key walk did not name it, so every
+    `session.updated` event told the browser how the runner's filesystem is
+    arranged. The browser addresses a workspace by id; the path is host detail
+    (§19.4). Added to the redaction surface.
+
+23. **Each token became its own outbox row.** With
+    `includePartialMessages: true`, the executor mapped every `stream_event` to
+    `run.status`, so a single short run wrote 2000 rows and ~350KB — one journal
+    row and one browser frame per few bytes of text. §12.3 makes the adapter
+    responsible for accumulating deltas and finalizing; until that normalizer
+    exists, transient frames are not persisted and the durable transcript is
+    built from complete messages.
+
+24. **The workspace-locked early return left the refusing attempt's own lock
+    held.** It wrote the terminal state and returned; `releaseAttempt` was only in
+    the `finally`. Reachable when execution is pointed at a path the attempt was
+    not begun against — a re-registered workspace or a resolved symlink. Found by
+    the review pass and confirmed with a probe before it was fixed.
+
+25. **A crash between the terminal write and the lock release blocked the
+    workspace forever.** Recovery only looked at `starting` rows, so a
+    `finished`/`failed`/`interrupted` attempt still holding a lock was never
+    cleaned up — the workspace stayed unusable with no process to blame.
+    `recoverStaleAttempts` now also releases locks whose attempt is terminal.
+
+26. **A late throw turned a finished run into a failed attempt.** If the stream
+    yielded `run.finished` and then threw, the catch set `state = "failed"` while
+    the outbox still held `run.finished`. Reconciliation reads the attempt row
+    and the browser reads the events, so the two disagreed about the same run.
+    The catch now only marks failure when no terminal event was written.
+
+27. **`run.started` sat outside the guard.** It is the first write after the
+    lock check and it can fail — a database error, or a sequence already taken by
+    a second writer. A throw there escaped past the `finally`, leaving the
+    attempt `starting` and the workspace locked. Everything after the lock check
+    is now inside the guarded region.
+
+28. **A failed append burned a sequence number, wedging the ACK watermark.**
+    `append` incremented its counter before writing, so a payload that failed to
+    serialize (or lost a race for the sequence) left a hole at that number. The
+    watermark stops at the first hole by design (§12.2), so every later event for
+    the attempt could never be acknowledged. The counter now advances only after
+    the row commits. Confirmed with a probe that produced sequences 1 and 3 and
+    an `ackedThrough` of 1.
+
+29. **An error `result` frame left the attempt `finished`.** The stream ended
+    normally after reporting `error_max_turns`, so nothing reached the catch —
+    and `state` kept its initial `"finished"` while the outbox held `run.failed`.
+    The attempt row and the transcript disagreed about the same run. The loop now
+    takes the state from the terminal event it wrote, and a test drives a
+    non-success result frame to lock it (reverting the assignment fails it).
+
+30. **The lock-conflict event published the holder's attempt id.** The refusal
+    payload carried `holderAttemptId`. The outbox is replayed to the browser and
+    copied into the server journal, so that id is a stable handle on a run the
+    viewer was never shown — and it buys the UI nothing, because
+    `workspace_locked` is the whole fact. The payload is now the reason alone.
+
+31. **The redaction surface was only tested for four of its ten keys.** The
+    per-key test named `apiKeySource`, `apiKeyHelper`, `authorization` and
+    `credential`, so removing `cwd`, `directory`, `total_cost_usd`, `cost_usd`,
+    `modelUsage` or `apiKey` from the redactor would have broken nothing. The
+    test now walks every key on the list, at the top level, nested, and in
+    upper case — and two mutations (drop `directory`, make the walk
+    non-recursive) each fail it.
+
+32. **An error `result` frame carried a credential through the message loop.**
+    The SDK reports a failure two ways: as a thrown error, and as a `result`
+    frame whose `result`/`errors` fields quote the CLI's own text. Only the
+    thrown path was masked, so the same secret reached the same outbox by a
+    different door — confirmed with a probe whose payload came back with
+    `ANTHROPIC_API_KEY=sk-ant-api03-…` intact. Diagnostic fields are now
+    redacted as free text. The rule is limited to `result`, `errors`, `error`,
+    `reason`, `details` and `stderr`, because masking every string rewrites the
+    transcript: an assistant message showing `password = "hunter2"` in a config
+    example is output the user asked for, not a leak. The masking also stops at
+    the message's own level: a tool call's `input` is arbitrary JSON the model
+    produced, and a real tool can have a field called `reason` or `details` —
+    walking into it rewrote the transcript, which a probe showed. Both directions
+    are pinned by tests: masking everything, masking nothing, and removing the
+    depth limit each fail one.
+
+33. **`subtype: "success"` was read as success.** The SDK documents that frame as
+    carrying the final assistant text *or, with `is_error: true`, the error text
+    when the turn ended on an API error* — an overloaded or refused request
+    arrives with a successful subtype. `eventTypeOf` checked only the subtype, so
+    an API failure was recorded as `run.finished` and the attempt row, the
+    journal and the browser all inherited it. The check now consults `is_error`
+    first; removing that line fails the test.
+
+34. **A command buffered on the socket could start a run after `stop()`.** Closing
+    a socket does not discard what the runtime had already queued, and
+    `#handleMessage` never checked `#stopped`. The daemon stops the loop, awaits
+    `settle()`, then closes the database — so a handler entered after that point
+    started a run against a closed handle and lost its events and its lock
+    release. `settle()` cannot catch it, because the work had not started when it
+    returned. A probe showed one command handled and one receipt sent after
+    `stop()`; the message handler now returns early once stopped.
+
+
 ## Design decisions worth remembering
 
 - **Generations are per runner and monotonic.** A message claiming a *future*
@@ -308,6 +475,78 @@ receipt describes.
   has negotiated but not reconciled may hold state the server does not know
   about, and work sent there can land on state neither side can vouch for.
 
+## Design decisions worth remembering (execution)
+
+- **Recovery is a boot-time sweep, not an executor branch.** §9.7's "ambiguous
+  launch → `interrupted`" cannot be implemented inside `executeRun`, because the
+  inbox dedupe means a redelivered command is never handed to the executor again.
+  The code path that would detect the stale attempt is unreachable by
+  construction. It runs in the controller's constructor instead, before the first
+  command can be accepted.
+- **The lock and the attempt are one transaction.** Two writes mean a crash
+  window where the workspace is locked by an attempt that does not exist, and no
+  later process can tell whether that lock is live.
+- **Terminal state is written once, guarded by the database.** `finishAttempt`
+  updates `WHERE state = 'starting'`, so a second terminal write is a no-op
+  regardless of what the executor believes. Idempotence is enforced where the
+  state lives, not by the caller remembering.
+- **A receipt returns before the run is awaited.** `accepted` means durable, not
+  finished (§9.4). Awaiting the run inside the receipt would hold the socket's
+  message loop for the length of a model conversation.
+- **The SDK session id is captured from the `init` frame, never from the result.**
+  §10.4 resumes by explicit id; the id is only knowable once the stream has
+  started, and a run that fails before it does has nothing to resume.
+- **`resume` is passed by id and `continue` is never set.** `continue: true` picks
+  whichever conversation was most recent, which after a crash is a different
+  conversation than the one the run belongs to.
+- **The SDK is imported lazily, inside the adapter.** An eager top-level import
+  makes every test that touches the runner load a bundled binary it never uses
+  (§4.2 — the adapter is the only module allowed to import the SDK at all).
+- **Events are redacted at the write, not at the read.** Events are replayed to
+  the browser and the server journal, so everything downstream is public. Cost
+  and credential fields are stripped recursively and case-insensitively before the
+  row is inserted, which is the only point where "never published" is enforceable.
+- **Redaction covers free text too, not just key names.** A thrown SDK error is a
+  string, so the key walk cannot reach it — and that string is persisted in
+  `run.failed`. Error text is masked for credential assignments and key-shaped
+  tokens, and truncation comes after redaction, because truncating a secret still
+  leaves a secret.
+- **Free-text masking is scoped to diagnostic fields, not applied to every
+  string.** The SDK reports failures on two paths — a throw and a `result` frame
+  — so both need masking; but the same pattern applied to the assistant's own
+  output would redact the config example a user asked for. `result`, `errors`,
+  `error`, `reason`, `details` and `stderr` are the fields that carry CLI
+  diagnostics; everything else is run content.
+- **Over-redaction is a failure too.** The pattern requires `=` or `:` as the
+  separator, because `secret` and `authorization` are ordinary English words in
+  error messages. A message an operator cannot read is not a safer message.
+- **The event payload has no `usage` exemption.** `total_cost_usd` and
+  `modelUsage` are dropped even though they are useful for a UI, because there is
+  no path from the runner to the browser that is not also a path to the server and
+  its logs.
+- **An unknown workspace is refused before an attempt row exists.** The command
+  stays accepted in the inbox — it was delivered, it just cannot run on this host
+  — so nothing is left for reconciliation to explain.
+- **`stop()` is async because the database is not crash-safe against its own
+  writers.** Closing it under a run loses the run's events and its lock release.
+- **A terminal event type is derived from the frame's own claim about failure,
+  not its shape.** The SDK has two axes: `subtype` says which kind of turn ended,
+  and `is_error` says whether it ended badly. Only the second one answers "did
+  this run succeed".
+- **Stopping is a state the message path also reads.** `#stopped` guards the retry
+  chain and now the message handler too: a socket closed at shutdown can still
+  deliver what it had buffered, and starting a run there writes to a database the
+  daemon is about to close.
+- **An event payload names no other run.** The lock-conflict refusal says
+  `workspace_locked` and nothing else. Runner-internal ids are not published even
+  where they are not secret: an event is a document the browser and the journal
+  both keep, and a field with no rendering is a field nobody will notice carrying
+  something that matters later.
+- **A test that names keys one by one stops covering the list.** The redaction
+  test now iterates the production key list at the top level, nested, and cased,
+  so a key removed from the redactor fails a test rather than quietly becoming
+  published.
+
 ## Design decisions worth remembering (transport)
 
 - **Authentication happens before the upgrade.** A rejected credential returns
@@ -351,13 +590,16 @@ runner, and that is exactly how they survived a phase:
 
 ## Not yet built
 
-- Approval round-trip and `canUseTool` wiring.
-- **Execution.** A command now reaches the runner and is durably in its inbox,
-  but nothing runs the SDK for it: `handleCommand` returns `execute: true` and
-  the daemon only logs the acceptance. §10's lifecycle (start → stream → finish)
-  is the next phase.
+- Approval round-trip and `canUseTool` wiring. The executor passes no
+  `canUseTool`, so the SDK's own default applies; §10's deny-by-default gate is
+  not wired yet.
 - Event ingestion on the server: the runner's event outbox and ACK watermark
-  exist and are tested, but nothing sends those events up the socket yet.
+  exist, are tested, and are now written by the executor, but nothing sends those
+  events up the socket yet.
 - The browser UI. `/ws/browser` exists and authenticates; nothing renders it.
+- A process supervisor. Execution is in-process (§3.3, slice-1 compatibility);
+  a crash takes the run with it, which is why boot recovery marks it
+  `interrupted` rather than resuming it.
 
 None of these are blocked; the primitives above are what they will call.
+

@@ -10,18 +10,22 @@
  *
  * The property under test is the one the whole durable-delivery design exists
  * for — a command queued while the runner is away is delivered when it comes
- * back, and is not executed twice when it comes back again:
+ * back, is not executed twice when it comes back again, and leaves durable
+ * evidence that it ran:
  *
  *   1. a control server starts with an empty outbox, and one runner connects
  *   2. the runner reaches `ready`
  *   3. the harness dispatches through the real scheduler
  *   4. the command arrives, is persisted in the runner's inbox, and is receipted
  *   5. the server's outbox shows `accepted` — proven delivery, not just a write
- *   6. a second delivery of the same command id does not execute it twice
+ *   6. the runner executes it: the attempt reaches a terminal state and the
+ *      event outbox holds the run's events, read back from its on-disk database
+ *   7. a second delivery of the same command id does not execute it twice
  *
- * What this does not prove: that the command is *executed*. Execution is not
- * built yet (§10); step 4 stops at the inbox, which is exactly the boundary the
- * receipt describes.
+ * The model is faked at the adapter seam (`sdk`), because a real one would make
+ * this probe slow, non-deterministic and dependent on a provider credential.
+ * Everything around the seam is the production path: the real daemon, the real
+ * inbox, the real workspace lock, the real executor, the real SQLite files.
  *
  * Docker mode runs each runner as its own container on `--network host`, so the
  * round trip crosses a real network stack. The control server always runs on the
@@ -31,6 +35,7 @@
  *   bun run scripts/integration/dispatch-e2e.ts --docker
  */
 
+import { Database } from "bun:sqlite";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,7 +54,16 @@ const runnerIdentityDir = useDocker ? "/data/identity" : join(workdir, "identity
  */
 const runnerHomeHost = join(workdir, "runner-home");
 const runnerHome = useDocker ? "/data/runner-home" : runnerHomeHost;
+/**
+ * The workspace the dispatch names. It must exist: the executor runs the model
+ * with this as `cwd`, and a missing directory would fail inside the SDK rather
+ * than at the boundary this probe is about.
+ */
+const workspaceHost = join(workdir, "project");
+const workspace = useDocker ? "/data/project" : workspaceHost;
 const runnerModuleRoot = useDocker ? "/app/" : repoRoot;
+/** The runner's database, read back by the harness to check what it recorded. */
+const runnerDbHost = join(runnerHomeHost, "runner.db");
 
 /** The control endpoint the harness uses to drive the test. */
 const CONTROL_PORT = 8943;
@@ -189,13 +203,18 @@ Bun.serve({
 `;
 
 /**
- * The runner daemon, plus a line per accepted command.
+ * The runner daemon, with the model faked at the adapter seam.
  *
- * `onAccepted` fires only for a first acceptance, so a redelivery of the same
- * command id prints nothing — which is what makes "executed once" checkable
- * across processes.
+ * `SDK_CALL` is printed from inside the injected stream, so it appears only when
+ * a command actually reached execution — a redelivery that the inbox answers
+ * prints nothing, which is what makes "executed once" checkable across
+ * processes.
+ *
+ * The stream is shaped like a real one: an init frame carrying the SDK session
+ * id, an assistant message, and a result. Anything the executor gets wrong about
+ * ordering or terminal events shows up as a missing row, not as a passing test.
  */
-const runnerScript = (identityDir: string, home: string) => `
+const runnerScript = (identityDir: string, home: string, workspacePath: string) => `
 import { startDaemon } from "${runnerModuleRoot}apps/runner/src/daemon.ts";
 
 const daemon = await startDaemon({
@@ -203,13 +222,14 @@ const daemon = await startDaemon({
   databasePath: ${JSON.stringify(`${home}/runner.db`)},
   runnerVersion: "0.0.0",
   sdkVersion: "0.3.309",
+  workspacePathFor: (id) => (id === "workspace-1" ? ${JSON.stringify(workspacePath)} : undefined),
   onEvent: (event) => console.log("EVENT " + JSON.stringify(event)),
-  onAccepted: (command) => console.log("ACCEPTED " + JSON.stringify({
-    commandId: command.commandId,
-    kind: command.kind,
-    sessionId: command.sessionId,
-    runId: command.runId,
-  })),
+  sdk: (input) => (async function* () {
+    console.log("SDK_CALL " + JSON.stringify({ prompt: input.prompt, cwd: input.cwd }));
+    yield { type: "system", subtype: "init", session_id: "sdk-session-1" };
+    yield { type: "assistant", message: { role: "assistant", content: "done" } };
+    yield { type: "result", subtype: "success", result: "ok", total_cost_usd: 0.01 };
+  })(),
 });
 
 console.log("DAEMON_STARTED " + daemon.identity.runnerId);
@@ -242,7 +262,7 @@ try {
 
   // --- identity, mode 0600 ---
   const identityPath = join(workdir, "identity", "identity.json");
-  await Bun.$`mkdir -p ${join(workdir, "identity")} ${runnerHomeHost}`.quiet();
+  await Bun.$`mkdir -p ${join(workdir, "identity")} ${runnerHomeHost} ${workspaceHost}`.quiet();
   await writeFile(
     identityPath,
     JSON.stringify({
@@ -256,7 +276,7 @@ try {
   await chmod(identityPath, 0o600);
 
   const runnerFile = join(workdir, "runner.ts");
-  await writeFile(runnerFile, runnerScript(runnerIdentityDir, runnerHome));
+  await writeFile(runnerFile, runnerScript(runnerIdentityDir, runnerHome, workspace));
 
   const control = (path: string) => `http://127.0.0.1:${CONTROL_PORT}${path}`;
 
@@ -362,28 +382,30 @@ try {
 
   const commandId = decision.commandId ?? "";
 
-  // --- 3. the command reaches the runner's inbox ---
-  let acceptedLine: string;
+  // --- 3. the command reaches the runner's inbox and runs ---
+  let callLine: string;
   try {
-    acceptedLine = await runner.output.until("ACCEPTED ", 20_000);
+    callLine = await runner.output.until("SDK_CALL ", 20_000);
   } catch (error) {
     throw new Error(
       `${(error as Error).message}\nrunner stderr: ${runner.errors.text.slice(-2000)}\nserver stderr: ${serverErr.text.slice(-2000)}`,
     );
   }
 
-  const accepted = acceptedLine
+  const calls = callLine
     .split("\n")
-    .filter((line) => line.startsWith("ACCEPTED "))
-    .map((line) => JSON.parse(line.slice("ACCEPTED ".length)) as Record<string, string>);
+    .filter((line) => line.startsWith("SDK_CALL "))
+    .map((line) => JSON.parse(line.slice("SDK_CALL ".length)) as Record<string, string>);
 
-  check("the command arrives at the runner", accepted.length === 1, `accepted=${accepted.length}`);
   check(
-    "the envelope survived both serializations",
-    accepted[0]?.["sessionId"] === "session-1" &&
-      accepted[0]?.["runId"] === "run-1" &&
-      accepted[0]?.["kind"] === "run.start",
-    JSON.stringify(accepted[0] ?? null),
+    "the command reaches the runner and starts a run",
+    calls.length === 1,
+    `calls=${calls.length}`,
+  );
+  check(
+    "the run uses the dispatched prompt and the registered workspace",
+    calls[0]?.["prompt"] === "hello from the harness" && calls[0]?.["cwd"] === workspace,
+    JSON.stringify(calls[0] ?? null),
   );
 
   // --- 4. the receipt reached the server ---
@@ -403,17 +425,93 @@ try {
     `deliveryState=${outboxRecord?.deliveryState ?? "none"}`,
   );
 
+  // --- 4b. the run left durable evidence on the runner's own disk ---
+  // Read through a separate connection from the harness, after the run has had
+  // time to finish. This is the check that "the command was delivered" cannot
+  // satisfy on its own: a delivery with no events would still pass step 4.
+  const waitForRun = async (timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    let row: { state: string } | undefined;
+    while (Date.now() < deadline) {
+      const db = new Database(runnerDbHost, { readonly: true });
+      try {
+        row = db
+          .prepare("SELECT state FROM local_attempts WHERE attempt_id = ?")
+          .get("attempt-1") as { state: string } | undefined;
+      } finally {
+        db.close();
+      }
+      if (row !== undefined && row.state !== "starting") return row;
+      await Bun.sleep(50);
+    }
+    return row;
+  };
+
+  const attempt = await waitForRun();
+  check(
+    "the run reaches a terminal state on the runner",
+    attempt?.state === "finished",
+    `state=${attempt?.state ?? "missing"}`,
+  );
+
+  const db = new Database(runnerDbHost, { readonly: true });
+  try {
+    const events = db
+      .prepare(
+        "SELECT type, payload FROM event_outbox WHERE attempt_id = ? ORDER BY local_sequence",
+      )
+      .all("attempt-1") as Array<{ type: string; payload: string }>;
+    const types = events.map((e) => e.type);
+
+    check(
+      "the run's events are persisted in order",
+      types.join(",") === "run.started,session.updated,message.completed,run.finished",
+      types.join(","),
+    );
+
+    // §12.3: events are replayed to the browser and the server journal, so cost
+    // and credential metadata must never be among them.
+    const payloads = events.map((e) => e.payload).join("\n");
+    check(
+      "the persisted events carry no cost or credential fields",
+      !payloads.includes("total_cost_usd") && !payloads.includes("apiKeySource"),
+      payloads.includes("total_cost_usd") || payloads.includes("apiKeySource")
+        ? "leaked a redacted field"
+        : "clean",
+    );
+
+    const sdkSession = db
+      .prepare("SELECT sdk_session_id FROM local_attempts WHERE attempt_id = ?")
+      .get("attempt-1") as { sdk_session_id: string | null } | undefined;
+    check(
+      "the SDK session id is captured for a later resume",
+      sdkSession?.sdk_session_id === "sdk-session-1",
+      `sdkSessionId=${sdkSession?.sdk_session_id ?? "null"}`,
+    );
+
+    const lock = db
+      .prepare("SELECT attempt_id FROM workspace_locks WHERE workspace_path = ?")
+      .get(workspace) as { attempt_id: string } | null;
+    check(
+      "the workspace lock is released",
+      lock === null,
+      lock === null ? "free" : `held by ${lock.attempt_id}`,
+    );
+  } finally {
+    db.close();
+  }
+
   // --- 5. a redelivery of the same command id does not execute it again ---
   await fetch(control(`/redeliver?commandId=${commandId}`), { method: "POST" });
   await Bun.sleep(1000);
 
   const afterRedelivery = runner.output.text
     .split("\n")
-    .filter((line) => line.startsWith("ACCEPTED "));
+    .filter((line) => line.startsWith("SDK_CALL "));
   check(
     "a redelivered command id is answered from the inbox, not executed twice",
     afterRedelivery.length === 1,
-    `accepted=${afterRedelivery.length} (unchanged)`,
+    `calls=${afterRedelivery.length} (unchanged)`,
   );
 
   // The redelivered command is retired again by the duplicate's receipt.
@@ -447,15 +545,18 @@ try {
     );
 
     // The inbox is on disk, so the restarted process must recognise the command
-    // as one it already handled rather than starting it a second time.
+    // as one it already handled rather than starting it a second time. The
+    // attempt also reached a terminal state before the kill, so there is nothing
+    // for boot recovery to interrupt — but a run started now would print a new
+    // SDK_CALL either way.
     await Bun.sleep(1500);
     const afterRestart = resumed.output.text
       .split("\n")
-      .filter((line) => line.startsWith("ACCEPTED "));
+      .filter((line) => line.startsWith("SDK_CALL "));
     check(
       "the restarted runner does not execute the command a second time",
       afterRestart.length === 0,
-      `accepted=${afterRestart.length}`,
+      `calls=${afterRestart.length}`,
     );
   } finally {
     await resumed.kill();

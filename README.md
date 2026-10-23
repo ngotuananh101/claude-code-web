@@ -3,8 +3,10 @@
 Web control plane for Claude coding agents: a browser chat UI that drives Claude
 Agent SDK runs on one or more remote Runners.
 
-**Status:** scaffolding only. No runtime code yet — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-(blueprint v2.0) and the roadmap in §23. Phase 0 is a headless runtime/config spike.
+**Status:** Phase 1 complete — enrollment, auth, transport, scheduling, dispatch
+and runner-side execution. The browser UI and server-side event ingestion are not
+built yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (blueprint v2.0) and
+the roadmap in §23.
 
 ## Topology
 
@@ -68,10 +70,11 @@ variants already exercise the same guarantees. Run them by hand with
 Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-results.md)
 for what was proven and what still is not.
 
-Phase 1 primitives, transport, auth, outbox, scheduler, the runner daemon and
-dispatch over a live socket are implemented and tested — see
+Phase 1 primitives, transport, auth, outbox, scheduler, the runner daemon,
+dispatch over a live socket, and execution of an accepted command under a
+workspace lock are implemented and tested — see
 [`docs/phase1-results.md`](docs/phase1-results.md) for what is proven and what is
-still missing. Execution of a delivered command is the next phase.
+still missing. Sending run events back to the server's journal is the next phase.
 
 ## Decisions
 

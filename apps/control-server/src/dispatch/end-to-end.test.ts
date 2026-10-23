@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { CommandOutbox, migrate } from "@cc-web/control-db";
-import { migrateRunnerDb } from "@cc-web/runner-db";
+import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
 import { ReconnectLoop } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
-import { handleCommand } from "../../../runner/src/execution/command-handler.ts";
+import { asCommandEnvelope } from "../../../runner/src/execution/envelope.ts";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
@@ -77,11 +77,24 @@ function runnerLoop(
       if (event.type === "ready") ready.value = true;
     },
     onCommand: async (command) => {
-      const result = handleCommand(inbox, command, { localRunnerId: "runner-a" });
-      // Only a first acceptance runs. A redelivery returns the stored receipt
-      // and must not append here — that is the whole point of the inbox.
-      if (result.execute) executed.push(result.receipt.commandId);
-      return result.receipt;
+      // The real inbox, which is the contract this test is about: a redelivery
+      // must return the stored receipt and not look like new work (§9.3).
+      // Execution is a separate concern and is not part of this test.
+      const record = command as Record<string, unknown>;
+      const parsed = asCommandEnvelope(record);
+      const commandId = typeof record["commandId"] === "string" ? record["commandId"] : "";
+      const attemptId = typeof record["attemptId"] === "string" ? record["attemptId"] : "";
+
+      if (parsed === undefined) {
+        return { commandId, attemptId, accepted: false, reason: "malformed" };
+      }
+
+      const result = acceptCommand(inbox, parsed, { localRunnerId: "runner-a" });
+      if (!result.ok) {
+        return { commandId, attemptId, accepted: false, reason: result.reason };
+      }
+      if (!result.duplicate) executed.push(commandId);
+      return { commandId, attemptId, accepted: true };
     },
   });
 }

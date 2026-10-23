@@ -238,6 +238,44 @@ describe("runner reconnect loop", () => {
     expect(h.loop.state).toBe("stopped");
   });
 
+  test("a command already buffered on the socket is not started after stop()", async () => {
+    const handled: unknown[] = [];
+    let deliver: ((raw: string) => void) | undefined;
+
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => ({
+        send() {},
+        close() {},
+        onMessage(handler) {
+          deliver = handler;
+        },
+        onClose() {},
+      }),
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1 }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async (command) => {
+        handled.push(command);
+        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+      },
+    });
+
+    await loop.start();
+    loop.stop();
+
+    // Closing a socket does not discard what the runtime had already queued.
+    // The daemon stops the loop, waits for runs to settle, and then closes the
+    // database — so a handler invoked after that point starts a run against a
+    // closed database, and its events and lock release are lost. `settle()` has
+    // already returned by then; it cannot observe work that had not started.
+    deliver?.(JSON.stringify({ type: "command", command: { commandId: "cmd-1" } }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(handled).toEqual([]);
+  });
+
   test("start() resolves when the first dial fails, so the daemon can come up", async () => {
     const events: LoopEvent[] = [];
     let release: (() => void) | undefined;

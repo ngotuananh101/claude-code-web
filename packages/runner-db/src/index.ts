@@ -5,6 +5,20 @@
  * Local disk only — never NFS or a shared network database file.
  */
 
+export {
+  type AttemptState,
+  attemptState,
+  type BeginInput,
+  type BeginResult,
+  beginAttempt,
+  finishAttempt,
+  lockHolder,
+  recordSdkSessionId,
+  recoverStaleAttempts,
+  releaseAttempt,
+  sdkSessionIdForSession,
+  type TerminalState,
+} from "./attempts.ts";
 export { migrateRunnerDb } from "./db.ts";
 export {
   type AppendParams,
