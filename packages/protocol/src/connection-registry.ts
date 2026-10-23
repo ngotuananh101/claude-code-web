@@ -16,9 +16,7 @@ export type OpenParams = {
   connectionId: string;
 };
 
-export type OpenResult =
-  | { ok: true; generation: number }
-  | { ok: false; reason: "revoked" };
+export type OpenResult = { ok: true; generation: number } | { ok: false; reason: "revoked" };
 
 export type TrafficCheck =
   | { ok: true }

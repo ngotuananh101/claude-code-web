@@ -1,6 +1,6 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import type { ServerWebSocket } from "bun";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { RunRegistry } from "@cc-web/protocol";
+import type { ServerWebSocket } from "bun";
 import { RunnerGateway, type RunnerSocketData } from "./runner-gateway.ts";
 
 /**
@@ -10,7 +10,11 @@ import { RunnerGateway, type RunnerSocketData } from "./runner-gateway.ts";
 
 type Sent = { type: string; [key: string]: unknown };
 
-function makeSocket(): { socket: ServerWebSocket<RunnerSocketData>; sent: Sent[]; closed: number[] } {
+function makeSocket(): {
+  socket: ServerWebSocket<RunnerSocketData>;
+  sent: Sent[];
+  closed: number[];
+} {
   const sent: Sent[] = [];
   const closed: number[] = [];
 
@@ -110,7 +114,12 @@ describe("runner gateway", () => {
 
   test("reconciliation applies its actions to the server's run state, not to the runner", () => {
     const runs = new RunRegistry();
-    runs.createRun({ runId: "run-1", attemptId: "attempt-1", sessionId: "session-1", runnerId: "runner-a" });
+    runs.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
 
     const gateway = new RunnerGateway({
       policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
@@ -137,7 +146,12 @@ describe("runner gateway", () => {
 
   test("a run whose process vanished on reconnect is interrupted, and never silently resumed", () => {
     const runs = new RunRegistry();
-    runs.createRun({ runId: "run-1", attemptId: "attempt-1", sessionId: "session-1", runnerId: "runner-a" });
+    runs.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
 
     const gateway = new RunnerGateway({
       policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
@@ -158,8 +172,18 @@ describe("runner gateway", () => {
 
   test("one runner reconnecting never touches another runner's run", () => {
     const runs = new RunRegistry();
-    runs.createRun({ runId: "run-a", attemptId: "attempt-a", sessionId: "session-a", runnerId: "runner-a" });
-    runs.createRun({ runId: "run-b", attemptId: "attempt-b", sessionId: "session-b", runnerId: "runner-b" });
+    runs.createRun({
+      runId: "run-a",
+      attemptId: "attempt-a",
+      sessionId: "session-a",
+      runnerId: "runner-a",
+    });
+    runs.createRun({
+      runId: "run-b",
+      attemptId: "attempt-b",
+      sessionId: "session-b",
+      runnerId: "runner-b",
+    });
 
     const gateway = new RunnerGateway({
       policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },

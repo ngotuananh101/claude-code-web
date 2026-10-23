@@ -10,10 +10,10 @@
  * reading a file and wiring two objects together.
  */
 
-import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
+import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
 import { dialWebSocket } from "./connection/websocket-link.ts";
-import { PROTOCOL_VERSION } from "@cc-web/protocol";
+import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
 
 export type DaemonOptions = {
   identityDir: string;

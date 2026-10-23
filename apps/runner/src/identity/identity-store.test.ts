@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadIdentity, saveIdentity, type RunnerIdentity } from "./identity-store.ts";
+import { loadIdentity, type RunnerIdentity, saveIdentity } from "./identity-store.ts";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "cc-web-identity-"));

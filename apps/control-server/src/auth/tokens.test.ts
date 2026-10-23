@@ -53,7 +53,9 @@ describe("token signing", () => {
     // The classic `alg: none` attack: claims are plain JSON, so accepting it
     // would let anyone mint any identity.
     const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-    const payload = Buffer.from(JSON.stringify({ sub: "attacker", tokenVersion: 1, exp: 9999999999 })).toString("base64url");
+    const payload = Buffer.from(
+      JSON.stringify({ sub: "attacker", tokenVersion: 1, exp: 9999999999 }),
+    ).toString("base64url");
 
     const result = await signer().verify(`${header}.${payload}.`);
 
@@ -64,7 +66,9 @@ describe("token signing", () => {
     const tokens = signer();
     const token = await tokens.sign({ sub: "user-1", tokenVersion: 1 }, 60);
     const [header, , signature] = token.split(".");
-    const forged = Buffer.from(JSON.stringify({ sub: "attacker", tokenVersion: 1 })).toString("base64url");
+    const forged = Buffer.from(JSON.stringify({ sub: "attacker", tokenVersion: 1 })).toString(
+      "base64url",
+    );
 
     const result = await tokens.verify(`${header}.${forged}.${signature}`);
 

@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createSigner } from "./tokens.ts";
+import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import { AuthService } from "./auth-service.ts";
+import { createSigner } from "./tokens.ts";
 
 /**
  * Revocation (ADR-0001, §19.1).
@@ -24,13 +24,9 @@ function service() {
 }
 
 function addUser(db: Database, id = "user-1", version = 1): void {
-  db.query("INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)").run(
-    id,
-    `name-${id}`,
-    "hash",
-    version,
-    Date.now(),
-  );
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(id, `name-${id}`, "hash", version, Date.now());
 }
 
 describe("owner authentication", () => {

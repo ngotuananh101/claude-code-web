@@ -119,8 +119,9 @@ describe("connection generation", () => {
 
   test("traffic for an unknown runner is rejected", () => {
     const r = registry();
-    expect(
-      r.checkTraffic({ runnerId: "nobody", connectionId: "conn-1", generation: 1 }),
-    ).toEqual({ ok: false, reason: "unknown_runner" });
+    expect(r.checkTraffic({ runnerId: "nobody", connectionId: "conn-1", generation: 1 })).toEqual({
+      ok: false,
+      reason: "unknown_runner",
+    });
   });
 });

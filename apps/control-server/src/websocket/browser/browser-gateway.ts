@@ -78,7 +78,11 @@ export class BrowserGateway {
   async attach(socket: BrowserSocket, input: AuthorizeInput): Promise<BrowserAuthorizeResult> {
     const result = await this.authorize(input);
     if (!result.ok) {
-      this.#reject(socket, result.reason === "origin_not_allowed" ? "origin_not_allowed" : "unauthorized", CLOSE_POLICY);
+      this.#reject(
+        socket,
+        result.reason === "origin_not_allowed" ? "origin_not_allowed" : "unauthorized",
+        CLOSE_POLICY,
+      );
       return result;
     }
 

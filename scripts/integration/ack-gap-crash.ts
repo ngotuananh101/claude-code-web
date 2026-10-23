@@ -92,13 +92,9 @@ console.log(JSON.stringify({
 try {
   await Bun.write(join(workdir, "writer.ts"), writer);
   await Bun.write(join(workdir, "reader.ts"), reader);
-  const watermark = useDocker
-    ? await crashInDocker()
-    : await crashInProcess();
+  const watermark = useDocker ? await crashInDocker() : await crashInProcess();
 
-  const observed = useDocker
-    ? await readInDocker()
-    : await readInProcess();
+  const observed = useDocker ? await readInDocker() : await readInProcess();
 
   console.log("\nwatermark before crash:", watermark);
   console.log("after reopen:         ", JSON.stringify(observed));
@@ -187,13 +183,23 @@ async function crashInDocker(): Promise<number> {
   const name = `cc-web-ackgap-${Date.now()}`;
   const proc = Bun.spawn(
     [
-      "docker", "run", "--rm", "--name", name,
-      "--network", "none",
-      "-v", `${workdir}:/data`,
-      "-v", `${repoRoot}:/app:ro`,
-      "-w", "/app",
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      name,
+      "--network",
+      "none",
+      "-v",
+      `${workdir}:/data`,
+      "-v",
+      `${repoRoot}:/app:ro`,
+      "-w",
+      "/app",
       "cc-web-runner:dev",
-      "bun", "run", "/data/writer.ts",
+      "bun",
+      "run",
+      "/data/writer.ts",
     ],
     { stdout: "pipe", stderr: "pipe" },
   );
@@ -214,13 +220,21 @@ async function crashInDocker(): Promise<number> {
 async function readInDocker(): Promise<{ acked: number; pending: number[] }> {
   const proc = Bun.spawn(
     [
-      "docker", "run", "--rm",
-      "--network", "none",
-      "-v", `${workdir}:/data`,
-      "-v", `${repoRoot}:/app:ro`,
-      "-w", "/app",
+      "docker",
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "-v",
+      `${workdir}:/data`,
+      "-v",
+      `${repoRoot}:/app:ro`,
+      "-w",
+      "/app",
       "cc-web-runner:dev",
-      "bun", "run", "/data/reader.ts",
+      "bun",
+      "run",
+      "/data/reader.ts",
     ],
     { stdout: "pipe", stderr: "pipe" },
   );

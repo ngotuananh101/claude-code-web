@@ -52,9 +52,12 @@ export function consumeEnrollment(
 
   const row = db
     .prepare("SELECT id, owner_id, expires_at, consumed_at FROM enrollments WHERE token_hash = ?")
-    .get(tokenHash) as
-    | { id: string; owner_id: string; expires_at: number; consumed_at: number | null }
-    | null;
+    .get(tokenHash) as {
+    id: string;
+    owner_id: string;
+    expires_at: number;
+    consumed_at: number | null;
+  } | null;
 
   if (!row) return { ok: false, reason: "unknown" };
   if (row.consumed_at !== null) return { ok: false, reason: "consumed" };

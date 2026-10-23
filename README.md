@@ -50,17 +50,27 @@ bun install
 bun run doctor        # static runtime/config probe; never calls a model
 bun run spike         # Phase 0 compatibility spike; add --model to spend tokens
 bun run typecheck
+bun run lint          # biome: format + lint + import order, read-only
+bun run lint:fix      # same, rewriting the tree
 bun test
 bun run test:integration   # cross-process enrollment race (needs no Docker)
 ```
 
 Docker harness for multi-Runner testing: [`infra/docker/README.md`](infra/docker/README.md).
 
+CI runs the same commands on every push to `main` and every pull request:
+[`ci.yml`](.github/workflows/ci.yml) for typecheck, tests and the process-mode
+integration probes, [`lint.yml`](.github/workflows/lint.yml) for Biome. The
+Docker probes are not in CI — a hosted runner's Docker is slow, and the process
+variants already exercise the same guarantees. Run them by hand with
+`bun run test:integration:docker`.
+
 Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-results.md)
 for what was proven and what still is not.
 
-Phase 1 protocol primitives are implemented and tested but not yet wired to a
-transport — see [`docs/phase1-results.md`](docs/phase1-results.md).
+Phase 1 primitives, transport, auth, outbox, scheduler and the runner daemon are
+implemented and tested — see [`docs/phase1-results.md`](docs/phase1-results.md),
+including the stubs that are still fake.
 
 ## Decisions
 

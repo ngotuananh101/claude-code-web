@@ -7,18 +7,18 @@
 
 export { migrateRunnerDb } from "./db.ts";
 export {
-  acceptCommand,
-  fingerprintCommand,
-  type CommandEnvelope,
-  type AcceptResult,
-  type InboxState,
-} from "./inbox.ts";
-export {
-  appendEvent,
-  ackUpTo,
-  pendingEvents,
-  highestContiguousAcked,
   type AppendParams,
   type AppendResult,
+  ackUpTo,
+  appendEvent,
+  highestContiguousAcked,
   type PendingEvent,
+  pendingEvents,
 } from "./event-outbox.ts";
+export {
+  type AcceptResult,
+  acceptCommand,
+  type CommandEnvelope,
+  fingerprintCommand,
+  type InboxState,
+} from "./inbox.ts";

@@ -43,7 +43,11 @@ describe("hello negotiation", () => {
   });
 
   test("negotiates the highest version both sides support", () => {
-    const wide: ServerPolicy = { minProtocolVersion: 1, maxProtocolVersion: 3, maxConcurrentRuns: 4 };
+    const wide: ServerPolicy = {
+      minProtocolVersion: 1,
+      maxProtocolVersion: 3,
+      maxConcurrentRuns: 4,
+    };
     const result = negotiateHello(hello({ protocolVersion: 2 }), wide);
     expect(result.ok && result.negotiation.protocolVersion).toBe(3);
   });

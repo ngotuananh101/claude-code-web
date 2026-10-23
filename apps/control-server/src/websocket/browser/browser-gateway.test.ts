@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { createSigner } from "../../auth/tokens.ts";
 import { AuthService } from "../../auth/auth-service.ts";
+import { createSigner } from "../../auth/tokens.ts";
 import { BrowserGateway, type BrowserSocketData } from "./browser-gateway.ts";
 
 /**
@@ -25,7 +25,11 @@ function makeSocket() {
   const sent: Array<Record<string, unknown>> = [];
   const closed: number[] = [];
   const socket = {
-    data: { userId: "", authenticated: false, subscriptions: new Set<string>() } as BrowserSocketData,
+    data: {
+      userId: "",
+      authenticated: false,
+      subscriptions: new Set<string>(),
+    } as BrowserSocketData,
     send(payload: string) {
       sent.push(JSON.parse(String(payload)) as Record<string, unknown>);
       return 1;
@@ -40,13 +44,9 @@ function makeSocket() {
 async function setup(overrides: { allowedOrigins?: string[] } = {}) {
   const db = new Database(":memory:");
   migrate(db);
-  db.query("INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)").run(
-    "user-1",
-    "owner",
-    "hash",
-    1,
-    Date.now(),
-  );
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("user-1", "owner", "hash", 1, Date.now());
 
   const auth = new AuthService({ db, signer: createSigner(secret) });
   const gateway = new BrowserGateway({
@@ -128,7 +128,10 @@ describe("browser gateway", () => {
   test("a subscription is scoped to the authenticated user", async () => {
     const { gateway, token } = await setup();
     const { socket, sent } = makeSocket();
-    await gateway.attach(socket, { origin: "https://cc.example.test", cookie: `cc_session=${token}` });
+    await gateway.attach(socket, {
+      origin: "https://cc.example.test",
+      cookie: `cc_session=${token}`,
+    });
 
     gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
 
@@ -139,7 +142,10 @@ describe("browser gateway", () => {
   test("a revoked user's socket is closed when revocation happens", async () => {
     const { gateway, token } = await setup();
     const { socket, closed, sent } = makeSocket();
-    await gateway.attach(socket, { origin: "https://cc.example.test", cookie: `cc_session=${token}` });
+    await gateway.attach(socket, {
+      origin: "https://cc.example.test",
+      cookie: `cc_session=${token}`,
+    });
 
     gateway.revoke("user-1");
 
@@ -164,7 +170,10 @@ describe("browser gateway", () => {
   test("an unknown message type is refused, not ignored", async () => {
     const { gateway, token } = await setup();
     const { socket, sent } = makeSocket();
-    await gateway.attach(socket, { origin: "https://cc.example.test", cookie: `cc_session=${token}` });
+    await gateway.attach(socket, {
+      origin: "https://cc.example.test",
+      cookie: `cc_session=${token}`,
+    });
 
     gateway.handleMessage(socket, JSON.stringify({ type: "exfiltrate" }));
 

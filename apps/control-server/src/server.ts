@@ -14,12 +14,12 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { Server } from "bun";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
+import type { Server } from "bun";
 import type { AuthService } from "./auth/auth-service.ts";
-import { RunnerGateway, type RunnerSocketData } from "./websocket/runner/runner-gateway.ts";
-import { runnerWebSocket, upgradeRunner } from "./websocket/runner/route.ts";
 import { BrowserGateway, type BrowserSocketData } from "./websocket/browser/browser-gateway.ts";
+import { runnerWebSocket, upgradeRunner } from "./websocket/runner/route.ts";
+import { RunnerGateway, type RunnerSocketData } from "./websocket/runner/runner-gateway.ts";
 
 export type RunnerCredentialCheck =
   | { ok: true; runnerId: string; ownerId: string }

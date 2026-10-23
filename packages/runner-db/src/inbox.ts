@@ -36,11 +36,7 @@ export type AcceptResult =
   | { ok: true; duplicate: boolean; state: InboxState }
   | {
       ok: false;
-      reason:
-        | "unsupported_protocol"
-        | "wrong_runner"
-        | "expired"
-        | "fingerprint_mismatch";
+      reason: "unsupported_protocol" | "wrong_runner" | "expired" | "fingerprint_mismatch";
     };
 
 const SUPPORTED_PROTOCOL_VERSION = 1;
@@ -128,13 +124,10 @@ export function acceptCommand(
   return { ok: true, duplicate: false, state: "accepted" };
 }
 
-function reject(
-  db: Database,
-  commandId: string,
-  reason: string,
-  now: number,
-): void {
-  db.prepare(
-    "INSERT INTO inbox_rejections (command_id, reason, rejected_at) VALUES (?, ?, ?)",
-  ).run(commandId, reason, now);
+function reject(db: Database, commandId: string, reason: string, now: number): void {
+  db.prepare("INSERT INTO inbox_rejections (command_id, reason, rejected_at) VALUES (?, ?, ?)").run(
+    commandId,
+    reason,
+    now,
+  );
 }

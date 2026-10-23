@@ -61,14 +61,12 @@ export function verifyRunnerCredential(db: Database, credential: string): Verifi
        JOIN runners r ON r.id = c.runner_id
        WHERE c.secret_hash = ?`,
     )
-    .get(hashSecret(credential)) as
-    | {
-        runner_id: string;
-        revoked_at: number | null;
-        owner_id: string;
-        runner_revoked_at: number | null;
-      }
-    | null;
+    .get(hashSecret(credential)) as {
+    runner_id: string;
+    revoked_at: number | null;
+    owner_id: string;
+    runner_revoked_at: number | null;
+  } | null;
 
   if (!row) return { ok: false, reason: "unknown" };
   if (row.revoked_at !== null || row.runner_revoked_at !== null) {

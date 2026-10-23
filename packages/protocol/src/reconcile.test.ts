@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  reconcile,
-  type ServerRunState,
-  type RunState,
-} from "./reconcile.ts";
+import { type RunState, reconcile, type ServerRunState } from "./reconcile.ts";
 
 /**
  * §14.3 reconciliation and §14.4 conflict matrix.
@@ -65,7 +61,9 @@ describe("reconciliation", () => {
     });
 
     // §14.4 row 2. The runner has evidence we lack; take it.
-    expect(result.actions).toEqual([{ kind: "adopt_terminal", runId: "run-1", attemptId: "attempt-1", state: "completed" }]);
+    expect(result.actions).toEqual([
+      { kind: "adopt_terminal", runId: "run-1", attemptId: "attempt-1", state: "completed" },
+    ]);
     expect(result.ready).toBe(true);
   });
 
@@ -75,7 +73,9 @@ describe("reconciliation", () => {
       runner: [{ runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true }],
     });
 
-    expect(result.actions).toEqual([{ kind: "continue_observing", runId: "run-1", attemptId: "attempt-1" }]);
+    expect(result.actions).toEqual([
+      { kind: "continue_observing", runId: "run-1", attemptId: "attempt-1" },
+    ]);
     expect(result.ready).toBe(true);
   });
 
@@ -86,19 +86,28 @@ describe("reconciliation", () => {
     });
 
     // §14.4 row 4 and §9.7. The critical negative: no action creates a new attempt.
-    expect(result.actions).toEqual([{ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }]);
+    expect(result.actions).toEqual([
+      { kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" },
+    ]);
     expect(result.ready).toBe(true);
   });
 
   test("runner has a process for an attempt the server never assigned: quarantine", () => {
     const result = reconcile({
       server: [],
-      runner: [{ runId: "run-ghost", attemptId: "attempt-ghost", state: "running", processAlive: true }],
+      runner: [
+        { runId: "run-ghost", attemptId: "attempt-ghost", state: "running", processAlive: true },
+      ],
     });
 
     // §14.4 row 5. Never attach it to a session; it is evidence, not work.
     expect(result.actions).toEqual([
-      { kind: "quarantine", runId: "run-ghost", attemptId: "attempt-ghost", reason: "no_assignment" },
+      {
+        kind: "quarantine",
+        runId: "run-ghost",
+        attemptId: "attempt-ghost",
+        reason: "no_assignment",
+      },
     ]);
     expect(result.ready).toBe(true);
   });
@@ -153,7 +162,15 @@ describe("reconciliation", () => {
   test("a pending approval whose callback is gone is abandoned, not re-offered", () => {
     const result = reconcile({
       server: [serverState("run-1", "attempt-1", "waiting_for_approval")],
-      runner: [{ runId: "run-1", attemptId: "attempt-1", state: "unknown", processAlive: false, approvalsAlive: false }],
+      runner: [
+        {
+          runId: "run-1",
+          attemptId: "attempt-1",
+          state: "unknown",
+          processAlive: false,
+          approvalsAlive: false,
+        },
+      ],
     });
 
     // §14.4 row 7 and §13.2. Re-offering a stale approval would let a decision
@@ -202,11 +219,26 @@ describe("reconciliation", () => {
     const kinds = new Set<string>();
     const scenarios = [
       { server: [], runner: [] },
-      { server: [serverState("r", "a", "queued")], runner: [{ runId: "r", attemptId: "a", state: "accepted" as const }] },
-      { server: [serverState("r", "a", "running")], runner: [{ runId: "r", attemptId: "a", state: "completed" as const }] },
-      { server: [serverState("r", "a", "running")], runner: [{ runId: "r", attemptId: "a", state: "unknown" as const, processAlive: false }] },
-      { server: [], runner: [{ runId: "g", attemptId: "ga", state: "running" as const, processAlive: true }] },
-      { server: [serverState("r", "a", "running", { cancelRequested: true })], runner: [{ runId: "r", attemptId: "a", state: "running" as const, processAlive: true }] },
+      {
+        server: [serverState("r", "a", "queued")],
+        runner: [{ runId: "r", attemptId: "a", state: "accepted" as const }],
+      },
+      {
+        server: [serverState("r", "a", "running")],
+        runner: [{ runId: "r", attemptId: "a", state: "completed" as const }],
+      },
+      {
+        server: [serverState("r", "a", "running")],
+        runner: [{ runId: "r", attemptId: "a", state: "unknown" as const, processAlive: false }],
+      },
+      {
+        server: [],
+        runner: [{ runId: "g", attemptId: "ga", state: "running" as const, processAlive: true }],
+      },
+      {
+        server: [serverState("r", "a", "running", { cancelRequested: true })],
+        runner: [{ runId: "r", attemptId: "a", state: "running" as const, processAlive: true }],
+      },
     ];
 
     for (const scenario of scenarios) {

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import { CommandOutbox } from "./command-outbox.ts";
 
@@ -53,7 +53,9 @@ describe("command outbox", () => {
 
     // §9.3: the fingerprint is immutable. A second enqueue under the same id with
     // different content is a bug in the caller or an attack, not a retry.
-    await expect(o.enqueue({ ...command, payload: { prompt: "different" } })).rejects.toThrow(/fingerprint/);
+    await expect(o.enqueue({ ...command, payload: { prompt: "different" } })).rejects.toThrow(
+      /fingerprint/,
+    );
   });
 
   test("re-enqueueing the identical command is a no-op, not an error", async () => {

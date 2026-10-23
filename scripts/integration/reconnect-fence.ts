@@ -43,7 +43,7 @@ const repoRoot = new URL("../..", import.meta.url).pathname;
  * as a bare module-not-found.
  */
 const serverModuleRoot = repoRoot;
-const runnerModuleRoot = useDocker ? "/app/" : repoRoot;
+const _runnerModuleRoot = useDocker ? "/app/" : repoRoot;
 
 type Result = { name: string; pass: boolean; detail: string };
 const results: Result[] = [];
@@ -86,7 +86,9 @@ function streamReader(stream: ReadableStream<Uint8Array>) {
       const deadline = Date.now() + timeoutMs;
       while (!buffer.includes(marker)) {
         if (Date.now() > deadline) {
-          throw new Error(`timed out waiting for ${JSON.stringify(marker)}; got: ${buffer.slice(-400)}`);
+          throw new Error(
+            `timed out waiting for ${JSON.stringify(marker)}; got: ${buffer.slice(-400)}`,
+          );
         }
         await Bun.sleep(20);
       }
@@ -229,7 +231,10 @@ try {
     check(
       "first connection reconciles and promotes to ready",
       firstOut.includes('"ready":true'),
-      firstOut.trim().split("\n").find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
+      firstOut
+        .trim()
+        .split("\n")
+        .find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
     );
 
     // SIGKILL from outside the container: PID 1 in its own namespace ignores
@@ -247,7 +252,10 @@ try {
     check(
       "first connection reconciles and promotes to ready",
       firstOut.includes('"ready":true'),
-      firstOut.trim().split("\n").find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
+      firstOut
+        .trim()
+        .split("\n")
+        .find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
     );
 
     first.kill("SIGKILL");
@@ -262,14 +270,32 @@ try {
   let secondOut: string;
   if (useDocker) {
     const second = Bun.spawn(
-      ["docker", "run", "--rm", "--network", "host", "-v", `${repoRoot}:/app`, "-v", `${workdir}:/data`, "cc-web-runner:dev", "bun", "run", "/data/runner2.ts"],
+      [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-v",
+        `${repoRoot}:/app`,
+        "-v",
+        `${workdir}:/data`,
+        "cc-web-runner:dev",
+        "bun",
+        "run",
+        "/data/runner2.ts",
+      ],
       { stdout: "pipe", stderr: "pipe" },
     );
     secondOut = await streamReader(second.stdout).until("RECONCILED", 90000);
     second.kill("SIGKILL");
     await second.exited.catch(() => {});
   } else {
-    const second = Bun.spawn(["bun", "run", secondFile], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+    const second = Bun.spawn(["bun", "run", secondFile], {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     secondOut = await streamReader(second.stdout).until("RECONCILED", 30000);
     second.kill("SIGKILL");
     await second.exited;
@@ -278,7 +304,10 @@ try {
   check(
     "reconnect after an unclean exit still promotes to ready",
     secondOut.includes('"ready":true'),
-    secondOut.trim().split("\n").find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
+    secondOut
+      .trim()
+      .split("\n")
+      .find((l) => l.startsWith("RECONCILED")) ?? "no reconcile result",
   );
 
   // Wait for the consequence, not for a delay: the run must become interrupted

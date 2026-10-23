@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 /**
  * Integration probe: one enrollment token, N real processes racing to consume it.
  *
@@ -12,12 +13,11 @@
  *   bun run scripts/integration/enrollment-race.ts --docker
  */
 
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
 import { createEnrollment, migrate } from "../../packages/control-db/src/index.ts";
-import { consumeEnrollment } from "../../packages/control-db/src/enrollment.ts";
 
 const useDocker = process.argv.includes("--docker");
 const CONSUMERS = 8;
@@ -68,7 +68,7 @@ async function raceInProcesses(token: string, path: string): Promise<Outcome[]> 
   const scriptPath = join(workdir, "consume.ts");
   await Bun.write(scriptPath, script);
 
-  const procs = Array.from({ length: CONSUMERS }, (_, i) =>
+  const procs = Array.from({ length: CONSUMERS }, (_, _i) =>
     Bun.spawn(["bun", "run", scriptPath], { stdout: "pipe", stderr: "pipe" }),
   );
 
@@ -106,18 +106,26 @@ async function raceInDocker(token: string, path: string): Promise<Outcome[]> {
      db.close();`,
   );
 
-  const procs = Array.from({ length: CONSUMERS }, (_, i) =>
+  const procs = Array.from({ length: CONSUMERS }, (_, _i) =>
     Bun.spawn(
       [
-        "docker", "run", "--rm",
-        "--network", "none",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
         // Only the data directory is shared. Each container has its own
         // filesystem, process table and SQLite connection.
-        "-v", `${dir}:/data`,
-        "-v", `${process.cwd()}:/app:ro`,
-        "-w", "/app",
+        "-v",
+        `${dir}:/data`,
+        "-v",
+        `${process.cwd()}:/app:ro`,
+        "-w",
+        "/app",
         "cc-web-runner:dev",
-        "bun", "run", "/data/consume.ts",
+        "bun",
+        "run",
+        "/data/consume.ts",
       ],
       { stdout: "pipe", stderr: "pipe" },
     ),

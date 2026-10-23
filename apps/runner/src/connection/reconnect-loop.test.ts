@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ReconnectLoop, type Link, type LoopEvent } from "./reconnect-loop.ts";
+import { type Link, type LoopEvent, ReconnectLoop } from "./reconnect-loop.ts";
 
 /**
  * The Runner's connection loop (§6.2, §11.1, §14.3).
@@ -312,7 +312,9 @@ describe("runner reconnect loop", () => {
     const loop = new ReconnectLoop({
       runnerId: "runner-a",
       dial: async () => link,
-      inventory: () => [{ runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true }],
+      inventory: () => [
+        { runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true },
+      ],
       hello: () => ({
         protocolVersion: 1,
         runnerId: "runner-a",

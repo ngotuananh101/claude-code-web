@@ -74,7 +74,10 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     return fail("forbidden_field", `hello must not carry "${forbidden}"`);
   }
 
-  if (typeof record["protocolVersion"] !== "number" || !Number.isInteger(record["protocolVersion"])) {
+  if (
+    typeof record["protocolVersion"] !== "number" ||
+    !Number.isInteger(record["protocolVersion"])
+  ) {
     return fail("malformed", "protocolVersion must be an integer");
   }
   if (!isNonEmptyString(record["runnerId"])) {
@@ -83,7 +86,10 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
   if (!isNonEmptyString(record["bootId"])) {
     return fail("malformed", "bootId must be a non-empty string");
   }
-  if (typeof record["maxConcurrentRuns"] !== "number" || !Number.isInteger(record["maxConcurrentRuns"])) {
+  if (
+    typeof record["maxConcurrentRuns"] !== "number" ||
+    !Number.isInteger(record["maxConcurrentRuns"])
+  ) {
     return fail("malformed", "maxConcurrentRuns must be an integer");
   }
   if (record["maxConcurrentRuns"] < 0) {

@@ -1,11 +1,11 @@
-import { describe, expect, test, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { createSigner } from "../auth/tokens.ts";
-import { AuthService } from "../auth/auth-service.ts";
-import { createServer, type ServerHandle } from "../server.ts";
 import { ReconnectLoop } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
+import { createServer, type ServerHandle } from "../server.ts";
 
 /**
  * The two halves against each other (§6.2, §14.3).

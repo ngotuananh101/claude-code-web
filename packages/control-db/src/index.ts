@@ -7,8 +7,8 @@
 
 export { migrate } from "./db.ts";
 export {
-  createEnrollment,
-  consumeEnrollment,
-  type CreatedEnrollment,
   type ConsumedEnrollment,
+  type CreatedEnrollment,
+  consumeEnrollment,
+  createEnrollment,
 } from "./enrollment.ts";

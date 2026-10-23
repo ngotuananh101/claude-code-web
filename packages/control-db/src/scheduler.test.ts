@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { Scheduler, type RunnerCapacity } from "./scheduler.ts";
+import { type RunnerCapacity, Scheduler } from "./scheduler.ts";
 
 /**
  * Scheduling MVP (§11.3).
@@ -63,7 +63,10 @@ describe("scheduler", () => {
   test("a runner at capacity is refused rather than queued locally", async () => {
     const { scheduler } = setup();
 
-    const decision = await scheduler.dispatch(request, capacity({ activeRuns: 1, maxConcurrentRuns: 1 }));
+    const decision = await scheduler.dispatch(
+      request,
+      capacity({ activeRuns: 1, maxConcurrentRuns: 1 }),
+    );
 
     expect(decision).toEqual({ ok: false, reason: "runner_at_capacity" });
   });
@@ -90,7 +93,10 @@ describe("scheduler", () => {
 
     // The second run is a different id for the same session: exactly what a
     // double-click in the UI produces.
-    const decision = await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity());
+    const decision = await scheduler.dispatch(
+      { ...request, runId: "run-2", attemptId: "attempt-2" },
+      capacity(),
+    );
 
     expect(decision).toEqual({ ok: false, reason: "session_busy" });
   });

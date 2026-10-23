@@ -31,10 +31,17 @@ comes from committing the lockfile (`bun.lock`) and recording the exact resolved
 versions in this table when they change. `package.json` keeps permissive ranges;
 the lockfile is the source of truth.
 
-Revisit and move to explicit pins if any of these occur: a dependency ships a
-breaking change that alters protocol behaviour, two Runners end up on versions
-that must interoperate, or an SDK update breaks the compatibility matrix in
-§22.1.
+**Tool version pinning (added when CI was introduced)**: `package.json` carries
+`packageManager: "bun@1.4.3"` and the workflows read it through `setup-bun`'s
+`bun-version-file`. This is not a dependency pin — it is the one place the *tool*
+version is written down, so CI installs with the same Bun the lockfile was
+resolved with instead of whatever the runner image happens to ship. Moving to a
+new Bun is then a deliberate edit to that field, not a silent drift.
+
+Revisit and move to explicit dependency pins if any of these occur: a dependency
+ships a breaking change that alters protocol behaviour, two Runners end up on
+versions that must interoperate, or an SDK update breaks the compatibility matrix
+in §22.1.
 
 ## Consequences
 

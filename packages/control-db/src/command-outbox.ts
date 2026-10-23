@@ -21,7 +21,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { canonicalize, fingerprint } from "@cc-web/shared";
+import { fingerprint } from "@cc-web/shared";
 
 export type CommandKind =
   | "run.start"
@@ -89,9 +89,7 @@ export class CommandOutbox {
 
     if (existing) {
       if (existing.fingerprint !== fp) {
-        throw new Error(
-          `command ${input.commandId} already exists with a different fingerprint`,
-        );
+        throw new Error(`command ${input.commandId} already exists with a different fingerprint`);
       }
       // Identical re-enqueue is a retry by the caller, not an error.
       return;
@@ -184,9 +182,11 @@ export class CommandOutbox {
   }
 
   #row(commandId: string): Row | undefined {
-    return (this.#db
-      .query("SELECT * FROM command_outbox WHERE command_id = ?")
-      .get(commandId) as Row | null) ?? undefined;
+    return (
+      (this.#db
+        .query("SELECT * FROM command_outbox WHERE command_id = ?")
+        .get(commandId) as Row | null) ?? undefined
+    );
   }
 
   #require(commandId: string): Row {

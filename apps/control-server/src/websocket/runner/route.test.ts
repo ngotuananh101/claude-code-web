@@ -1,7 +1,7 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
+import { runnerSocketData, runnerWebSocket, upgradeRunner } from "./route.ts";
 import { RunnerGateway, type RunnerSocketData } from "./runner-gateway.ts";
-import { runnerWebSocket, upgradeRunner, runnerSocketData } from "./route.ts";
 
 /**
  * The route is exercised over a real socket: Bun.serve on an ephemeral port and
@@ -27,7 +27,9 @@ function start() {
       const url = new URL(request.url);
       if (url.pathname !== "/ws/runner") return new Response("not found", { status: 404 });
       const upgraded = upgradeRunner(request, srv, gateway);
-      return upgraded.ok ? (undefined as unknown as Response) : new Response("refused", { status: upgraded.status });
+      return upgraded.ok
+        ? (undefined as unknown as Response)
+        : new Response("refused", { status: upgraded.status });
     },
     websocket: runnerWebSocket(gateway),
   });

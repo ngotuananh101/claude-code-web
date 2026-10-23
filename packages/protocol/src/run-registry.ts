@@ -16,7 +16,13 @@
 
 import type { ReconcileAction, RunState } from "./reconcile.ts";
 
-export type DesiredState = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+export type DesiredState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
 
 export type ObservedState =
   | "starting"
@@ -120,7 +126,12 @@ export class RunRegistry {
         if (!run) return;
         if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return; // idempotent
         run.observedState = action.state;
-        run.desiredState = action.state === "completed" ? "completed" : action.state === "failed" ? "failed" : "cancelled";
+        run.desiredState =
+          action.state === "completed"
+            ? "completed"
+            : action.state === "failed"
+              ? "failed"
+              : "cancelled";
         return;
       }
 

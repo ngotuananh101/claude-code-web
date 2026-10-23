@@ -21,7 +21,10 @@ export type AuthOptions = {
 
 export type AuthenticateResult =
   | { ok: true; userId: string }
-  | { ok: false; reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable" };
+  | {
+      ok: false;
+      reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
+    };
 
 type UserRow = { id: string; token_version: number };
 
@@ -72,9 +75,7 @@ export class AuthService {
 
   /** Invalidates every outstanding access token for this user. */
   revokeAllSessions(userId: string): void {
-    this.#db
-      .query("UPDATE users SET token_version = token_version + 1 WHERE id = ?")
-      .run(userId);
+    this.#db.query("UPDATE users SET token_version = token_version + 1 WHERE id = ?").run(userId);
   }
 
   #readUser(userId: string): UserRow | null {

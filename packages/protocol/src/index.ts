@@ -93,33 +93,32 @@ export type RunEventOffset = {
 };
 
 export {
-  negotiateHello,
-  type ServerPolicy,
-  type NegotiateResult,
-  type Negotiation,
-  type NegotiatedPolicy,
-} from "./handshake.ts";
-
-export {
   ConnectionRegistry,
   type OpenParams,
   type OpenResult,
   type TrafficCheck,
 } from "./connection-registry.ts";
+export {
+  type NegotiatedPolicy,
+  type NegotiateResult,
+  type Negotiation,
+  negotiateHello,
+  type ServerPolicy,
+} from "./handshake.ts";
 
 export {
-  reconcile,
   type ReconcileAction,
   type ReconcileResult,
-  type RunState,
   type RunnerRunState,
+  type RunState,
+  reconcile,
   type ServerRunState,
 } from "./reconcile.ts";
 
 export {
-  RunRegistry,
-  toServerRunState,
   type DesiredState,
   type ObservedState,
   type Run,
+  RunRegistry,
+  toServerRunState,
 } from "./run-registry.ts";

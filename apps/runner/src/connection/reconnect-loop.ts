@@ -163,9 +163,7 @@ export class ReconnectLoop {
 
         // §14.3: reconciliation is what promotes `connected` to `ready`. It is
         // sent only now, because the server refuses it before negotiation.
-        this.#link?.send(
-          JSON.stringify({ type: "reconcile", runner: this.#options.inventory() }),
-        );
+        this.#link?.send(JSON.stringify({ type: "reconcile", runner: this.#options.inventory() }));
         return;
       }
 
@@ -239,7 +237,10 @@ export class ReconnectLoop {
       this.#backoffMs = Math.min(this.#backoffMs * BACKOFF_FACTOR, MAX_BACKOFF_MS);
 
       this.#attemptCount += 1;
-      if (this.#options.maxAttempts !== undefined && this.#attemptCount >= this.#options.maxAttempts) {
+      if (
+        this.#options.maxAttempts !== undefined &&
+        this.#attemptCount >= this.#options.maxAttempts
+      ) {
         this.#state = "stopped";
         return;
       }

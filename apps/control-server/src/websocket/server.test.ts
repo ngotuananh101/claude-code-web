@@ -1,9 +1,8 @@
-import { describe, expect, test, afterEach } from "bun:test";
-import type { Server } from "bun";
 import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { createSigner } from "../auth/tokens.ts";
 import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -22,13 +21,9 @@ let handle: ServerHandle | undefined;
 async function start(overrides: { allowedOrigins?: string[] } = {}) {
   const db = new Database(":memory:");
   migrate(db);
-  db.query("INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)").run(
-    "user-1",
-    "owner",
-    "hash",
-    1,
-    Date.now(),
-  );
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("user-1", "owner", "hash", 1, Date.now());
 
   const auth = new AuthService({ db, signer: createSigner(secret) });
   handle = createServer({

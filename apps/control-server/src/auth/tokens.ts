@@ -16,7 +16,7 @@
  * before any claim is read.
  */
 
-import { SignJWT, jwtVerify, errors, type JWTPayload } from "jose";
+import { errors, type JWTPayload, jwtVerify, SignJWT } from "jose";
 
 export type TokenClaims = {
   sub: string;

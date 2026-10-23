@@ -51,7 +51,9 @@ type Output = {
 
 function streamReader(stream: ReadableStream<Uint8Array> | number | undefined): Output {
   if (typeof stream !== "object" || stream === null) {
-    throw new Error("expected a piped stream; the subprocess was spawned without stdout/stderr: 'pipe'");
+    throw new Error(
+      "expected a piped stream; the subprocess was spawned without stdout/stderr: 'pipe'",
+    );
   }
 
   // One reader for the process lifetime. Taking a second one later would throw
@@ -80,7 +82,9 @@ function streamReader(stream: ReadableStream<Uint8Array> | number | undefined): 
       const deadline = Date.now() + timeoutMs;
       while (!buffer.includes(marker)) {
         if (Date.now() > deadline) {
-          throw new Error(`timed out waiting for ${JSON.stringify(marker)}; got: ${buffer.slice(-600)}`);
+          throw new Error(
+            `timed out waiting for ${JSON.stringify(marker)}; got: ${buffer.slice(-600)}`,
+          );
         }
         await Bun.sleep(25);
       }
@@ -149,7 +153,11 @@ try {
   const serverFile = join(workdir, "server.ts");
   await writeFile(serverFile, serverScript);
 
-  serverProc = Bun.spawn(["bun", "run", serverFile], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+  serverProc = Bun.spawn(["bun", "run", serverFile], {
+    cwd: repoRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const serverOut = streamReader(serverProc.stdout);
   const serverErr = streamReader(serverProc.stderr);
 
@@ -195,7 +203,11 @@ try {
 
   async function startRunner(script: string, label: string): Promise<RunnerHandle> {
     if (!useDocker) {
-      const proc = Bun.spawn(["bun", "run", script], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+      const proc = Bun.spawn(["bun", "run", script], {
+        cwd: repoRoot,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
       return {
         output: streamReader(proc.stdout),
         errors: streamReader(proc.stderr),
@@ -212,12 +224,21 @@ try {
     containers.push(name);
     const proc = Bun.spawn(
       [
-        "docker", "run", "--rm", "--name", name,
-        "--network", "host",
-        "-v", `${repoRoot}:/app`,
-        "-v", `${workdir}:/data`,
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--network",
+        "host",
+        "-v",
+        `${repoRoot}:/app`,
+        "-v",
+        `${workdir}:/data`,
         "cc-web-runner:dev",
-        "bun", "run", `/data/${script.slice(workdir.length + 1)}`,
+        "bun",
+        "run",
+        `/data/${script.slice(workdir.length + 1)}`,
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
@@ -260,8 +281,16 @@ try {
   const first = await startAndAwaitBoot(runnerFile, "first");
   let state = await waitForPromotions(1);
 
-  check("the runner daemon reaches ready over a real socket", state.promotions >= 1, `promotions=${state.promotions}`);
-  check("the ready state is recorded on the server", state.state === "ready", `state=${state.state}`);
+  check(
+    "the runner daemon reaches ready over a real socket",
+    state.promotions >= 1,
+    `promotions=${state.promotions}`,
+  );
+  check(
+    "the ready state is recorded on the server",
+    state.state === "ready",
+    `state=${state.state}`,
+  );
   const firstGeneration = state.generation;
 
   // --- 2. kill the runner ---
@@ -269,13 +298,21 @@ try {
   await Bun.sleep(300);
 
   const afterKill = await readState();
-  check("the server sees the connection go away", afterKill.state === "offline", `state=${afterKill.state}`);
+  check(
+    "the server sees the connection go away",
+    afterKill.state === "offline",
+    `state=${afterKill.state}`,
+  );
 
   // --- 3. restart reaches ready again on a higher generation ---
   const second = await startAndAwaitBoot(runnerFile, "second");
   state = await waitForPromotions(2);
 
-  check("the restarted runner reaches ready again", state.promotions >= 2, `promotions=${state.promotions}`);
+  check(
+    "the restarted runner reaches ready again",
+    state.promotions >= 2,
+    `promotions=${state.promotions}`,
+  );
   check(
     "the reconnect holds a higher generation",
     state.generation !== null && firstGeneration !== null && state.generation > firstGeneration,
@@ -292,7 +329,9 @@ try {
   try {
     await bad.output.until('"type":"disconnected"', 20_000);
   } catch (error) {
-    throw new Error(`${(error as Error).message}\nbad-runner stderr: ${bad.errors.text.slice(-2000)}`);
+    throw new Error(
+      `${(error as Error).message}\nbad-runner stderr: ${bad.errors.text.slice(-2000)}`,
+    );
   }
 
   await Bun.sleep(1000);

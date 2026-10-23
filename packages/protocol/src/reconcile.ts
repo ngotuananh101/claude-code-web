@@ -61,7 +61,12 @@ export type RunnerRunState = {
 
 export type ReconcileAction =
   | { kind: "record_receipt"; runId: string; attemptId: string; commandId: string }
-  | { kind: "adopt_terminal"; runId: string; attemptId: string; state: "completed" | "failed" | "cancelled" }
+  | {
+      kind: "adopt_terminal";
+      runId: string;
+      attemptId: string;
+      state: "completed" | "failed" | "cancelled";
+    }
   | { kind: "continue_observing"; runId: string; attemptId: string }
   | { kind: "mark_interrupted"; runId: string; attemptId: string }
   | { kind: "quarantine"; runId: string; attemptId: string; reason: "no_assignment" }
@@ -111,7 +116,11 @@ export function reconcile(input: {
       // In flight on the server, invisible to the runner. The process is gone
       // without a terminal outcome; do not resume it.
       if (!TERMINAL.has(serverRun.state)) {
-        actions.push({ kind: "mark_interrupted", runId: serverRun.runId, attemptId: serverRun.attemptId });
+        actions.push({
+          kind: "mark_interrupted",
+          runId: serverRun.runId,
+          attemptId: serverRun.attemptId,
+        });
       }
       continue;
     }
@@ -140,8 +149,16 @@ export function reconcile(input: {
     // Approval handling comes before process state: a run can be alive while its
     // approval callback is dead, and that combination needs its own action.
     if (serverRun.state === "waiting_for_approval" && report.approvalsAlive === false) {
-      actions.push({ kind: "abandon_approval", runId: serverRun.runId, attemptId: serverRun.attemptId });
-      actions.push({ kind: "mark_interrupted", runId: serverRun.runId, attemptId: serverRun.attemptId });
+      actions.push({
+        kind: "abandon_approval",
+        runId: serverRun.runId,
+        attemptId: serverRun.attemptId,
+      });
+      actions.push({
+        kind: "mark_interrupted",
+        runId: serverRun.runId,
+        attemptId: serverRun.attemptId,
+      });
       continue;
     }
 
@@ -162,9 +179,17 @@ export function reconcile(input: {
           runId: serverRun.runId,
           attemptId: serverRun.attemptId,
         });
-        actions.push({ kind: "continue_observing", runId: serverRun.runId, attemptId: serverRun.attemptId });
+        actions.push({
+          kind: "continue_observing",
+          runId: serverRun.runId,
+          attemptId: serverRun.attemptId,
+        });
       } else {
-        actions.push({ kind: "continue_observing", runId: serverRun.runId, attemptId: serverRun.attemptId });
+        actions.push({
+          kind: "continue_observing",
+          runId: serverRun.runId,
+          attemptId: serverRun.attemptId,
+        });
       }
       continue;
     }
@@ -181,13 +206,21 @@ export function reconcile(input: {
     }
 
     if (report.state === "unknown" && report.processAlive === false) {
-      actions.push({ kind: "mark_interrupted", runId: serverRun.runId, attemptId: serverRun.attemptId });
+      actions.push({
+        kind: "mark_interrupted",
+        runId: serverRun.runId,
+        attemptId: serverRun.attemptId,
+      });
       continue;
     }
 
     // Anything else the runner reports about its own attempt without a live
     // process is still not proof of death. Keep observing rather than guessing.
-    actions.push({ kind: "continue_observing", runId: serverRun.runId, attemptId: serverRun.attemptId });
+    actions.push({
+      kind: "continue_observing",
+      runId: serverRun.runId,
+      attemptId: serverRun.attemptId,
+    });
   }
 
   for (const run of input.runner) {

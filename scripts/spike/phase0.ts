@@ -76,7 +76,11 @@ async function stageBinary(): Promise<string | undefined> {
   }
 
   const stat = await Bun.file(found).stat();
-  record("bundled binary", "ok", `${found.replace(/^.*node_modules\//, "")} (${(stat.size / 1e6).toFixed(0)} MB)`);
+  record(
+    "bundled binary",
+    "ok",
+    `${found.replace(/^.*node_modules\//, "")} (${(stat.size / 1e6).toFixed(0)} MB)`,
+  );
 
   // Prove it runs. `--version` is the cheapest liveness check that still proves
   // the binary is executable on this libc.
@@ -155,10 +159,7 @@ async function stageSettings(cwd: string): Promise<boolean> {
 // Stage 3 — live query
 // ---------------------------------------------------------------------------
 
-async function stageQuery(
-  binary: string | undefined,
-  cwd: string,
-): Promise<string | undefined> {
+async function stageQuery(binary: string | undefined, cwd: string): Promise<string | undefined> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   const controller = new AbortController();
@@ -275,7 +276,9 @@ async function stageResume(
   record(
     "resume by session id",
     recalled ? "ok" : "fail",
-    recalled ? `recalled context: "${text.trim().slice(0, 40)}"` : `no recall: "${text.trim().slice(0, 80)}"`,
+    recalled
+      ? `recalled context: "${text.trim().slice(0, 40)}"`
+      : `no recall: "${text.trim().slice(0, 80)}"`,
   );
 }
 // ---------------------------------------------------------------------------
@@ -387,14 +390,19 @@ async function stageErrorClassification(): Promise<void> {
     return;
   }
 
-  const reachability = /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|fetch failed|Connection error|socket hang up/i;
+  const reachability =
+    /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|fetch failed|Connection error|socket hang up/i;
   const auth = /\b401\b|\b403\b|invalid.*(api.?key|token)|authentication/i;
 
   if (reachability.test(message)) {
     record("error classification", "ok", "connection failure distinguished from auth");
   } else if (auth.test(message)) {
     // Wrong: a closed port must not look like bad credentials.
-    record("error classification", "fail", `closed port reported as auth: ${message.slice(0, 160)}`);
+    record(
+      "error classification",
+      "fail",
+      `closed port reported as auth: ${message.slice(0, 160)}`,
+    );
   } else {
     record("error classification", "fail", `unclassified: ${message.slice(0, 160)}`);
   }

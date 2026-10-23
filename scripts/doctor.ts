@@ -23,10 +23,7 @@ const order: string[] = [];
 const results = new Map<string, Check>();
 const pending: Promise<void>[] = [];
 
-function check(
-  name: string,
-  run: () => Omit<Check, "name"> | Promise<Omit<Check, "name">>,
-): void {
+function check(name: string, run: () => Omit<Check, "name"> | Promise<Omit<Check, "name">>): void {
   order.push(name);
   pending.push(
     Promise.resolve()
@@ -96,8 +93,7 @@ check("provider endpoint", () => {
 
   const isLoopback = /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/.test(url.hostname);
   const isPrivate =
-    isLoopback ||
-    /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(url.hostname);
+    isLoopback || /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(url.hostname);
   const where = isLoopback ? "loopback" : isPrivate ? "private" : "public";
 
   // The bearer token is cleartext on the wire under plain http. Loopback is the
