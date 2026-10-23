@@ -106,3 +106,20 @@ export {
   type OpenResult,
   type TrafficCheck,
 } from "./connection-registry.ts";
+
+export {
+  reconcile,
+  type ReconcileAction,
+  type ReconcileResult,
+  type RunState,
+  type RunnerRunState,
+  type ServerRunState,
+} from "./reconcile.ts";
+
+export {
+  RunRegistry,
+  toServerRunState,
+  type DesiredState,
+  type ObservedState,
+  type Run,
+} from "./run-registry.ts";
