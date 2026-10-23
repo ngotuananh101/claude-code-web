@@ -339,4 +339,114 @@ describe("runner reconnect loop", () => {
       runner: [{ runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true }],
     });
   });
+
+  test("a command from the server is handed to the executor", async () => {
+    const handled: unknown[] = [];
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async (command) => {
+        handled.push(command);
+        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+      },
+    });
+
+    await loop.start();
+    link.receive({
+      type: "command",
+      command: { commandId: "cmd-1", runnerId: "runner-a", kind: "run.start" },
+    });
+
+    expect(handled).toEqual([{ commandId: "cmd-1", runnerId: "runner-a", kind: "run.start" }]);
+  });
+
+  test("the receipt is sent only after the executor has persisted the command", async () => {
+    const order: string[] = [];
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async () => {
+        // Stands in for the inbox transaction. A receipt that overtakes this is
+        // a promise of durability the runner has not made yet (§9.3).
+        order.push("persisted");
+        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+      },
+    });
+
+    await loop.start();
+    link.receive({ type: "command", command: { commandId: "cmd-1" } });
+    await Bun.sleep(10);
+
+    expect(order).toEqual(["persisted"]);
+    expect(link.sent.at(-1)).toEqual({
+      type: "command.receipt",
+      commandId: "cmd-1",
+      attemptId: "attempt-1",
+      accepted: true,
+    });
+  });
+
+  test("a refused command is answered with a receipt carrying the reason", async () => {
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async () => ({
+        commandId: "cmd-1",
+        attemptId: "attempt-1",
+        accepted: false,
+        reason: "expired",
+      }),
+    });
+
+    await loop.start();
+    link.receive({ type: "command", command: { commandId: "cmd-1" } });
+    await Bun.sleep(10);
+
+    // Silence would leave the command pending on the server forever, and the
+    // operator would be looking at a run that was never going to start.
+    expect(link.sent.at(-1)).toMatchObject({
+      type: "command.receipt",
+      commandId: "cmd-1",
+      accepted: false,
+      reason: "expired",
+    });
+  });
+
+  test("a command frame with no command body is refused without calling the executor", async () => {
+    let calls = 0;
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async () => {
+        calls += 1;
+        return { commandId: "", attemptId: "", accepted: true };
+      },
+    });
+
+    await loop.start();
+    link.receive({ type: "command" });
+    await Bun.sleep(10);
+
+    expect(calls).toBe(0);
+  });
 });

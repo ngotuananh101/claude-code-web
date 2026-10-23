@@ -14,10 +14,17 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { consumeEnrollment, createEnrollment, issueRunnerCredential } from "@cc-web/control-db";
+import {
+  type CommandOutbox,
+  consumeEnrollment,
+  createEnrollment,
+  issueRunnerCredential,
+  Scheduler,
+} from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
 import type { AuthService } from "./auth/auth-service.ts";
+import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { BrowserGateway, type BrowserSocketData } from "./websocket/browser/browser-gateway.ts";
 import { runnerWebSocket, upgradeRunner } from "./websocket/runner/route.ts";
 import { RunnerGateway, type RunnerSocketData } from "./websocket/runner/runner-gateway.ts";
@@ -36,12 +43,23 @@ export type ServerOptions = {
    * format belongs to the auth library, not to this file.
    */
   verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
+  /**
+   * The command outbox. When supplied, a runner that reaches `ready` is drained
+   * immediately, so work queued while it was away goes out as part of the
+   * reconnect rather than on the next operator action (§14.3 step 4).
+   *
+   * Optional so a server can be built without persistence — the transport tests
+   * do exactly that — but the real entrypoint always passes one.
+   */
+  outbox?: CommandOutbox;
 };
 
 export type ServerHandle = {
   server: Server<RunnerSocketData | BrowserSocketData>;
   runnerGateway: RunnerGateway;
   browserGateway: BrowserGateway;
+  dispatcher: Dispatcher | undefined;
+  scheduler: Scheduler;
   stop(): void;
 };
 
@@ -49,9 +67,28 @@ const COOKIE_NAME = "cc_session";
 const ACCESS_TTL_SECONDS = 15 * 60;
 
 export function createServer(options: ServerOptions): ServerHandle {
+  // The gateway and the dispatcher call each other: the gateway reports
+  // readiness, the dispatcher sends through the gateway. One has to exist first,
+  // so the gateway takes a callback that reads the later binding. Keeping the
+  // cycle here rather than inside either class is what lets both be tested on
+  // their own.
+  let dispatcher: Dispatcher | undefined;
+
   const runnerGateway = new RunnerGateway({
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,
+    onReady: (runnerId) => dispatcher?.drain(runnerId),
+    onReceipt: (runnerId, receipt) => dispatcher?.handleReceipt(runnerId, receipt),
+  });
+
+  if (options.outbox) {
+    dispatcher = new Dispatcher({ outbox: options.outbox, gateway: runnerGateway });
+  }
+
+  // The scheduler is what the HTTP surface will call. Wiring the drain here
+  // means `dispatch()` is a complete operation: decide, persist, deliver.
+  const scheduler = new Scheduler(options.db, {
+    onDispatched: (runnerId) => dispatcher?.drain(runnerId),
   });
 
   const browserGateway = new BrowserGateway({
@@ -153,6 +190,8 @@ export function createServer(options: ServerOptions): ServerHandle {
     server,
     runnerGateway,
     browserGateway,
+    dispatcher,
+    scheduler,
     stop: () => server.stop(true),
   };
 }

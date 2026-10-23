@@ -121,4 +121,32 @@ describe("the real control server wiring", () => {
     // Revocation has to reach the verifier the gateway uses, not just the row.
     expect(verifyRunnerCredential(db, issued.credential)).toMatchObject({ ok: false });
   });
+
+  test("the real composition can dispatch: outbox and dispatcher are wired", async () => {
+    const { url } = await start();
+
+    // Without an outbox the server accepts a dispatch decision, writes the
+    // command durably, and never sends it. That failure is silent — every unit
+    // test of the scheduler passes — so the composition itself is asserted.
+    expect(handle!.dispatcher).toBeDefined();
+
+    // And the scheduler delivers through it, rather than only persisting.
+    const decision = await handle!.scheduler.dispatch(
+      {
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        workspaceId: "workspace-1",
+        prompt: "hello",
+      },
+      { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 0 },
+    );
+    expect(decision.ok).toBe(true);
+
+    // No runner is connected, so the command stays deliverable rather than
+    // being marked sent into a socket that does not exist.
+    expect(handle!.dispatcher!.drain("runner-a")).toEqual({ sent: 0, skipped: 1 });
+
+    void url;
+  });
 });

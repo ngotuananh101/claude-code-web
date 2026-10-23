@@ -58,6 +58,20 @@ export type RunnerInventoryItem = {
   commandReceiptId?: string;
 };
 
+export type CommandReceipt = {
+  commandId: string;
+  attemptId: string;
+  accepted: boolean;
+  reason?: string;
+};
+
+/**
+ * Handles one command. Returning the receipt is what the loop sends back, so an
+ * implementation that persists first and returns second cannot accidentally
+ * acknowledge before it has committed.
+ */
+export type CommandHandler = (command: unknown) => Promise<CommandReceipt>;
+
 export type ReconnectLoopOptions = {
   runnerId: string;
   dial: () => Promise<Link>;
@@ -65,6 +79,12 @@ export type ReconnectLoopOptions = {
   inventory: () => RunnerInventoryItem[];
   sleep: (ms: number) => Promise<void>;
   onEvent: (event: LoopEvent) => void;
+  /**
+   * Called for every `command` frame. Absent means commands are refused rather
+   * than dropped: a loop that silently ignores work looks healthy while nothing
+   * runs.
+   */
+  onCommand?: CommandHandler;
   maxAttempts?: number;
 };
 
@@ -193,8 +213,62 @@ export class ReconnectLoop {
         return;
       }
 
+      case "command": {
+        this.#handleCommand(record["command"]);
+        return;
+      }
+
       default:
         return;
+    }
+  }
+
+  /**
+   * Hand a command to the executor and answer with the receipt it returns.
+   *
+   * Deliberately not awaited by the message handler: a command that takes
+   * seconds to persist must not block the socket's message loop, which also
+   * carries the reconcile and close handling the connection depends on.
+   */
+  #handleCommand(command: unknown): void {
+    const handler = this.#options.onCommand;
+    if (!handler) return;
+
+    if (typeof command !== "object" || command === null) {
+      // A `command` frame with no body is malformed. Nothing can be answered
+      // because there is no id to answer about, and calling the executor with
+      // `undefined` would make it invent one.
+      this.#options.onEvent({ type: "error", reason: "malformed_command" });
+      return;
+    }
+
+    void (async () => {
+      let receipt: CommandReceipt;
+      try {
+        receipt = await handler(command);
+      } catch (error) {
+        // The executor threw, which means nothing was persisted. Report it as
+        // refused so the server retires the command instead of redelivering it
+        // into the same crash forever.
+        const id = (command as Record<string, unknown>)["commandId"];
+        receipt = {
+          commandId: typeof id === "string" ? id : "",
+          attemptId: "",
+          accepted: false,
+          reason: `handler_error: ${(error as Error).message}`,
+        };
+      }
+
+      this.#send({ type: "command.receipt", ...receipt });
+    })();
+  }
+
+  #send(payload: Record<string, unknown>): void {
+    try {
+      this.#link?.send(JSON.stringify(payload));
+    } catch {
+      // A failed send surfaces as a close; the command stays unacknowledged on
+      // the server and is redelivered, which the inbox dedupes.
     }
   }
 

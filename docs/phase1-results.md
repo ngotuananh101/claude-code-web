@@ -4,11 +4,11 @@
 - Scope: enrollment, credentials, identity, hello negotiation, connection
   generations, command inbox, event outbox with a contiguous ACK watermark,
   reconciliation, runner and browser WebSocket transport, owner authentication,
-  the central command outbox, the scheduler, and the runner reconnect loop.
-- Status: **all four Phase 1 surfaces exist and are tested, and the entrypoints
-  are wired to real implementations: owner login verifies argon2id hashes,
-  runner credentials are verified against the stored hashes, and `runner enroll`
-  redeems an enrollment token.**
+  the central command outbox, the scheduler, the runner reconnect loop, and
+  dispatch on the live transport.
+- Status: **all four Phase 1 surfaces exist and are tested, the entrypoints are
+  wired to real implementations, and a command dispatched by the scheduler now
+  reaches a runner over a live socket and is receipted back.**
 
 ## What exists
 
@@ -37,8 +37,12 @@
 | `control-server/enrollment-routes` | Owner-minted token, single use, `no-store`, one 401 for unknown/consumed/expired | unit |
 | `control-server/config` | The real composition: login, credential verification, revocation | unit |
 | `runner/enroll` | Token in the body, never argv or the URL; nothing saved unless accepted | unit |
+| `control-server/dispatcher` | Drain to a `ready` socket only; `sent` ≠ delivered; envelope rebuilt from the row | unit |
+| `control-server/dispatcher` (socket) | Queued command delivered on reconnect, receipted, never run twice | integration (real socket) |
+| `runner/command-handler` | Persist → receipt → execute; duplicate answered from the inbox | unit |
+| `runner/reconnect-loop` (commands) | `command` → handler → `command.receipt`, never acknowledged before the commit | unit |
 
-207 unit tests across 24 files, 4 integration probes.
+239 unit tests across 27 files, 5 integration probes.
 
 ## Integration evidence
 
@@ -139,6 +143,46 @@ server refuses still **starts**: it logs `disconnected` and retries with backoff
 Startup is not hostage to the control server. What it must never do is claim to
 be `ready`, and it does not.
 
+### Dispatch over a live socket (§9.2, §9.3)
+
+```sh
+bun run scripts/integration/dispatch-e2e.ts
+bun run scripts/integration/dispatch-e2e.ts --docker
+```
+
+Every other dispatch test runs both halves in one process. This one crosses a
+real process boundary with a real on-disk SQLite database on each side — the
+server's outbox on one, the runner's inbox on the other — and drives the real
+`Scheduler`, the real `Dispatcher` and the real `startDaemon()`:
+
+```
+PASS  the runner reaches ready before anything is dispatched: state=ready
+PASS  the scheduler accepts the dispatch against a ready runner: commandId=cmd_…
+PASS  the command arrives at the runner: accepted=1
+PASS  the envelope survived both serializations: {"kind":"run.start","sessionId":"session-1","runId":"run-1"}
+PASS  the server records the receipt, so delivery is proven and not assumed: deliveryState=accepted
+PASS  a redelivered command id is answered from the inbox, not executed twice: accepted=1 (unchanged)
+PASS  the duplicate's receipt retires the command again: deliveryState=accepted
+PASS  the server sees the runner go away: state=offline
+PASS  the restarted runner is promoted again: promotions=2
+PASS  the restarted runner does not execute the command a second time: accepted=0
+```
+
+10/10 in both modes. Three of these are the point:
+
+- **Delivery is proven, not assumed.** The check reads the outbox's
+  `delivery_state` after the fact. A socket write would have left it `sent`; only
+  the runner's receipt moves it to `accepted`.
+- **A redelivery does not execute twice.** The harness forces the command back to
+  `pending`, which is exactly what a lost ACK looks like, and the runner answers
+  from the inbox.
+- **The inbox is on disk.** The restarted process — a new OS process, and in
+  Docker a new container — recognises the command it already handled.
+
+What this does not prove: that the command is **executed**. Execution is not
+built yet (§10); the chain stops at the inbox, which is exactly the boundary the
+receipt describes.
+
 ## Bugs found while building this
 
 1. **`ackUpTo` could report a lower watermark than reality.** A late or duplicate
@@ -202,6 +246,24 @@ be `ready`, and it does not.
     a runner alive across a supposed kill. Each runner is now its own container,
     killed with `docker kill -s KILL`.
 
+12. **An expired command was filtered out of the drain but never retired.** It
+    stayed `pending` for the life of the database: never sent, never resolved, and
+    invisible in any outbox-age metric except as work that never moved. `drain()`
+    now retires what can no longer be delivered before choosing what to send.
+
+13. **Dispatch only delivered on reconnect.** The scheduler wrote the command
+    durably and returned; nothing pushed it, so a run submitted to a healthy,
+    ready runner sat in the outbox until that runner happened to reconnect. Found
+    by the socket-level end-to-end test, which is the only test that exercises
+    "the runner is already up when the command is created". Delivery is now part
+    of `dispatch()`: decide, persist, deliver.
+
+14. **The Docker dispatch probe tried to `mkdir` a container path on the host.**
+    The runner's database path was written as the container sees it (`/data/…`)
+    and reused for the host-side `mkdir`, which failed with EACCES. Host and
+    container paths are now separate constants, named for which side they belong
+    to.
+
 ## Design decisions worth remembering
 
 - **Generations are per runner and monotonic.** A message claiming a *future*
@@ -233,6 +295,18 @@ be `ready`, and it does not.
   browser would attach for it.
 - **One 401 for both "no such user" and "wrong password."** Distinguishing them
   turns the login endpoint into a username oracle.
+- **`sent` is not `accepted`, and the outbox only advances on a receipt.** A
+  socket write can be lost after it returns, so the command stays deliverable
+  under the same id. The runner's inbox is what makes the redelivery harmless.
+- **Dispatch is part of `dispatch()`.** The scheduler decides, persists and
+  delivers in one call. Splitting delivery into a second call the caller must
+  remember is how a command sits in the outbox while every unit test passes.
+- **A receipt is answered only after the inbox commits.** Sending it first would
+  promise durability for a command a crash can still erase, and the server would
+  stop redelivering work nobody has.
+- **The dispatcher refuses anything but `ready`.** Not `connected`: a runner that
+  has negotiated but not reconciled may hold state the server does not know
+  about, and work sent there can land on state neither side can vouch for.
 
 ## Design decisions worth remembering (transport)
 
@@ -278,8 +352,12 @@ runner, and that is exactly how they survived a phase:
 ## Not yet built
 
 - Approval round-trip and `canUseTool` wiring.
-- Dispatch on the live transport: the scheduler and the outbox are built and
-  tested, but nothing yet pushes a queued command down a runner socket.
+- **Execution.** A command now reaches the runner and is durably in its inbox,
+  but nothing runs the SDK for it: `handleCommand` returns `execute: true` and
+  the daemon only logs the acceptance. §10's lifecycle (start → stream → finish)
+  is the next phase.
+- Event ingestion on the server: the runner's event outbox and ACK watermark
+  exist and are tested, but nothing sends those events up the socket yet.
 - The browser UI. `/ws/browser` exists and authenticates; nothing renders it.
 
 None of these are blocked; the primitives above are what they will call.

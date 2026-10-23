@@ -51,13 +51,18 @@ export type DispatchDecision =
 
 type ActiveRow = { run_id: string; session_id: string; runner_id: string };
 
+/** Told after a successful dispatch, so delivery happens as part of the call. */
+export type DispatchListener = (runnerId: string, commandId: string) => void;
+
 export class Scheduler {
   readonly #db: Database;
   readonly #outbox: CommandOutbox;
+  readonly #onDispatched: DispatchListener | undefined;
 
-  constructor(db: Database) {
+  constructor(db: Database, options: { onDispatched?: DispatchListener } = {}) {
     this.#db = db;
     this.#outbox = new CommandOutbox(db);
+    this.#onDispatched = options.onDispatched;
   }
 
   async dispatch(request: DispatchRequest, capacity: RunnerCapacity): Promise<DispatchDecision> {
@@ -87,14 +92,18 @@ export class Scheduler {
     const commandId = `cmd_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
 
-    // The outbox computes the fingerprint, so it is the only writer of that
-    // column. Doing it here instead would duplicate the canonicalisation and
-    // let the two disagree.
+    // Enqueue carries the envelope fields, not just the payload: the dispatcher
+    // rebuilds the frame from the stored row alone, and a missing `sessionId`
+    // would leave the runner unable to attribute the work.
     await this.#outbox.enqueue({
       commandId,
       runnerId: capacity.runnerId,
       kind: "run.start",
       issuedAt,
+      sessionId: request.sessionId,
+      runId: request.runId,
+      attemptId: request.attemptId,
+      workspaceId: request.workspaceId,
       payload: {
         sessionId: request.sessionId,
         runId: request.runId,
@@ -120,6 +129,11 @@ export class Scheduler {
       }
       throw error;
     }
+
+    // Delivery is part of dispatch. A caller that has to remember a second call
+    // is a caller that will eventually forget it, and the run then sits in the
+    // outbox until the runner happens to reconnect.
+    this.#onDispatched?.(capacity.runnerId, commandId);
 
     return { ok: true, runnerId: capacity.runnerId, commandId };
   }

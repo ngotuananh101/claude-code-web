@@ -153,6 +153,34 @@ describe("command outbox", () => {
     expect(o.pendingFor("runner-a", { now: new Date("2026-10-23T01:00:00.000Z") })).toEqual([]);
   });
 
+  test("an expired command is retired, not left pending forever", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, expiresAt: "2026-10-23T00:00:00.000Z" });
+
+    const retired = o.retireExpired("runner-a", new Date("2026-10-23T01:00:00.000Z"));
+
+    // Filtering it out of the drain is not enough: the row would stay `pending`
+    // for the life of the database, and an operator watching outbox age would
+    // see work that is never going to move.
+    expect(retired).toEqual(["cmd-1"]);
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "rejected",
+      rejectionReason: "expired",
+    });
+  });
+
+  test("retiring expired commands leaves the ones that are still valid", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, expiresAt: "2026-10-23T00:00:00.000Z" });
+    await o.enqueue({ ...command, commandId: "cmd-2", expiresAt: "2026-10-24T00:00:00.000Z" });
+    await o.enqueue({ ...command, commandId: "cmd-3" });
+
+    const retired = o.retireExpired("runner-a", new Date("2026-10-23T01:00:00.000Z"));
+
+    expect(retired).toEqual(["cmd-1"]);
+    expect(o.pendingFor("runner-a", { now: new Date("2026-10-23T01:00:00.000Z") })).toHaveLength(2);
+  });
+
   test("pending commands are scoped to one runner", async () => {
     const { outbox: o } = outbox();
     await o.enqueue(command);
@@ -161,5 +189,61 @@ describe("command outbox", () => {
     // §19.2: a runner must never be handed another runner's command.
     expect(o.pendingFor("runner-a").map((c) => c.commandId)).toEqual(["cmd-1"]);
     expect(o.pendingFor("runner-b").map((c) => c.commandId)).toEqual(["cmd-2"]);
+  });
+
+  test("the envelope fields survive the round trip, so a drain can rebuild the frame", async () => {
+    const { outbox: o } = outbox();
+
+    await o.enqueue({
+      ...command,
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+    });
+
+    // §9.1 puts these at the top level of the envelope, not inside the payload.
+    // The dispatcher rebuilds the frame from this row alone; if a field is lost
+    // here it has to guess, and the runner would receive a command it cannot
+    // attribute to a session.
+    expect(o.get("cmd-1")).toMatchObject({
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+    });
+  });
+
+  test("the stored fingerprint does not change when only envelope fields are re-sent", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, sessionId: "session-1", runId: "run-1" });
+
+    // Same command id, same meaning: a retry by the caller. Session and run are
+    // routing metadata, and including them would make an identical retry look
+    // like a different command.
+    await expect(
+      o.enqueue({ ...command, sessionId: "session-1", runId: "run-1" }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("a receipt for the attempt the command was issued for is recorded", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, attemptId: "attempt-1" });
+
+    o.markAccepted("cmd-1", "attempt-1");
+
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "accepted", attemptId: "attempt-1" });
+  });
+
+  test("a receipt naming a different attempt does not overwrite the issued one", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, attemptId: "attempt-1" });
+
+    // The runner claiming a receipt for an attempt the server never issued is
+    // evidence of a conflict, not a correction to apply. Overwriting here would
+    // rewrite which attempt the command belonged to, after the fact.
+    o.markAccepted("cmd-1", "attempt-other");
+
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "accepted", attemptId: "attempt-1" });
   });
 });

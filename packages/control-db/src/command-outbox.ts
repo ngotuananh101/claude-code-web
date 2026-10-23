@@ -42,6 +42,7 @@ export type EnqueueInput = {
   runId?: string;
   attemptId?: string;
   sessionId?: string;
+  workspaceId?: string;
 };
 
 export type DeliveryState = "pending" | "sent" | "accepted" | "rejected";
@@ -56,6 +57,9 @@ export type OutboxCommand = {
   deliveryState: DeliveryState;
   attemptCount: number;
   attemptId: string | undefined;
+  sessionId: string | undefined;
+  runId: string | undefined;
+  workspaceId: string | undefined;
   rejectionReason: string | undefined;
 };
 
@@ -67,9 +71,12 @@ type Row = {
   fingerprint: string;
   issued_at: string;
   expires_at: string | null;
+  session_id: string | null;
+  run_id: string | null;
+  attempt_id: string | null;
+  workspace_id: string | null;
   delivery_state: string;
   attempt_count: number;
-  attempt_id: string | null;
   rejection_reason: string | null;
 };
 
@@ -99,8 +106,9 @@ export class CommandOutbox {
       .query(
         `INSERT INTO command_outbox
            (command_id, runner_id, kind, payload, fingerprint, issued_at, expires_at,
+            session_id, run_id, attempt_id, workspace_id,
             delivery_state, attempt_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
       )
       .run(
         input.commandId,
@@ -110,6 +118,10 @@ export class CommandOutbox {
         fp,
         input.issuedAt,
         input.expiresAt ?? null,
+        input.sessionId ?? null,
+        input.runId ?? null,
+        input.attemptId ?? null,
+        input.workspaceId ?? null,
         Date.now(),
       );
   }
@@ -134,6 +146,31 @@ export class CommandOutbox {
     return rows.map(toCommand);
   }
 
+  /**
+   * Retire commands that expired before they could be delivered, and report
+   * which ones.
+   *
+   * `pendingFor` already filters them out, which keeps them from being sent —
+   * but it would leave them `pending` for the life of the database. An operator
+   * watching outbox age would see work that is never going to move, and nothing
+   * would ever tell them why.
+   */
+  retireExpired(runnerId: string, now: Date = new Date()): string[] {
+    const rows = this.#db
+      .query(
+        `SELECT command_id FROM command_outbox
+          WHERE runner_id = ?
+            AND delivery_state NOT IN ('accepted', 'rejected')
+            AND expires_at IS NOT NULL
+            AND expires_at <= ?`,
+      )
+      .all(runnerId, now.toISOString()) as Array<{ command_id: string }>;
+
+    const ids = rows.map((row) => row.command_id);
+    for (const id of ids) this.markRejected(id, "expired");
+    return ids;
+  }
+
   markSent(commandId: string): void {
     const row = this.#require(commandId);
     if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
@@ -154,13 +191,19 @@ export class CommandOutbox {
     // told, so the terminal state wins.
     if (row.delivery_state === "rejected") return;
 
+    // `attempt_id` is the attempt the command was *issued for*. A receipt naming
+    // a different one is a conflict to report, not a correction to apply: taking
+    // it would rewrite which attempt this command belonged to after the fact.
+    // Only when the issue-time attempt was unknown does the receipt fill it in.
+    const attempt = row.attempt_id ?? attemptId;
+
     this.#db
       .query(
         `UPDATE command_outbox
             SET delivery_state = 'accepted', attempt_id = ?, accepted_at = ?
           WHERE command_id = ?`,
       )
-      .run(attemptId, Date.now(), commandId);
+      .run(attempt, Date.now(), commandId);
   }
 
   markRejected(commandId: string, reason: string): void {
@@ -222,6 +265,9 @@ function toCommand(row: Row): OutboxCommand {
     deliveryState: row.delivery_state as DeliveryState,
     attemptCount: row.attempt_count,
     attemptId: row.attempt_id ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    runId: row.run_id ?? undefined,
+    workspaceId: row.workspace_id ?? undefined,
     rejectionReason: row.rejection_reason ?? undefined,
   };
 }

@@ -95,6 +95,10 @@ export function migrate(db: Database): void {
 
   // Central command outbox (§18.1, §9.3). A command is written here before it is
   // sent, so a crash between "decided" and "delivered" loses nothing.
+  //
+  // The envelope fields live in their own columns rather than inside `payload`:
+  // §9.1 puts them at the top level of the frame, and the dispatcher has to
+  // rebuild that frame from this row alone after a restart.
   db.exec(`
     CREATE TABLE IF NOT EXISTS command_outbox (
       command_id       TEXT PRIMARY KEY,
@@ -106,9 +110,12 @@ export function migrate(db: Database): void {
       fingerprint      TEXT NOT NULL,
       issued_at        TEXT NOT NULL,
       expires_at       TEXT,
+      session_id       TEXT,
+      run_id           TEXT,
+      attempt_id       TEXT,
+      workspace_id     TEXT,
       delivery_state   TEXT NOT NULL,
       attempt_count    INTEGER NOT NULL DEFAULT 0,
-      attempt_id       TEXT,
       rejection_reason TEXT,
       created_at       INTEGER NOT NULL,
       last_sent_at     INTEGER,
@@ -116,6 +123,13 @@ export function migrate(db: Database): void {
       rejected_at      INTEGER
     );
   `);
+
+  // Columns added after the table first shipped. `CREATE TABLE IF NOT EXISTS`
+  // is a no-op on an existing database, so a new column needs its own step.
+  addColumnIfMissing(db, "command_outbox", "session_id", "TEXT");
+  addColumnIfMissing(db, "command_outbox", "run_id", "TEXT");
+  addColumnIfMissing(db, "command_outbox", "attempt_id", "TEXT");
+  addColumnIfMissing(db, "command_outbox", "workspace_id", "TEXT");
 
   // The drain query is "undelivered commands for one runner", so index exactly
   // that rather than scanning the table per reconnect.
@@ -148,4 +162,17 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS active_runs_runner
       ON active_runs (runner_id);
   `);
+}
+
+/**
+ * Add a column to an existing table, once.
+ *
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, and `PRAGMA table_info` is the only
+ * portable way to ask. Without this, a database created before the column
+ * existed would keep working right up until the first query that names it.
+ */
+function addColumnIfMissing(db: Database, table: string, column: string, type: string): void {
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }

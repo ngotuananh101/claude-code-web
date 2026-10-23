@@ -20,6 +20,7 @@
 import {
   ConnectionRegistry,
   negotiateHello,
+  type RunnerCommand,
   type RunnerRunState,
   RunRegistry,
   reconcile,
@@ -44,7 +45,22 @@ export type RefusalReason = "not_negotiated" | "already_negotiated" | "unknown_m
 
 export type HandleResult =
   | { ok: true }
-  | { ok: false; reason: "unauthorized" | "malformed" | "stale_generation" | RefusalReason };
+  | {
+      ok: false;
+      reason: "unauthorized" | "malformed" | "stale_generation" | "unknown_command" | RefusalReason;
+    };
+
+export type SendCommandResult =
+  | { ok: true }
+  | { ok: false; reason: "offline" | "not_ready" | "revoked" };
+
+/** A runner's answer to a command (§9.4). Only the inbox has been reached yet. */
+export type CommandReceipt = {
+  commandId: string;
+  attemptId: string;
+  accepted: boolean;
+  reason?: string;
+};
 
 type Connection = {
   connectionId: string;
@@ -71,6 +87,18 @@ type GatewayOptions = {
    * cannot talk the server into a different inventory than the one it holds.
    */
   runs?: RunRegistry;
+  /**
+   * Called after a successful reconciliation promotes the runner, and only
+   * then: §14.3 step 6 says ready first, dispatch second. The hook exists so the
+   * drain lives in the dispatcher rather than in the gateway's message loop.
+   */
+  onReady?: (runnerId: string) => void;
+  /**
+   * Called for every receipt a runner sends. Injected rather than handled here
+   * because delivery state belongs to the outbox, and this class deliberately
+   * knows nothing about a database.
+   */
+  onReceipt?: (runnerId: string, receipt: CommandReceipt) => void;
 };
 
 /** What a successful authorization hands to the socket that carries it. */
@@ -92,6 +120,8 @@ export class RunnerGateway {
   readonly #verifyCredential: (credential: string) => CredentialCheck;
   readonly #connections: ConnectionRegistry;
   readonly #runs: RunRegistry;
+  readonly #onReady: ((runnerId: string) => void) | undefined;
+  readonly #onReceipt: ((runnerId: string, receipt: CommandReceipt) => void) | undefined;
   readonly #live = new Map<string, Connection>();
 
   constructor(options: GatewayOptions) {
@@ -99,6 +129,8 @@ export class RunnerGateway {
     this.#verifyCredential = options.verifyCredential;
     this.#connections = options.connections ?? new ConnectionRegistry();
     this.#runs = options.runs ?? new RunRegistry();
+    this.#onReady = options.onReady;
+    this.#onReceipt = options.onReceipt;
   }
 
   /**
@@ -235,6 +267,9 @@ export class RunnerGateway {
       case "reconcile":
         return this.#handleReconcile(connection, record);
 
+      case "command.receipt":
+        return this.#handleReceipt(connection, record);
+
       default:
         // Unknown message types are refused rather than ignored: silently
         // dropping one is how a command goes unexecuted while looking delivered.
@@ -291,6 +326,40 @@ export class RunnerGateway {
    */
   generationOf(runnerId: string): number | undefined {
     return this.#connections.current(runnerId)?.generation;
+  }
+
+  /**
+   * Hand a command to a runner's current socket (§9.2).
+   *
+   * Refuses anything that is not `ready`. The distinction matters: a `connected`
+   * runner has negotiated but not reconciled, so its view of what is running may
+   * differ from the server's, and work sent there can land on state neither side
+   * can vouch for (§6.2).
+   *
+   * A successful return means the bytes were handed to the socket. It is not a
+   * receipt: the write can still be lost, which is why the caller keeps the
+   * command deliverable.
+   */
+  sendCommand(runnerId: string, command: RunnerCommand): SendCommandResult {
+    if (this.#connections.isRevoked(runnerId)) return { ok: false, reason: "revoked" };
+
+    const connection = this.#live.get(runnerId);
+    if (!connection) return { ok: false, reason: "offline" };
+    if (connection.state !== "ready") return { ok: false, reason: "not_ready" };
+
+    // The frame carries the envelope under `command`, matching the message shape
+    // the runner's loop already switches on.
+    const payload = JSON.stringify({ type: "command", command });
+    try {
+      connection.socket.send(payload);
+    } catch {
+      // The socket died between the state check and the write. Report it as
+      // offline so the caller leaves the command pending rather than marking a
+      // send that never happened.
+      return { ok: false, reason: "offline" };
+    }
+
+    return { ok: true };
   }
 
   #handleHello(connection: Connection, hello: unknown): HandleResult {
@@ -356,6 +425,56 @@ export class RunnerGateway {
     // Only the promotion is sent back. Actions are server-side; echoing them
     // would invite the runner to act on decisions it did not make.
     this.#send(connection, { type: "reconcile.ok", ready: true });
+
+    // §14.3 step 6: ready first, dispatch second. The hook runs after the
+    // promotion message, so a command can never overtake the promotion on the
+    // wire — the runner would otherwise receive work before it is dispatchable.
+    this.#onReady?.(runnerId);
+
+    return { ok: true };
+  }
+
+  /**
+   * A runner's answer to a command (§9.4).
+   *
+   * `accepted` only proves the inbox persisted it; execution is a later event.
+   * The delivery state still has to move, or the outbox would offer the same
+   * command forever and the runner would keep returning the same receipt.
+   */
+  #handleReceipt(connection: Connection, message: Record<string, unknown>): HandleResult {
+    const commandId = message["commandId"];
+    const attemptId = message["attemptId"];
+    const accepted = message["accepted"];
+
+    if (
+      typeof commandId !== "string" ||
+      commandId === "" ||
+      typeof attemptId !== "string" ||
+      attemptId === "" ||
+      typeof accepted !== "boolean"
+    ) {
+      this.#send(connection, { type: "error", reason: "malformed" });
+      return { ok: false, reason: "malformed" };
+    }
+
+    const reason = typeof message["reason"] === "string" ? message["reason"] : undefined;
+
+    if (this.#onReceipt) {
+      // An unknown command id is a protocol error rather than something to
+      // record: accepting it would create delivery state for a command nothing
+      // enqueued. The handler decides, because it owns the outbox.
+      try {
+        this.#onReceipt(connection.socket.data.runnerId, {
+          commandId,
+          attemptId,
+          accepted,
+          ...(reason === undefined ? {} : { reason }),
+        });
+      } catch {
+        this.#send(connection, { type: "error", reason: "unknown_command" });
+        return { ok: false, reason: "unknown_command" };
+      }
+    }
 
     return { ok: true };
   }

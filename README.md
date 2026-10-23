@@ -53,7 +53,7 @@ bun run typecheck
 bun run lint          # biome: format + lint + import order, read-only
 bun run lint:fix      # same, rewriting the tree
 bun test
-bun run test:integration   # cross-process enrollment race (needs no Docker)
+bun run test:integration   # five cross-process probes (needs no Docker)
 ```
 
 Docker harness for multi-Runner testing: [`infra/docker/README.md`](infra/docker/README.md).
@@ -68,10 +68,10 @@ variants already exercise the same guarantees. Run them by hand with
 Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-results.md)
 for what was proven and what still is not.
 
-Phase 1 primitives, transport, auth, outbox, scheduler and the runner daemon are
-implemented and tested, and the entrypoints are wired to real password and
-credential verification — see [`docs/phase1-results.md`](docs/phase1-results.md)
-for what is proven and what is still missing.
+Phase 1 primitives, transport, auth, outbox, scheduler, the runner daemon and
+dispatch over a live socket are implemented and tested — see
+[`docs/phase1-results.md`](docs/phase1-results.md) for what is proven and what is
+still missing. Execution of a delivered command is the next phase.
 
 ## Decisions
 
