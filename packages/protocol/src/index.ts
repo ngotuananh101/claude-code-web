@@ -91,3 +91,18 @@ export type RunEventOffset = {
   attemptId: string;
   lastAcknowledgedSequence: number;
 };
+
+export {
+  negotiateHello,
+  type ServerPolicy,
+  type NegotiateResult,
+  type Negotiation,
+  type NegotiatedPolicy,
+} from "./handshake.ts";
+
+export {
+  ConnectionRegistry,
+  type OpenParams,
+  type OpenResult,
+  type TrafficCheck,
+} from "./connection-registry.ts";

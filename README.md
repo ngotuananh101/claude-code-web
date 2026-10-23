@@ -59,6 +59,9 @@ Docker harness for multi-Runner testing: [`infra/docker/README.md`](infra/docker
 Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-results.md)
 for what was proven and what still is not.
 
+Phase 1 protocol primitives are implemented and tested but not yet wired to a
+transport — see [`docs/phase1-results.md`](docs/phase1-results.md).
+
 ## Decisions
 
 Architecture decisions that needed more than a table row live in
