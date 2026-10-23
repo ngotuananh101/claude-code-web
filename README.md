@@ -35,13 +35,28 @@ no inbound port is required on a Runner host.
 
 ## Toolchain
 
-Pinned in Phase 0 — no version is asserted before it is verified on the target OS
-(§4.1, §22.1). Bun is required to run anything in this repo.
+First target: **Fedora Linux / x86_64** — chosen to settle supervisor semantics
+before portability work. Versions are not hand-pinned; the committed `bun.lock`
+is the source of truth. See [ADR-0002](docs/adr/0002-toolchain.md).
+
+| Component | Verified version |
+| --- | --- |
+| Bun | 1.4.3 |
+| Node (tooling only) | v24.21.0 |
+| Git | 2.56.0 |
 
 ```sh
 bun install
-bun run doctor        # runtime/config compatibility probe
+bun run doctor        # static runtime/config probe; never calls a model
 ```
+
+## Decisions
+
+Architecture decisions that needed more than a table row live in
+[`docs/adr/`](docs/adr/):
+
+- [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens + `tokenVersion` revocation
+- [ADR-0002](docs/adr/0002-toolchain.md) — Fedora target, lockfile-over-pins policy
 
 ## Invariants worth remembering
 

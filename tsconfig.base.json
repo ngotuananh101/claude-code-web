@@ -6,6 +6,9 @@
     "moduleResolution": "bundler",
     "moduleDetection": "force",
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -14,10 +17,12 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "composite": true,
-    "incremental": true
+    "paths": {
+      "@cc-web/protocol": ["./packages/protocol/src/index.ts"],
+      "@cc-web/shared": ["./packages/shared/src/index.ts"],
+      "@cc-web/agent-adapter": ["./packages/agent-adapter/src/index.ts"],
+      "@cc-web/control-db": ["./packages/control-db/src/index.ts"],
+      "@cc-web/runner-db": ["./packages/runner-db/src/index.ts"]
+    }
   }
 }
