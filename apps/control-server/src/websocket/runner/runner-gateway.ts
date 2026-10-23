@@ -159,9 +159,8 @@ export class RunnerGateway {
   attach(socket: RunnerSocket, grant: Grant): void {
     Object.assign(socket.data, grant);
 
-    // Supersede the previous socket. It is not closed here: closing on open would
-    // race with a reconnect that is itself failing, and the generation check
-    // already makes it harmless. It is closed on its next message instead.
+    const previous = this.#live.get(grant.runnerId);
+
     this.#live.set(grant.runnerId, {
       connectionId: grant.connectionId,
       generation: grant.generation,
@@ -169,6 +168,14 @@ export class RunnerGateway {
       negotiated: false,
       state: "connected",
     });
+
+    // Close the socket this one replaced, rather than waiting for it to speak.
+    // A stale runner that never sends another message would otherwise stay
+    // connected and believe it is ready, while the server has already given its
+    // identity to someone else (§6.3). Close code 4000 tells it not to retry.
+    if (previous && previous.connectionId !== grant.connectionId) {
+      this.#reject(previous.socket, "stale_generation", CLOSE_SUPERSEDED);
+    }
   }
 
   handleMessage(socket: RunnerSocket, raw: string | Uint8Array): HandleResult {

@@ -1,10 +1,13 @@
-# Phase 1 — protocol primitives
+# Phase 1 — protocol primitives and transport
 
 - Date: 2026-10-23
 - Scope: enrollment, credentials, identity, hello negotiation, connection
   generations, command inbox, event outbox with a contiguous ACK watermark,
-  reconciliation, and the runner WebSocket transport.
-- Status: **runner transport wired and tested; browser transport not started.**
+  reconciliation, runner and browser WebSocket transport, owner authentication,
+  the central command outbox, the scheduler, and the runner reconnect loop.
+- Status: **all four Phase 1 surfaces exist and are tested. Two integration
+  seams are still stubbed: runner-credential verification and password
+  verification (see "Known stubs").**
 
 ## What exists
 
@@ -20,8 +23,17 @@
 | `protocol/run-registry` | Desired ≠ observed; terminal is idempotent; non-current attempts ignored | unit |
 | `control-server/runner-gateway` | Authenticate → fence by generation → `connected` → reconcile → `ready` | unit |
 | `control-server/route` | `/ws/runner` upgrade; unauthorized clients get HTTP 401, not a socket | integration (real socket) |
+| `control-server/tokens` | HS256 pinned; `alg:none` refused; secret under 32 bytes refused at construction | unit |
+| `control-server/auth-service` | Per-user `tokenVersion` revocation, read on every call | unit |
+| `control-server/browser-gateway` | Origin allowlist first, then cookie; missing Origin is refused | unit |
+| `control-server/server` | `/healthz`, `/auth/login`, both WS routes on one instance | unit + integration |
+| `control-db/command-outbox` | Immutable fingerprint; identical re-enqueue is a no-op; terminal states are sticky | unit |
+| `control-db/scheduler` | Offline → not-ready → capacity → duplicate → session-busy, in that order | unit |
+| `runner/reconnect-loop` | hello → reconcile → ready; capped exponential backoff; 4000/4001 do not retry | unit |
+| `runner/websocket-link` | Credential in the `Authorization` header, never the URL | unit |
+| `runner/daemon` | Identity → loop, started without blocking on the network | integration |
 
-110 unit tests, 3 integration probes.
+182 unit tests across 20 files, 4 integration probes.
 
 ## Integration evidence
 
@@ -92,6 +104,36 @@ fencing of a socket that is still open is covered instead by `route.test.ts`,
 which keeps the superseded socket alive and sends on it, asserting it receives
 `stale_generation` and close code 4000.
 
+### The real daemon against the real server (§6.2, §22.2)
+
+```sh
+bun run scripts/integration/daemon-e2e.ts
+bun run scripts/integration/daemon-e2e.ts --docker
+```
+
+The reconnect-fence probe above drives a hand-written client. This one runs the
+actual `startDaemon()` entrypoint, reading a real `identity.json` at mode `0600`,
+against a real control server:
+
+```
+PASS  the runner daemon reaches ready over a real socket: promotions=1
+PASS  the ready state is recorded on the server: state=ready
+PASS  the server sees the connection go away: state=offline
+PASS  the restarted runner reaches ready again: promotions=2
+PASS  the reconnect holds a higher generation: first=1 second=2
+PASS  a runner with a bad credential never promotes: promotions=2 (unchanged)
+PASS  a refused credential is never reported as ready: no ready event
+```
+
+7/7 in both modes, with no containers left behind. Docker mode runs one container
+per runner process, so a restart is a fresh container — the same shape as a real
+deployment.
+
+The last two checks are the interesting ones. A runner holding a credential the
+server refuses still **starts**: it logs `disconnected` and retries with backoff.
+Startup is not hostage to the control server. What it must never do is claim to
+be `ready`, and it does not.
+
 ## Bugs found while building this
 
 1. **`ackUpTo` could report a lower watermark than reality.** A late or duplicate
@@ -137,6 +179,24 @@ which keeps the superseded socket alive and sends on it, asserting it receives
    they happen, and the harness asserts on the count rather than on a live
    reading.
 
+9. **A superseded runner socket was never closed.** The server only fenced on
+   the next message, so a stale runner that never spoke again stayed connected
+   and believed it was ready, while the server had already given its identity to
+   a newer connection. `attach()` now closes the previous socket immediately with
+   code 4000. Found by the end-to-end test, not by inspection.
+
+10. **`ReconnectLoop.start()` awaited the entire retry chain.** A runner whose
+    first dial failed — a refused credential, a server that is not up yet — never
+    returned from `start()`, so the daemon never reached the line that reports it
+    started, and could never explain why it was not connected. Startup now awaits
+    only the first attempt; the retries belong to the loop and are observed
+    through `settle()`. Found by the daemon probe, which is why that probe exists.
+
+11. **`pkill` and `pgrep` do not exist in the runner image.** The Docker branch
+    of the daemon probe used `docker exec … pkill`, which failed silently and left
+    a runner alive across a supposed kill. Each runner is now its own container,
+    killed with `docker kill -s KILL`.
+
 ## Design decisions worth remembering
 
 - **Generations are per runner and monotonic.** A message claiming a *future*
@@ -151,18 +211,23 @@ which keeps the superseded socket alive and sends on it, asserting it receives
 - **Capacity clamps downward only.** A runner advertising more than server policy
   is capped; advertising less is honoured. Over-committing the server is the
   failure that matters.
-
-## Not yet built
-
-- `/ws/browser`: the owner-facing transport, and the JWT auth middleware in front
-  of it (ADR-0001).
-- The Runner's reconnect loop with backoff. The server side is ready for it —
-  generations and reconciliation are both exercised above — but nothing on the
-  Runner dials out yet.
-- Scheduler and central command outbox on the control side.
-- Approval round-trip and `canUseTool` wiring.
-
-None of these are blocked; the primitives above are what they will call.
+- **`connected` is not `ready`.** Only a completed reconciliation promotes. A
+  runner that has negotiated but not reconciled is not dispatchable.
+- **Reconciliation never creates an attempt.** It resolves what already exists;
+  the scheduler is the only thing that starts work.
+- **The outbox fingerprint is computed, not supplied.** A caller cannot declare
+  two different commands "the same" by reusing an id, and an identical re-enqueue
+  is a no-op rather than a duplicate execution.
+- **Terminal outbox states are sticky.** `accepted` and `rejected` are not
+  overwritten by a late `sent`, which is what an out-of-order ACK would do.
+- **Revocation is read, never cached.** `AuthService` reads `token_version` on
+  every call. A cache would keep a revoked session alive for its TTL.
+- **Origin is checked before the cookie, and a missing Origin is a refusal.** A
+  non-browser client can set any Origin it likes, so the check is not a security
+  boundary on its own; it exists to stop a hostile page from driving a session the
+  browser would attach for it.
+- **One 401 for both "no such user" and "wrong password."** Distinguishing them
+  turns the login endpoint into a username oracle.
 
 ## Design decisions worth remembering (transport)
 
@@ -179,3 +244,33 @@ None of these are blocked; the primitives above are what they will call.
   truth.
 - **`unknown` is not `failed`.** A vanished process yields `interrupted`, which
   is an absence of knowledge, not a known error (§9.7).
+- **Close 4000 and 4001 are terminal for the loop.** Superseded means another
+  connection owns this identity; revoked means the credential is dead. Retrying
+  either fights the server instead of recovering from it.
+- **Backoff is capped and resets on success.** Uncapped, a long outage pushes the
+  next attempt past any useful interval; never resetting punishes a healthy runner
+  for an old outage.
+
+## Known stubs
+
+These are wired but not real. Each is a seam with an obvious next step, not a
+design gap:
+
+- **Runner-credential verification** is injected into `createServer`, and
+  `apps/control-server/src/index.ts` supplies `() => ({ ok: false, reason:
+  "unknown" })`. Hashed credentials already exist in `control-db/runner-credentials`;
+  this needs the lookup and hash comparison.
+- **Password verification** is injected as `verifyPassword` and defaults to
+  `async () => false`. Login therefore always fails in the real entrypoint until a
+  hash library is wired.
+- **`runner enroll`** is a placeholder that exits non-zero. Enrollment itself
+  works and is tested; the CLI subcommand that calls it is missing.
+
+## Not yet built
+
+- Approval round-trip and `canUseTool` wiring.
+- Dispatch on the live transport: the scheduler and the outbox are built and
+  tested, but nothing yet pushes a queued command down a runner socket.
+- The browser UI. `/ws/browser` exists and authenticates; nothing renders it.
+
+None of these are blocked; the primitives above are what they will call.

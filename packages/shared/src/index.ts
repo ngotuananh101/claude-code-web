@@ -14,3 +14,21 @@ export function canonicalize(value: unknown): string {
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v)}`).join(",")}}`;
 }
+
+/**
+ * SHA-256 of the canonical form of a value (§9.1, §9.3).
+ *
+ * Two calls that mean the same thing must fingerprint the same, which is why
+ * this hashes the canonical form rather than `JSON.stringify` — key order and
+ * `undefined` would otherwise change the digest and make an identical retry look
+ * like a new request.
+ *
+ * Async because it uses Web Crypto, which is the only digest API available in
+ * both Bun and a browser. `Bun.CryptoHasher` would be faster but would break the
+ * rule that this package stays importable from the web bundle.
+ */
+export async function fingerprint(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalize(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}

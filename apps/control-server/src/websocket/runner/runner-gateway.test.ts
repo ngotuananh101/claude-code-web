@@ -196,22 +196,34 @@ describe("runner gateway", () => {
     expect(gateway.stateOf("runner-a")).not.toBe("ready");
   });
 
-  test("a second connection supersedes the first and the old socket is fenced", () => {
+  test("a second connection supersedes the first and closes it immediately", () => {
     const first = makeSocket();
     gateway.handleOpen(first.socket, { authorization: "Bearer cck_valid" });
 
     const second = makeSocket();
     gateway.handleOpen(second.socket, { authorization: "Bearer cck_valid" });
 
-    // §6.3: exactly one generation is current.
-    const stale = gateway.handleMessage(
-      first.socket,
-      JSON.stringify({ type: "hello", hello }),
-    );
-
-    expect(stale).toEqual({ ok: false, reason: "stale_generation" });
+    // §6.3: exactly one generation is current. The old socket is closed at once
+    // rather than on its next message — a stale runner that never speaks again
+    // would otherwise stay connected believing it is ready.
     expect(first.sent).toEqual([{ type: "error", reason: "stale_generation" }]);
     expect(first.closed).toEqual([4000]);
+    expect(second.closed).toEqual([]);
+  });
+
+  test("a stale socket that speaks anyway is fenced", () => {
+    const first = makeSocket();
+    gateway.handleOpen(first.socket, { authorization: "Bearer cck_valid" });
+
+    const second = makeSocket();
+    gateway.handleOpen(second.socket, { authorization: "Bearer cck_valid" });
+
+    // The socket was closed, but a message already in flight must still be
+    // refused on its merits rather than processed because the close raced.
+    const stale = gateway.handleMessage(first.socket, JSON.stringify({ type: "hello", hello }));
+
+    expect(stale).toEqual({ ok: false, reason: "stale_generation" });
+    expect(gateway.stateOf("runner-a")).not.toBe("ready");
   });
 
   test("messages before hello are refused", () => {
