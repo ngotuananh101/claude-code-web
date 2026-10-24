@@ -13,4 +13,13 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import { router } from "./router.ts";
 
+// The generated theme defines a .dark palette; follow the OS preference so
+// both palettes apply without an in-app toggle.
+const scheme = window.matchMedia("(prefers-color-scheme: dark)");
+const applyScheme = (): void => {
+  document.documentElement.classList.toggle("dark", scheme.matches);
+};
+applyScheme();
+scheme.addEventListener("change", applyScheme);
+
 createApp(App).use(router).mount("#app");

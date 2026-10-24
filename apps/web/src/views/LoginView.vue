@@ -35,42 +35,43 @@ async function submit(): Promise<void> {
 
 <template>
   <main class="login">
-    <div class="entry">
-      <p class="wordmark font-mono">cc-web</p>
-      <h1>Watch your coding agents work.</h1>
+    <p class="brand font-mono">cc-web</p>
+    <section class="panel">
+      <h1>Đăng nhập</h1>
       <p class="lede">
-        Sign in to follow sessions live from the journal — every event, in
-        order, exactly as the runners wrote it.
+        Theo dõi phiên làm việc của coding agent, trực tiếp từ journal.
       </p>
-      <form class="event" @submit.prevent="submit">
-        <span class="seq font-mono" aria-hidden="true">0001</span>
-        <div class="event-body">
-          <div class="field">
-            <Label class="field-label" for="username">Username</Label>
-            <Input id="username" v-model="username" autocomplete="username" autofocus />
-          </div>
-          <div class="field">
-            <Label class="field-label" for="password">Password</Label>
-            <Input
-              id="password"
-              v-model="password"
-              type="password"
-              autocomplete="current-password"
-            />
-          </div>
-          <p v-if="failed" class="error" role="alert">
-            Sai tên đăng nhập hoặc mật khẩu.
-          </p>
-          <Button
-            type="submit"
-            class="submit"
-            :disabled="busy || username === '' || password === ''"
-          >
-            Sign in
-          </Button>
-        </div>
+      <form class="panel-form" @submit.prevent="submit">
+        <Label class="sr-only" for="username">Tên đăng nhập</Label>
+        <Input
+          id="username"
+          v-model="username"
+          class="field"
+          autocomplete="username"
+          autofocus
+          placeholder="Tên đăng nhập"
+        />
+        <Label class="sr-only" for="password">Mật khẩu</Label>
+        <Input
+          id="password"
+          v-model="password"
+          class="field"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Mật khẩu"
+        />
+        <p v-if="failed" class="error" role="alert">
+          Sai tên đăng nhập hoặc mật khẩu.
+        </p>
+        <Button
+          type="submit"
+          class="submit"
+          :disabled="busy || username === '' || password === ''"
+        >
+          Tiếp tục
+        </Button>
       </form>
-    </div>
+    </section>
   </main>
 </template>
 
@@ -79,98 +80,58 @@ async function submit(): Promise<void> {
   min-height: 100%;
   display: grid;
   place-items: center;
+  position: relative;
+  padding: 24px;
 }
 
-.entry {
-  width: min(420px, calc(100vw - 48px));
-}
-
-/* The journal's run divider: mono wordmark, hairline running out. */
-.wordmark {
-  display: flex;
-  align-items: center;
-  gap: 14px;
+.brand {
+  position: absolute;
+  top: 22px;
+  left: 26px;
+  margin: 0;
   font-size: 13px;
-  color: var(--primary);
-  margin: 0 0 26px;
+  color: var(--foreground);
 }
 
-.wordmark::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
+.panel {
+  width: min(360px, 100%);
 }
 
 h1 {
-  font-size: 26px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
   margin: 0 0 8px;
+  text-align: center;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
 }
 
 .lede {
+  margin: 0 0 30px;
+  text-align: center;
   color: var(--muted-foreground);
   font-size: 14px;
   line-height: 1.5;
-  margin: 0 0 30px;
 }
 
-/* The form is the first event: sequence gutter, then the payload. */
-.event {
+.panel-form {
   display: grid;
-  grid-template-columns: 48px 1fr;
-  column-gap: 14px;
-}
-
-.seq {
-  text-align: right;
-  line-height: 14px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  user-select: all;
-}
-
-.event-body {
-  display: grid;
-  gap: 16px;
-}
-
-/* Grid would stretch the button across the payload column; the journal's
-   actions sit where the text ends. */
-.submit {
-  justify-self: start;
+  gap: 10px;
 }
 
 .field {
-  display: grid;
-  gap: 6px;
+  height: 40px;
 }
 
-.field-label {
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-
-/* Auth failure wears the journal's repair-row language. */
 .error {
-  margin: 0;
-  padding: 8px 12px;
-  border-left: 2px solid var(--destructive);
+  margin: 2px 0 0;
+  text-align: center;
   color: var(--destructive);
   font-size: 13px;
 }
 
-@media (max-width: 379px) {
-  .event {
-    grid-template-columns: 1fr;
-    row-gap: 8px;
-  }
-
-  .seq {
-    text-align: left;
-    padding-top: 0;
-  }
+.submit {
+  height: 40px;
+  margin-top: 6px;
 }
 </style>
