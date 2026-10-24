@@ -48,6 +48,7 @@ coverage/
 
 # session memory (local-only, not part of the project)
 .remember/
+.zcode/
 
 # playwright / test artifacts
 test-results/

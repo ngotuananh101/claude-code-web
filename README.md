@@ -4,8 +4,9 @@ Web control plane for Claude coding agents: a browser chat UI that drives Claude
 Agent SDK runs on one or more remote Runners.
 
 **Status:** Phase 1 complete — enrollment, auth, transport, scheduling, dispatch
-and runner-side execution. The browser UI and server-side event ingestion are not
-built yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (blueprint v2.0) and
+and runner-side execution. The first browser slice is live: sign in, the session
+rail, and the live event journal (§12.5 replay + live tail) rendering in the
+browser. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (blueprint v2.0) and
 the roadmap in §23.
 
 ## Topology
@@ -23,7 +24,7 @@ no inbound port is required on a Runner host.
 
 | Path | Contents |
 | --- | --- |
-| `apps/web` | Vue 3 + Vite + Tailwind + shadcn-vue, CodeMirror 6 editor/diff |
+| `apps/web` | Vue 3 + Vite SPA: login, session rail, event journal; composer arrives with the dispatch API |
 | `apps/control-server` | Hono HTTP API, browser + runner WebSocket gateways, scheduling, journal |
 | `apps/runner` | Runner daemon: connection loop, inbox/outbox, supervisor, worker processes |
 | `packages/protocol` | Wire envelopes, command/event schemas — shared by server, runner and web |
@@ -78,8 +79,9 @@ with a contiguous-ACK watermark), and browser replay of the journal
 (ownership-checked subscribe, bounded replay batches, live tail,
 `resync_required` on retention gaps) are implemented and tested — see
 [`docs/phase1-results.md`](docs/phase1-results.md) for what is proven and what is
-still missing. The Vue client that consumes these frames, and approvals (§13),
-are next.
+still missing. The Vue client consuming these frames exists as a first slice —
+login, the session rail and the journal read model — with the prompt composer
+waiting on the dispatch API, and approvals (§13) after that.
 
 ## Decisions
 

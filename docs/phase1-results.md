@@ -32,7 +32,7 @@
 | `control-server/route` | `/ws/runner` upgrade; unauthorized clients get HTTP 401, not a socket | integration (real socket) |
 | `control-server/tokens` | HS256 pinned; `alg:none` refused; secret under 32 bytes refused at construction | unit |
 | `control-server/auth-service` | Per-user `tokenVersion` revocation, read on every call | unit |
-| `control-server/browser-gateway` | Origin allowlist first, then cookie; missing Origin is refused | unit |
+| `control-server/browser-gateway` | Origin allowlist first, then cookie; the WS upgrade route refuses a missing Origin itself, while shared `authorize` tolerates it for same-origin GET reads | unit |
 | `control-server/server` | `/healthz`, `/auth/login`, both WS routes on one instance | unit + integration |
 | `control-db/command-outbox` | Immutable fingerprint; identical re-enqueue is a no-op; terminal states are sticky | unit |
 | `control-db/scheduler` | Offline → not-ready → capacity → duplicate → session-busy, in that order | unit |
@@ -58,8 +58,12 @@
 | `control-db/replay` | Session read model in `session_sequence`: bounded ordered reads, watermark, earliest (retention gap), owner derivation | unit |
 | `control-server/browser-gateway` (replay) | Ownership-checked subscribe (no-oracle refusal), bounded chained replay, registration-before-read so no live event falls between replay and tail, `resync_required` on gaps | unit + integration (real socket) |
 | journal → browser | Replay-from-offset then live tail with no gap or duplicate across the boundary; retention gap answers `resync_required` and resubscribe-from-named-sequence recovers | integration (real processes) |
+| `control-server/sessions-list` | `GET /api/sessions` answers the owner's sessions; missing-Origin same-origin reads allowed, foreign origins 403; `no-store` | unit |
+| `web/session-stream` | Pure §12.5 client machine: own watermark dedup, gap → resubscribe from watermark, `resync_required` rewinds to earliest | unit |
+| `web/sessions-store` | Frame delivery hands the journal a fresh events array (Vue's props compare is shallow — a reused reference never re-renders); live flag = listing OR frame | unit |
+| `control-server/login-cookie` | `Secure` only when the request is https — a plain-http origin drops Secure cookies, turning login into a silent no-op | unit |
 
-379 unit tests across 36 files, 7 integration probes.
+399 unit tests across 38 files, 10 integration probes.
 
 ## Integration evidence
 
@@ -614,15 +618,34 @@ runner, and that is exactly how they survived a phase:
   subcommand. The token is read from `CC_WEB_ENROLL_TOKEN` or stdin, never argv,
   and travels in the request body, never a query string.
 
+## The browser slice (2026-10-24)
+
+The first client on top of the replay transport, verified in a real browser
+against the real server, not just in unit tests:
+
+- **What exists** — sign-in, the session rail with watermarks and live dots,
+  and the event journal: numbered gutter, run-grouped transcript, machine-voice
+  payload rendering, `resync_required` banner, honest empty states, bounded
+  socket reconnect with a connection chip.
+- **Three bugs the browser caught that unit tests did not** — a `Secure` cookie
+  on plain http (login 200s and never sticks), `authorize` refusing the missing
+  Origin of a same-origin GET (the cookie was fine; the read path was closed),
+  and the router guard redirecting `/login` to itself forever.
+- **One bug only a rendered component could catch** — the store mirrored
+  machine state into a new object but reused the events array reference; Vue's
+  shallow props compare saw "no change" and the journal kept its first (empty)
+  render forever while the state beneath it was correct. `mirror()` now hands
+  over a fresh array per frame, guarded by a store-level test.
+
 ## Not yet built
 
 - Approval round-trip and `canUseTool` wiring. The executor passes no
   `canUseTool`, so the SDK's own default applies; §10's deny-by-default gate is
   not wired yet.
-- Event ingestion on the server: the runner's event outbox and ACK watermark
-  exist, are tested, and are now written by the executor, but nothing sends those
-  events up the socket yet.
-- The browser UI. `/ws/browser` exists and authenticates; nothing renders it.
+- The prompt composer. The browser reads the journal; sending a prompt waits on
+  the §11 dispatch API for browser-originated commands.
+- Session lifecycle views: dispatch controls, run cancel from the UI, run
+  attempts beyond the first.
 - A process supervisor. Execution is in-process (§3.3, slice-1 compatibility);
   a crash takes the run with it, which is why boot recovery marks it
   `interrupted` rather than resuming it.
