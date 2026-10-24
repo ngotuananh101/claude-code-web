@@ -1,16 +1,9 @@
 <script setup lang="ts">
-// Placeholder shell; the router and views arrive with the journal task.
+import { startStore } from "./stores/sessions.ts";
+
+startStore();
 </script>
 
 <template>
-  <main class="placeholder">cc-web — the client takes shape in the next commit.</main>
+  <router-view />
 </template>
-
-<style scoped>
-.placeholder {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  color: var(--mute);
-}
-</style>

@@ -379,13 +379,17 @@ async function handleListSessions(
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
 ): Promise<Response> {
-  const origin = request.headers.get("origin") ?? undefined;
-  if (!origin || !allowedOrigins.has(origin)) {
+  // A same-origin GET fetch sends no Origin header at all — the client this
+  // route exists for is exactly that request — so a missing Origin is allowed
+  // through and the session cookie remains the whole authentication. A
+  // present but foreign Origin is refused before anything is read.
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
     return new Response("forbidden", { status: 403 });
   }
 
   const authorized = await browserGateway.authorize({
-    origin,
+    origin: origin ?? undefined,
     cookie: request.headers.get("cookie") ?? undefined,
   });
   if (!authorized.ok) {

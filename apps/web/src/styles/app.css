@@ -18,3 +18,9 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
+
+/* The machine voice: sequence numbers, event types, payloads, watermarks. */
+.mono {
+  font-family: var(--machine);
+  font-variant-ligatures: none;
+}

@@ -302,6 +302,10 @@ describe("control server routes", () => {
         })
       ).status,
     ).toBe(401);
+    // A same-origin GET fetch carries no Origin header at all — the client
+    // itself is that request, so a missing Origin must not read as foreign.
+    // The cookie is still the whole authentication.
+    expect((await fetch(`${url}/api/sessions`)).status).toBe(401);
     expect(
       (
         await fetch(`${url}/api/sessions`, {
