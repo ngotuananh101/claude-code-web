@@ -45,9 +45,10 @@ describe("createRunnerToken", () => {
     const db = freshDb();
     createRunnerToken(db, { ownerId: "owner-1" });
 
-    expect(
-      verifyRunnerCredential(db, "00000000-0000-4000-8000-000000000000"),
-    ).toEqual({ ok: false, reason: "unknown" });
+    expect(verifyRunnerCredential(db, "00000000-0000-4000-8000-000000000000")).toEqual({
+      ok: false,
+      reason: "unknown",
+    });
   });
 
   test("re-minting for the same runner rotates the token", () => {

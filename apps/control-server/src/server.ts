@@ -1,10 +1,10 @@
 /**
  * Control server composition (§17, §19.1).
  *
- * Wires the three surfaces onto one `Bun.serve` instance:
+ * Wires the surfaces onto one `Bun.serve` instance:
  *
+ *   ALL  /api/auth/*    better-auth handler (sign-in/out, sessions), Origin-gated
  *   GET  /healthz       liveness, no configuration in the response
- *   POST /auth/login    owner login, Origin-checked, sets an HttpOnly cookie
  *   WS   /ws/runner     runner transport, credential in a header
  *   WS   /ws/browser    owner transport, Origin allowlist + session cookie
  *
@@ -30,7 +30,7 @@ import {
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
-import type { AuthService } from "./auth/auth-service.ts";
+import { type BetterAuthInstance, createSessionResolver } from "./auth/better-auth.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { BrowserGateway, type BrowserSocketData } from "./websocket/browser/browser-gateway.ts";
 import { runnerWebSocket, upgradeRunner } from "./websocket/runner/route.ts";
@@ -42,14 +42,10 @@ export type RunnerCredentialCheck =
 
 export type ServerOptions = {
   db: Database;
-  auth: AuthService;
+  /** The better-auth instance; mounted at /api/auth/* and read by the gateway. */
+  auth: BetterAuthInstance;
   allowedOrigins: string[];
   verifyRunnerCredential: (credential: string) => RunnerCredentialCheck;
-  /**
-   * Verifies a password against the stored hash. Injected because the hash
-   * format belongs to the auth library, not to this file.
-   */
-  verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
   /**
    * The command outbox. When supplied, a runner that reaches `ready` is drained
    * immediately, so work queued while it was away goes out as part of the
@@ -75,8 +71,7 @@ export type ServerHandle = {
   stop(): void;
 };
 
-const COOKIE_NAME = "cc_session";
-const ACCESS_TTL_SECONDS = 15 * 60;
+const AUTH_MOUNT = "/api/auth/";
 
 export function createServer(options: ServerOptions): ServerHandle {
   // The gateway and the dispatcher call each other: the gateway reports
@@ -90,9 +85,8 @@ export function createServer(options: ServerOptions): ServerHandle {
   // without a later-binding dance: browser replay (§12.5) is downstream of
   // journaling (§12.2), not the other way around.
   const browserGateway = new BrowserGateway({
-    auth: options.auth,
+    resolveSession: createSessionResolver(options.auth),
     allowedOrigins: options.allowedOrigins,
-    cookieName: COOKIE_NAME,
     resolveOwner: (sessionId) => sessionOwner(options.db, sessionId),
     readReplay: (sessionId, after, limit) =>
       readSessionEvents(options.db, sessionId, { after, limit }),
@@ -169,8 +163,18 @@ export function createServer(options: ServerOptions): ServerHandle {
         return Response.json({ ok: true, protocolVersion: PROTOCOL_VERSION });
       }
 
-      if (url.pathname === "/auth/login" && request.method === "POST") {
-        return handleLogin(request, options, allowed);
+      // better-auth's whole surface, mounted unchanged. The Origin gate wraps
+      // it because the library force-disables its own origin check under test
+      // runners and skips CSRF validation for cookie-less requests — the
+      // server-level allowlist is the control production actually runs on
+      // (§19.1). A missing Origin passes through: same-origin GET fetches carry
+      // none, and the session cookie is still the whole authentication.
+      if (url.pathname.startsWith(AUTH_MOUNT)) {
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowed.has(origin)) {
+          return new Response("forbidden", { status: 403 });
+        }
+        return options.auth.handler(request);
       }
 
       if (url.pathname === "/api/runner-enrollments" && request.method === "POST") {
@@ -258,63 +262,6 @@ export function createServer(options: ServerOptions): ServerHandle {
     scheduler,
     stop: () => server.stop(true),
   };
-}
-
-async function handleLogin(
-  request: Request,
-  options: ServerOptions,
-  allowedOrigins: ReadonlySet<string>,
-): Promise<Response> {
-  // Origin first: a correct password from a hostile page must not mint a
-  // session, and the check must not depend on the password being wrong.
-  const origin = request.headers.get("origin") ?? undefined;
-  if (!origin || !allowedOrigins.has(origin)) {
-    return new Response("forbidden", { status: 403 });
-  }
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response("bad request", { status: 400 });
-  }
-
-  const record = body as Record<string, unknown>;
-  const username = record["username"];
-  const password = record["password"];
-  if (typeof username !== "string" || typeof password !== "string") {
-    return new Response("bad request", { status: 400 });
-  }
-
-  const row = options.db
-    .query("SELECT id, password_hash FROM users WHERE username = ?")
-    .get(username) as { id: string; password_hash: string } | null;
-
-  // One response for "no such user" and "wrong password": distinguishing them
-  // turns the endpoint into a username oracle.
-  const verify = options.verifyPassword ?? (async () => false);
-  const ok = row ? await verify(password, row.password_hash) : false;
-  if (!row || !ok) {
-    return new Response("unauthorized", { status: 401 });
-  }
-
-  const token = await options.auth.issueAccessToken(row.id);
-
-  // Secure only when the request is actually https: on a plain-http origin
-  // (local dev, self-hosted LAN) a Secure cookie is dropped by the browser,
-  // which would turn every login into a silent no-op. The flag still does
-  // its real work wherever TLS terminates at this server.
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-
-  return new Response(JSON.stringify({ ok: true }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      // ADR-0001: HttpOnly so script cannot read it, SameSite=Lax so a
-      // cross-site form post does not carry it.
-      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-    },
-  });
 }
 
 function isBrowserSocket(data: unknown): data is BrowserSocketData {

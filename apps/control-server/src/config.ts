@@ -6,33 +6,36 @@
  * handlers, and neither is worth faking. This module holds the decisions those
  * variables feed into, so the wiring can be exercised directly.
  *
- * Both verifiers are real. They used to be stubs that refused everything —
- * which is safe, but indistinguishable from "nobody can log in" until someone
- * tries.
+ * Auth is the real better-auth instance (ADR-0002), backed by the same database
+ * every repository reads; the runner verifier is real too — it used to be a
+ * stub that refused everything, which is safe but indistinguishable from
+ * "nobody can connect" until someone tries.
  */
 
 import type { Database } from "bun:sqlite";
 import { CommandOutbox, verifyRunnerCredential } from "@cc-web/control-db";
-import { AuthService } from "./auth/auth-service.ts";
-import { verifyPassword } from "./auth/password.ts";
-import { createSigner } from "./auth/tokens.ts";
+import { createBetterAuth } from "./auth/better-auth.ts";
 import type { ServerOptions } from "./server.ts";
 
 export type ServerConfig = {
   db: Database;
-  /** Raw bytes of the JWT signing secret. `createSigner` rejects a short one. */
-  secret: Uint8Array;
+  /** Canonical server origin, e.g. http://localhost:8787 (BETTER_AUTH_URL). */
+  baseURL: string;
+  /** Session-signing secret (BETTER_AUTH_SECRET). */
+  secret: string;
   allowedOrigins: string[];
   /** Fixed listen port for the vite dev proxy; omitted means ephemeral. */
   port?: number;
 };
 
 export function buildServerOptions(config: ServerConfig): ServerOptions {
-  const auth = new AuthService({ db: config.db, signer: createSigner(config.secret) });
-
   return {
     db: config.db,
-    auth,
+    auth: createBetterAuth(config.db, {
+      baseURL: config.baseURL,
+      secret: config.secret,
+      trustedOrigins: config.allowedOrigins,
+    }),
     allowedOrigins: config.allowedOrigins,
     ...(config.port === undefined ? {} : { port: config.port }),
     // Read through the database on every upgrade, so a rotation or revoke takes
@@ -43,7 +46,6 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
         ? { ok: true, runnerId: result.runnerId, ownerId: result.ownerId }
         : { ok: false, reason: "unknown" };
     },
-    verifyPassword,
     // The real outbox. Without it a runner that reaches `ready` is never sent
     // anything: the scheduler's commands are written durably and then sit there.
     outbox: new CommandOutbox(config.db),

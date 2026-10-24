@@ -1,5 +1,5 @@
 /**
- * Seeds an owner account so `/auth/login` works on a fresh database (§6.2).
+ * Seeds an owner account so signing in works on a fresh database (§6, ADR-0002).
  *
  * The password is read from stdin, never argv: a process listing is world
  * readable on most systems, and a secret that passes through the command
@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "@cc-web/control-db";
-import { hashPassword } from "../apps/control-server/src/auth/password.ts";
+import { createBetterAuth, signUpOwner } from "../apps/control-server/src/auth/better-auth.ts";
 
 const username = process.argv[2];
 if (!username) {
@@ -32,11 +32,18 @@ if (password.length === 0) {
   process.exit(1);
 }
 
-const hash = await hashPassword(password);
+// Sign-up goes through the library's own path so the password lands in
+// `account.password` in exactly the format sign-in verifies (§19.1). The
+// synthetic email is never typed by anyone: better-auth's engine is
+// email+password, the UX is username-only.
+const auth = createBetterAuth(db, {
+  baseURL: process.env["BETTER_AUTH_URL"] ?? "http://localhost:8787",
+  secret: process.env["BETTER_AUTH_SECRET"],
+  trustedOrigins: [],
+});
+
 try {
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, 1, ?)",
-  ).run(crypto.randomUUID(), username, hash, Date.now());
+  await signUpOwner(auth, { username, password });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("UNIQUE")) {

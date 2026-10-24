@@ -3,8 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import { ReconnectLoop } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
-import { AuthService } from "../auth/auth-service.ts";
-import { createSigner } from "../auth/tokens.ts";
+import { createBetterAuth } from "../auth/better-auth.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -15,7 +14,6 @@ import { createServer, type ServerHandle } from "../server.ts";
  * disagreement between them — a message name, a field, a close code.
  */
 
-const secret = new Uint8Array(32).fill(13);
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
@@ -32,10 +30,9 @@ function startServer(): string {
   const db = new Database(":memory:");
   migrate(db);
 
-  const auth = new AuthService({ db, signer: createSigner(secret) });
   handle = createServer({
     db,
-    auth,
+    auth: createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: [origin] }),
     allowedOrigins: [origin],
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"

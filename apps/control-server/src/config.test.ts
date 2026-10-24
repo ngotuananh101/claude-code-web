@@ -6,23 +6,19 @@ import {
   revokeRunner,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
-import { hashPassword } from "./auth/password.ts";
+import { signUpOwner } from "./auth/better-auth.ts";
 import { buildServerOptions, type ServerConfig } from "./config.ts";
 import { createServer, type ServerHandle } from "./server.ts";
 
 /**
  * The real composition (§19.1, §6.1).
  *
- * `index.ts` used to wire two stubs: a credential verifier that refused
- * everything and a password verifier that refused everything. Both are now
- * real, and these tests exist because "wired but refusing" looks identical to
- * "working" until someone tries to log in or enroll a runner.
- *
- * `buildServerOptions` is the part of the entrypoint that is testable; the rest
- * reads environment variables and signals.
+ * `index.ts` reads environment variables and installs signal handlers; neither
+ * is worth faking. `buildServerOptions` is the testable part of the entrypoint,
+ * and these tests exist because "wired but refusing" looks identical to
+ * "working" until someone tries to sign in or connect a runner.
  */
 
-const secret = new Uint8Array(32).fill(17);
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
@@ -35,45 +31,45 @@ afterEach(() => {
 async function start(config: Partial<ServerConfig> = {}) {
   const db = new Database(":memory:");
   migrate(db);
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run("user-1", "owner", await hashPassword("correct horse"), 1, Date.now());
 
   const options = buildServerOptions({
     db,
-    secret,
+    baseURL: "http://control.test",
+    secret: "composition-test-secret-0123456789abcdef",
     allowedOrigins: [origin],
     ...config,
   });
+
+  await signUpOwner(options.auth, { username: "owner", password: "correct horse" });
 
   handle = createServer(options);
   return { db, url: `http://127.0.0.1:${handle.server.port}` };
 }
 
+async function signIn(url: string, password: string): Promise<Response> {
+  return fetch(`${url}/api/auth/sign-in/username`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: origin },
+    body: JSON.stringify({ username: "owner", password }),
+  });
+}
+
 describe("the real control server wiring", () => {
-  test("login succeeds with the stored password", async () => {
+  test("sign-in succeeds with the stored password and sets the session cookie", async () => {
     const { url } = await start();
 
-    const response = await fetch(`${url}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ username: "owner", password: "correct horse" }),
-    });
+    const response = await signIn(url, "correct horse");
 
-    // With the old stub this was a 401 for every password, which reads as "the
-    // owner typed it wrong" rather than "nobody can log in".
+    // With a refusing stub this was a 401 for every password, which reads as
+    // "the owner typed it wrong" rather than "nobody can log in".
     expect(response.status).toBe(200);
-    expect(response.headers.get("set-cookie")).toContain("cc_session=");
+    expect(response.headers.get("set-cookie")).toContain("better-auth.session_token=");
   });
 
-  test("login refuses a wrong password", async () => {
+  test("sign-in refuses a wrong password", async () => {
     const { url } = await start();
 
-    const response = await fetch(`${url}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ username: "owner", password: "wrong" }),
-    });
+    const response = await signIn(url, "wrong");
 
     expect(response.status).toBe(401);
   });
@@ -84,11 +80,7 @@ describe("the real control server wiring", () => {
     // Enroll through the HTTP surface, then verify the same credential through
     // the composition used by the real entrypoint. If these two disagree, the
     // enrollment endpoint is writing something the gateway cannot read.
-    const login = await fetch(`${url}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ username: "owner", password: "correct horse" }),
-    });
+    const login = await signIn(url, "correct horse");
     const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
 
     const created = (await (
@@ -107,7 +99,8 @@ describe("the real control server wiring", () => {
     ).json()) as { runnerId: string; credential: string };
 
     const check = verifyRunnerCredential(db, enrolled.credential);
-    expect(check).toMatchObject({ ok: true, runnerId: enrolled.runnerId, ownerId: "user-1" });
+    expect(check.ok).toBe(true);
+    expect(check).toMatchObject({ runnerId: enrolled.runnerId });
   });
 
   test("a revoked runner credential is refused", async () => {

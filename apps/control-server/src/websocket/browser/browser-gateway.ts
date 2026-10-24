@@ -7,8 +7,10 @@
  *     upgrades, so the same-origin policy does not protect this socket. §19.1
  *     says so explicitly, and a missing Origin is refused rather than trusted —
  *     otherwise a non-browser client could opt out of the check.
- *  2. **Session cookie.** Verified through `AuthService`, which reads
- *     `tokenVersion` on every check, so revocation applies to sockets too.
+ *  2. **Session cookie.** Verified through the injected `resolveSession`, which
+ *     delegates to better-auth; the gateway never sees cookie names or tokens,
+ *     only "this header belongs to user X". Sessions are read from the table on
+ *     every check, so revocation applies to sockets too.
  *
  * A third control guards the subscription itself (§12.5): ownership. The
  * journal only replays to the session's owner, and "not yours" answers exactly
@@ -20,7 +22,7 @@
  */
 
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import type { AuthService } from "../../auth/auth-service.ts";
+import type { SessionResolver } from "../../auth/better-auth.ts";
 
 export type BrowserSocketData = {
   userId: string;
@@ -44,9 +46,9 @@ export type BrowserAuthorizeResult =
   | { ok: false; reason: "origin_not_allowed" | "unauthenticated" };
 
 export type BrowserGatewayOptions = {
-  auth: AuthService;
+  /** Resolves a raw Cookie header to a user id, or null when unauthenticated. */
+  resolveSession: SessionResolver;
   allowedOrigins: string[];
-  cookieName?: string;
   /** §12.5: whose session is this? Undefined = unknown; both it and "someone
    * else's" must answer the subscription identically. */
   resolveOwner: (sessionId: string) => string | undefined;
@@ -63,16 +65,14 @@ export class BrowserGateway {
   static readonly REPLAY_BATCH_LIMIT = 200;
 
   readonly #options: BrowserGatewayOptions;
-  readonly #auth: AuthService;
+  readonly #resolveSession: SessionResolver;
   readonly #allowedOrigins: Set<string>;
-  readonly #cookieName: string;
   readonly #sockets = new Map<string, Set<BrowserSocket>>();
 
   constructor(options: BrowserGatewayOptions) {
     this.#options = options;
-    this.#auth = options.auth;
+    this.#resolveSession = options.resolveSession;
     this.#allowedOrigins = new Set(options.allowedOrigins);
-    this.#cookieName = options.cookieName ?? "cc_session";
   }
 
   async authorize(input: AuthorizeInput): Promise<BrowserAuthorizeResult> {
@@ -86,13 +86,12 @@ export class BrowserGateway {
       return { ok: false, reason: "origin_not_allowed" };
     }
 
-    const token = readCookie(input.cookie, this.#cookieName);
-    const auth = await this.#auth.authenticate(token);
-    if (!auth.ok) {
+    const userId = await this.#resolveSession(input.cookie);
+    if (userId === null) {
       return { ok: false, reason: "unauthenticated" };
     }
 
-    return { ok: true, userId: auth.userId };
+    return { ok: true, userId };
   }
 
   /** Authorize and register a socket, so revocation can reach it later. */
@@ -271,9 +270,9 @@ export class BrowserGateway {
   }
 
   /**
-   * Tear down every socket for this user. Called after `tokenVersion` is bumped:
-   * an open subscription would otherwise keep delivering events to a login that
-   * is no longer valid.
+   * Tear down every socket for this user. Called when the user's session is
+   * deleted (sign-out): an open subscription would otherwise keep delivering
+   * events to a login that is no longer valid.
    */
   revoke(userId: string): void {
     const sockets = this.#sockets.get(userId);
@@ -309,17 +308,4 @@ export class BrowserGateway {
       // A failed send surfaces as a close.
     }
   }
-}
-
-function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
-
-  for (const part of header.split(";")) {
-    const trimmed = part.trim();
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    if (trimmed.slice(0, eq) !== name) continue;
-    return decodeURIComponent(trimmed.slice(eq + 1));
-  }
-  return undefined;
 }

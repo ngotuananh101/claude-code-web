@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { createBetterAuth, signUpOwner } from "./better-auth.ts";
+import { type BetterAuthInstance, createBetterAuth, signUpOwner } from "./better-auth.ts";
 
 const BASE_URL = "http://control.test";
 
@@ -23,7 +23,7 @@ function cookieFrom(response: Response): string {
   return setCookie.split(";")[0] ?? "";
 }
 
-async function signIn(auth: ReturnType<typeof createBetterAuth>, body: unknown) {
+async function signIn(auth: BetterAuthInstance, body: unknown) {
   return auth.handler(
     new Request(`${BASE_URL}/api/auth/sign-in/username`, {
       method: "POST",
@@ -39,9 +39,9 @@ describe("createBetterAuth", () => {
     const result = await signUpOwner(auth, { username: "owner", password: "dev-password" });
 
     expect(result.user.username).toBe("owner");
-    const row = db
-      .query("SELECT username FROM user WHERE id = ?")
-      .get(result.user.id) as { username: string } | null;
+    const row = db.query("SELECT username FROM user WHERE id = ?").get(result.user.id) as {
+      username: string;
+    } | null;
     expect(row?.username).toBe("owner");
   });
 
@@ -57,7 +57,9 @@ describe("createBetterAuth", () => {
     const session = await auth.api.getSession({
       headers: new Headers({ cookie }),
     });
-    expect(session?.user.username).toBe("owner");
+    // The plugin augments the user with `username` at runtime; the wrapper's
+    // ReturnType erase keeps it out of the static type.
+    expect((session?.user as { username?: string } | undefined)?.username).toBe("owner");
   });
 
   test("wrong password is refused without a session cookie", async () => {

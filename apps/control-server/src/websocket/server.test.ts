@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate } from "@cc-web/control-db";
-import { AuthService } from "../auth/auth-service.ts";
-import { createSigner } from "../auth/tokens.ts";
+import { createBetterAuth, signUpOwner } from "../auth/better-auth.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -11,42 +10,53 @@ import { createServer, type ServerHandle } from "../server.ts";
  * These exercise the real HTTP surface over a real socket, because the parts
  * most likely to be wrong are the wiring ones: which header carries what, which
  * status a refusal returns, and whether the upgrade actually happens.
+ *
+ * Auth here is the real better-auth instance, not a stub: the mount, the cookie
+ * name and the session checks are exactly what production runs.
  */
 
-const secret = new Uint8Array(32).fill(11);
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
 
-async function start(
-  overrides: {
-    allowedOrigins?: string[];
-    verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
-  } = {},
-) {
+async function start(overrides: { allowedOrigins?: string[] } = {}) {
   const db = new Database(":memory:");
   migrate(db);
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run("user-1", "owner", "hash", 1, Date.now());
 
-  const auth = new AuthService({ db, signer: createSigner(secret) });
+  const auth = createBetterAuth(db, {
+    baseURL: "http://control.test",
+    trustedOrigins: [origin],
+  });
+  const { user } = await signUpOwner(auth, { username: "owner", password: "dev-password" });
+
   handle = createServer({
     db,
     auth,
     allowedOrigins: overrides.allowedOrigins ?? [origin],
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"
-        ? { ok: true, runnerId: "runner-a", ownerId: "user-1" }
+        ? { ok: true, runnerId: "runner-a", ownerId: user.id }
         : { ok: false, reason: "unknown" },
-    ...(overrides.verifyPassword ? { verifyPassword: overrides.verifyPassword } : {}),
   });
+
+  // A real sign-in through the mounted handler is the only way to mint the
+  // exact cookie the browser would hold.
+  const signIn = await auth.handler(
+    new Request("http://control.test/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ username: "owner", password: "dev-password" }),
+    }),
+  );
+  const setCookie = signIn.headers.get("set-cookie") ?? "";
+  const cookie = setCookie.split(";")[0] ?? "";
 
   return {
     db,
+    userId: user.id,
     url: `http://127.0.0.1:${handle.server.port}`,
     wsUrl: `ws://127.0.0.1:${handle.server.port}`,
-    token: await auth.issueAccessToken("user-1"),
+    cookie,
   };
 }
 
@@ -137,13 +147,13 @@ describe("control server routes", () => {
   });
 
   test("the browser route requires the allowlisted origin and the session cookie", async () => {
-    const { wsUrl, token, db } = await start();
+    const { wsUrl, cookie, db, userId } = await start();
 
     // §12.5: a subscription is ownership-checked, so the route's happy path
     // needs a session this user can actually see.
     db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
       "runner-a",
-      "user-1",
+      userId,
       1,
     );
     db.query(
@@ -152,7 +162,7 @@ describe("control server routes", () => {
 
     const client = await connect(`${wsUrl}/ws/browser`, {
       Origin: origin,
-      Cookie: `cc_session=${token}`,
+      Cookie: cookie,
     });
     client.send({ type: "subscribe", sessionId: "session-1" });
     await waitFor(() => client.messages.length >= 2);
@@ -167,7 +177,7 @@ describe("control server routes", () => {
   });
 
   test("the browser route refuses a subscription to a session the user does not own", async () => {
-    const { wsUrl, token, db } = await start();
+    const { wsUrl, cookie, db } = await start();
 
     db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
       "runner-a",
@@ -180,7 +190,7 @@ describe("control server routes", () => {
 
     const client = await connect(`${wsUrl}/ws/browser`, {
       Origin: origin,
-      Cookie: `cc_session=${token}`,
+      Cookie: cookie,
     });
     client.send({ type: "subscribe", sessionId: "session-1" });
     await waitFor(() => client.messages.length >= 1);
@@ -191,10 +201,10 @@ describe("control server routes", () => {
   });
 
   test("the browser route refuses a foreign origin during the upgrade", async () => {
-    const { wsUrl, token } = await start();
+    const { wsUrl, cookie } = await start();
 
     const response = await fetch(`${wsUrl.replace("ws://", "http://")}/ws/browser`, {
-      headers: { Origin: "https://evil.example.test", Cookie: `cc_session=${token}` },
+      headers: { Origin: "https://evil.example.test", Cookie: cookie },
     });
 
     expect(response.status).toBe(403);
@@ -210,82 +220,25 @@ describe("control server routes", () => {
     expect(response.status).toBe(401);
   });
 
-  test("login sets an HttpOnly cookie and refuses a wrong password", async () => {
-    const { url, db } = await start();
-    // A real hash would come from a maintained library; this test only cares
-    // that a mismatch is refused without saying which field was wrong.
-    db.query("UPDATE users SET password_hash = ? WHERE id = ?").run("correct", "user-1");
+  test("a foreign origin is refused before the better-auth handler sees it", async () => {
+    const { url } = await start();
 
-    const bad = await fetch(`${url}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ username: "owner", password: "wrong" }),
-    });
-
-    expect(bad.status).toBe(401);
-    expect(bad.headers.get("set-cookie")).toBeNull();
-  });
-
-  test("the login cookie is Secure only when the request itself is https", async () => {
-    const { url, db } = await start({
-      verifyPassword: async (plain, hash) => plain === hash,
-    });
-    db.query("UPDATE users SET password_hash = ? WHERE id = ?").run("correct", "user-1");
-
-    const ok = await fetch(`${url}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
-      body: JSON.stringify({ username: "owner", password: "correct" }),
-    });
-
-    // The test server is plain http, as are local dev and self-hosted LAN
-    // deployments. A Secure cookie on a non-https origin is dropped by the
-    // browser entirely — login would 200 and never stick. The flag still
-    // rides on https requests, where it does its real work.
-    expect(ok.status).toBe(200);
-    const cookie = ok.headers.get("set-cookie") ?? "";
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).not.toContain("Secure");
-  });
-
-  test("a login from a disallowed origin is refused before the password is checked", async () => {
-    const { url, db } = await start();
-    db.query("UPDATE users SET password_hash = ? WHERE id = ?").run("correct", "user-1");
-
-    const response = await fetch(`${url}/auth/login`, {
+    const response = await fetch(`${url}/api/auth/sign-in/username`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://evil.example.test" },
-      body: JSON.stringify({ username: "owner", password: "correct" }),
+      body: JSON.stringify({ username: "owner", password: "dev-password" }),
     });
 
-    // CSRF: a correct password from a hostile origin must not mint a session.
+    // better-auth force-disables its own origin check under test runners, so
+    // this 403 is the server's gate — which is the one production runs on.
     expect(response.status).toBe(403);
-    expect(response.headers.get("set-cookie")).toBeNull();
-  });
-
-  test("the server binds the configured port", async () => {
-    const db = new Database(":memory:");
-    migrate(db);
-    const auth = new AuthService({ db, signer: createSigner(secret) });
-    handle = createServer({
-      db,
-      auth,
-      allowedOrigins: [origin],
-      verifyRunnerCredential: () => ({ ok: false, reason: "unknown" }),
-      port: 8944,
-    });
-
-    // The vite dev proxy needs a stable upstream; a random port would turn
-    // every restart into a config edit.
-    expect(handle.server.port).toBe(8944);
   });
 
   test("the sessions list answers the owner's sessions", async () => {
-    const { url, token, db } = await start();
+    const { url, cookie, db, userId } = await start();
     db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
       "runner-a",
-      "user-1",
+      userId,
       1,
     );
     ingestEvent(db, {
@@ -302,7 +255,7 @@ describe("control server routes", () => {
     });
 
     const response = await fetch(`${url}/api/sessions`, {
-      headers: { Origin: origin, Cookie: `cc_session=${token}` },
+      headers: { Origin: origin, Cookie: cookie },
     });
     const body = (await response.json()) as { sessions: Array<Record<string, unknown>> };
 
@@ -320,14 +273,14 @@ describe("control server routes", () => {
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
 
-  test("the sessions list needs the session cookie", async () => {
-    const { url } = await start();
+  test("the sessions list needs a valid session", async () => {
+    const { url, cookie } = await start();
 
     expect((await fetch(`${url}/api/sessions`, { headers: { Origin: origin } })).status).toBe(401);
     expect(
       (
         await fetch(`${url}/api/sessions`, {
-          headers: { Origin: origin, Cookie: "cc_session=nonsense" },
+          headers: { Origin: origin, Cookie: "better-auth.session_token=nonsense" },
         })
       ).status,
     ).toBe(401);
@@ -338,9 +291,31 @@ describe("control server routes", () => {
     expect(
       (
         await fetch(`${url}/api/sessions`, {
-          headers: { Origin: "https://evil.example.test", Cookie: "cc_session=whatever" },
+          headers: { Origin: "https://evil.example.test", Cookie: cookie },
         })
       ).status,
     ).toBe(403);
+    // And the real cookie works without an Origin header (same-origin fetch).
+    expect((await fetch(`${url}/api/sessions`, { headers: { Cookie: cookie } })).status).toBe(200);
+  });
+
+  test("the server binds the configured port", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const auth = createBetterAuth(db, {
+      baseURL: "http://control.test",
+      trustedOrigins: [origin],
+    });
+    handle = createServer({
+      db,
+      auth,
+      allowedOrigins: [origin],
+      verifyRunnerCredential: () => ({ ok: false, reason: "unknown" }),
+      port: 8944,
+    });
+
+    // The vite dev proxy needs a stable upstream; a random port would turn
+    // every restart into a config edit.
+    expect(handle.server.port).toBe(8944);
   });
 });

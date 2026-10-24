@@ -13,7 +13,7 @@
 
 import { Database } from "bun:sqlite";
 import { ingestEvent, migrate } from "@cc-web/control-db";
-import { hashPassword } from "../apps/control-server/src/auth/password.ts";
+import { createBetterAuth, signUpOwner } from "../apps/control-server/src/auth/better-auth.ts";
 
 const dbPath = process.argv[2] ?? "/tmp/cc-web-demo.sqlite";
 const db = new Database(dbPath);
@@ -25,17 +25,20 @@ if (password.length === 0) {
   process.exit(1);
 }
 
-const user = db.query("SELECT id FROM users WHERE username = 'owner'").get() as {
+const user = db.query("SELECT id FROM user WHERE username = 'owner'").get() as {
   id: string;
 } | null;
 if (user === null) {
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, 'owner', ?, 1, ?)",
-  ).run(crypto.randomUUID(), await hashPassword(password), Date.now());
+  const auth = createBetterAuth(db, {
+    baseURL: process.env["BETTER_AUTH_URL"] ?? "http://localhost:8787",
+    secret: process.env["BETTER_AUTH_SECRET"],
+    trustedOrigins: [],
+  });
+  await signUpOwner(auth, { username: "owner", password });
 }
 
 db.query(
-  "INSERT OR IGNORE INTO runners (id, owner_id, created_at) VALUES ('runner-local', (SELECT id FROM users WHERE username = 'owner'), ?)",
+  "INSERT OR IGNORE INTO runners (id, owner_id, created_at) VALUES ('runner-local', (SELECT id FROM user WHERE username = 'owner'), ?)",
 ).run(Date.now());
 
 function seed(sessionId: string, runId: string, attemptId: string, lines: string[]): void {

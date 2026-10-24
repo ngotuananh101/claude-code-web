@@ -32,34 +32,12 @@ export function migrate(db: Database): void {
       ON enrollments (token_hash);
   `);
 
-  // Owner identity (§18.1, ADR-0001). `token_version` is the revocation
-  // primitive: every access token names the version it was minted under, so
-  // incrementing this column invalidates all of them at once.
+  // Owner identity moved to better-auth (ADR-0002): the hand-rolled `users` /
+  // `auth_sessions` tables are retired. DROP IF EXISTS keeps existing databases
+  // from carrying dead tables; fresh ones never create them.
   db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id            TEXT PRIMARY KEY,
-      username      TEXT NOT NULL UNIQUE,
-      -- A maintained library's output, never hand-rolled (§19.1).
-      password_hash TEXT NOT NULL,
-      token_version INTEGER NOT NULL DEFAULT 1,
-      created_at    INTEGER NOT NULL
-    );
-  `);
-
-  // One row per login. Kept alongside the version so a single session can be
-  // revoked without logging the user out everywhere.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS auth_sessions (
-      id         TEXT PRIMARY KEY,
-      user_id    TEXT NOT NULL REFERENCES users (id),
-      created_at INTEGER NOT NULL,
-      revoked_at INTEGER
-    );
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS auth_sessions_user_id
-      ON auth_sessions (user_id);
+    DROP TABLE IF EXISTS auth_sessions;
+    DROP TABLE IF EXISTS users;
   `);
 
   db.exec(`
@@ -222,7 +200,6 @@ export function migrate(db: Database): void {
       updatedAt  TEXT NOT NULL
     );
   `);
-
 
   // The durable event journal (§12.1, §12.2). Events arrive at-least-once, so
   // both identities are unique: the event id (dedup after a lost ACK) and the

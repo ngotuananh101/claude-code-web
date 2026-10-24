@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { migrate, verifyRunnerCredential } from "@cc-web/control-db";
-import { AuthService } from "../auth/auth-service.ts";
-import { createSigner } from "../auth/tokens.ts";
+import { createBetterAuth, signUpOwner } from "../auth/better-auth.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -22,7 +21,6 @@ import { createServer, type ServerHandle } from "../server.ts";
  * here must actually authenticate a runner socket.
  */
 
-const secret = new Uint8Array(32).fill(13);
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
@@ -30,11 +28,12 @@ let handle: ServerHandle | undefined;
 async function start() {
   const db = new Database(":memory:");
   migrate(db);
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run("user-1", "owner", "hash", 1, Date.now());
 
-  const auth = new AuthService({ db, signer: createSigner(secret) });
+  const auth = createBetterAuth(db, {
+    baseURL: "http://control.test",
+    trustedOrigins: [origin],
+  });
+  await signUpOwner(auth, { username: "owner", password: "dev-password" });
 
   // The real verifier, backed by the same database the enrollment wrote to.
   handle = createServer({
@@ -49,11 +48,21 @@ async function start() {
     },
   });
 
+  // A real sign-in through the library is the exact cookie the browser holds.
+  const signIn = await auth.handler(
+    new Request("http://control.test/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ username: "owner", password: "dev-password" }),
+    }),
+  );
+  const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
   return {
     db,
     url: `http://127.0.0.1:${handle.server.port}`,
     wsUrl: `ws://127.0.0.1:${handle.server.port}`,
-    token: await auth.issueAccessToken("user-1"),
+    cookie,
   };
 }
 
@@ -62,18 +71,18 @@ afterEach(() => {
   handle = undefined;
 });
 
-async function createEnrollment(url: string, sessionToken: string): Promise<Response> {
+async function createEnrollment(url: string, cookie: string): Promise<Response> {
   return fetch(`${url}/api/runner-enrollments`, {
     method: "POST",
-    headers: { Origin: origin, Cookie: `cc_session=${sessionToken}` },
+    headers: { Origin: origin, Cookie: cookie },
   });
 }
 
 describe("runner enrollment", () => {
   test("the owner mints a one-time token", async () => {
-    const { url, token } = await start();
+    const { url, cookie } = await start();
 
-    const response = await createEnrollment(url, token);
+    const response = await createEnrollment(url, cookie);
     const body = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(201);
@@ -94,11 +103,11 @@ describe("runner enrollment", () => {
   });
 
   test("minting a token requires an allowlisted origin", async () => {
-    const { url, token } = await start();
+    const { url, cookie } = await start();
 
     const response = await fetch(`${url}/api/runner-enrollments`, {
       method: "POST",
-      headers: { Origin: "https://evil.example.test", Cookie: `cc_session=${token}` },
+      headers: { Origin: "https://evil.example.test", Cookie: cookie },
     });
 
     // A token minted for a hostile page is a token the attacker can redeem.
@@ -106,8 +115,8 @@ describe("runner enrollment", () => {
   });
 
   test("redeeming a token returns a runner id and a credential", async () => {
-    const { url, token } = await start();
-    const created = (await (await createEnrollment(url, token)).json()) as { token: string };
+    const { url, cookie } = await start();
+    const created = (await (await createEnrollment(url, cookie)).json()) as { token: string };
 
     const response = await fetch(`${url}/api/runner-enroll`, {
       method: "POST",
@@ -122,8 +131,8 @@ describe("runner enrollment", () => {
   });
 
   test("a token can only be redeemed once", async () => {
-    const { url, token } = await start();
-    const created = (await (await createEnrollment(url, token)).json()) as { token: string };
+    const { url, cookie } = await start();
+    const created = (await (await createEnrollment(url, cookie)).json()) as { token: string };
 
     const redeem = () =>
       fetch(`${url}/api/runner-enroll`, {
@@ -153,8 +162,8 @@ describe("runner enrollment", () => {
   });
 
   test("the credential response is never cached", async () => {
-    const { url, token } = await start();
-    const created = (await (await createEnrollment(url, token)).json()) as { token: string };
+    const { url, cookie } = await start();
+    const created = (await (await createEnrollment(url, cookie)).json()) as { token: string };
 
     const response = await fetch(`${url}/api/runner-enroll`, {
       method: "POST",
@@ -166,8 +175,8 @@ describe("runner enrollment", () => {
   });
 
   test("an enrolled credential authenticates a runner socket", async () => {
-    const { url, wsUrl, token } = await start();
-    const created = (await (await createEnrollment(url, token)).json()) as { token: string };
+    const { url, wsUrl, cookie } = await start();
+    const created = (await (await createEnrollment(url, cookie)).json()) as { token: string };
     const enrolled = (await (
       await fetch(`${url}/api/runner-enroll`, {
         method: "POST",

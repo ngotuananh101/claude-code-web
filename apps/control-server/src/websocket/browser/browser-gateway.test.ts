@@ -2,8 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { AuthService } from "../../auth/auth-service.ts";
-import { createSigner } from "../../auth/tokens.ts";
+import { createBetterAuth, createSessionResolver, signUpOwner } from "../../auth/better-auth.ts";
 import {
   BrowserGateway,
   type BrowserGatewayOptions,
@@ -28,7 +27,7 @@ import {
  * session" answer identically so the socket is not an existence oracle.
  */
 
-const secret = new Uint8Array(32).fill(5);
+const origin = "https://cc.example.test";
 
 function makeSocket() {
   const sent: Array<Record<string, unknown>> = [];
@@ -75,9 +74,12 @@ function replayEvent(
 async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarness } = {}) {
   const db = new Database(":memory:");
   migrate(db);
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run("user-1", "owner", "hash", 1, Date.now());
+
+  const auth = createBetterAuth(db, {
+    baseURL: "http://control.test",
+    trustedOrigins: [origin],
+  });
+  await signUpOwner(auth, { username: "owner", password: "dev-password" });
 
   const replay = overrides.replay ?? {};
   const events = replay.events ?? [];
@@ -86,58 +88,67 @@ async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarn
     earliest: events.length > 0 ? events[0]!.sessionSequence : 0,
   };
 
+  const userId = (db.query("SELECT id FROM user WHERE username = 'owner'").get() as { id: string })
+    .id;
+
   const gatewayOptions: BrowserGatewayOptions = {
-    auth: new AuthService({ db, signer: createSigner(secret) }),
-    allowedOrigins: overrides.allowedOrigins ?? ["https://cc.example.test"],
+    resolveSession: createSessionResolver(auth),
+    allowedOrigins: overrides.allowedOrigins ?? [origin],
     // §12.5 defaults: this user owns everything the tests subscribe to, unless
     // a test says otherwise.
-    resolveOwner: replay.owner ?? (() => "user-1"),
+    resolveOwner: replay.owner ?? (() => userId),
     readReplay: (_sessionId, after, limit) =>
       events.filter((e) => e.sessionSequence > after).slice(0, limit),
     replayBounds: () => bounds,
   };
 
-  const auth = gatewayOptions.auth;
   const gateway = new BrowserGateway(gatewayOptions);
 
-  return { db, auth, gateway, token: await auth.issueAccessToken("user-1") };
+  // A real sign-in is the only way to hold the exact cookie a browser would.
+  const signIn = await auth.handler(
+    new Request("http://control.test/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ username: "owner", password: "dev-password" }),
+    }),
+  );
+  const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+  return { db, gateway, cookie, userId };
 }
 
 describe("browser gateway", () => {
   test("an allowed origin with a valid cookie is accepted", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
 
-    const result = await gateway.authorize({
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    const result = await gateway.authorize({ origin, cookie });
 
-    expect(result).toEqual({ ok: true, userId: "user-1" });
+    expect(result).toEqual({ ok: true, userId: expect.any(String) });
   });
 
   test("a foreign origin is refused even with a valid cookie", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
 
     // This is the CSRF case for WebSockets: the browser would happily attach the
     // cookie to a page on another site.
     const result = await gateway.authorize({
       origin: "https://evil.example.test",
-      cookie: `cc_session=${token}`,
+      cookie,
     });
 
     expect(result).toEqual({ ok: false, reason: "origin_not_allowed" });
   });
 
   test("a missing origin is a same-origin fetch: the cookie still decides", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
 
     // A same-origin GET fetch never carries an Origin header, and authorize
     // now also serves those (GET /api/sessions). Missing Origin passes the
     // origin gate; the cookie remains the whole authentication. The WS
     // upgrade route keeps its own mandatory allowlist check before calling
     // authorize, so a non-browser handshake is still refused there (§19.1).
-    const sameOrigin = await gateway.authorize({ cookie: `cc_session=${token}` });
-    expect(sameOrigin).toEqual({ ok: true, userId: "user-1" });
+    const sameOrigin = await gateway.authorize({ cookie });
+    expect(sameOrigin.ok).toBe(true);
 
     const noCookie = await gateway.authorize({});
     expect(noCookie).toEqual({ ok: false, reason: "unauthenticated" });
@@ -146,59 +157,52 @@ describe("browser gateway", () => {
   test("an allowed origin without a cookie is refused", async () => {
     const { gateway } = await setup();
 
-    const result = await gateway.authorize({ origin: "https://cc.example.test" });
+    const result = await gateway.authorize({ origin });
 
     expect(result).toEqual({ ok: false, reason: "unauthenticated" });
   });
 
-  test("a revoked session cannot open a socket", async () => {
-    const { db, gateway, token } = await setup();
-    db.query("UPDATE users SET token_version = token_version + 1 WHERE id = ?").run("user-1");
+  test("a deleted session cannot open a socket", async () => {
+    const { db, gateway, cookie } = await setup();
 
-    // §19.1: revoking a login must invalidate its socket access, not just its
-    // HTTP requests.
-    const result = await gateway.authorize({
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    // better-auth re-reads the session table on every check, so a deleted
+    // session row (what sign-out does) is dead for the very next call —
+    // the property the old tokenVersion bump provided.
+    db.query("DELETE FROM session").run();
+
+    const result = await gateway.authorize({ origin, cookie });
 
     expect(result).toEqual({ ok: false, reason: "unauthenticated" });
   });
 
-  test("the cookie is parsed out of a realistic Cookie header", async () => {
-    const { gateway, token } = await setup();
+  test("the session cookie is picked out of a realistic Cookie header", async () => {
+    const { gateway, cookie } = await setup();
 
     const result = await gateway.authorize({
-      origin: "https://cc.example.test",
-      cookie: `theme=dark; cc_session=${token}; other=1`,
+      origin,
+      cookie: `theme=dark; ${cookie}; other=1`,
     });
 
-    expect(result).toEqual({ ok: true, userId: "user-1" });
+    expect(result.ok).toBe(true);
   });
 
   test("a subscription is scoped to the authenticated user and their session", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie, userId } = await setup();
     const { socket, sent } = makeSocket();
-    await gateway.attach(socket, {
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    await gateway.attach(socket, { origin, cookie });
 
     gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
 
     expect(sent[0]).toMatchObject({ type: "subscribed", sessionId: "session-1" });
-    expect(socket.data.userId).toBe("user-1");
+    expect(socket.data.userId).toBe(userId);
   });
 
   test("a revoked user's socket is closed when revocation happens", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
     const { socket, closed, sent } = makeSocket();
-    await gateway.attach(socket, {
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    await gateway.attach(socket, { origin, cookie });
 
-    gateway.revoke("user-1");
+    gateway.revoke(socket.data.userId);
 
     // The socket must be torn down, not merely refused on its next message:
     // an open subscription keeps streaming events until it is closed.
@@ -208,8 +212,8 @@ describe("browser gateway", () => {
 
   test("messages before authorization are refused", () => {
     const gateway = new BrowserGateway({
-      auth: { authenticate: async () => ({ ok: true, userId: "user-1" }) } as never,
-      allowedOrigins: ["https://cc.example.test"],
+      resolveSession: async () => "user-1",
+      allowedOrigins: [origin],
       resolveOwner: () => undefined,
       readReplay: () => [],
       replayBounds: () => ({ watermark: 0, earliest: 0 }),
@@ -222,12 +226,9 @@ describe("browser gateway", () => {
   });
 
   test("an unknown message type is refused, not ignored", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
     const { socket, sent } = makeSocket();
-    await gateway.attach(socket, {
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    await gateway.attach(socket, { origin, cookie });
 
     gateway.handleMessage(socket, JSON.stringify({ type: "exfiltrate" }));
 
@@ -238,15 +239,12 @@ describe("browser gateway", () => {
 describe("session subscription and replay", () => {
   async function subscribe(
     gateway: BrowserGateway,
-    token: string,
+    cookie: string,
     sessionId: string,
     after?: number,
   ) {
     const made = makeSocket();
-    await gateway.attach(made.socket, {
-      origin: "https://cc.example.test",
-      cookie: `cc_session=${token}`,
-    });
+    await gateway.attach(made.socket, { origin, cookie });
     made.sent.length = 0;
     gateway.handleMessage(
       made.socket,
@@ -260,13 +258,13 @@ describe("session subscription and replay", () => {
   }
 
   test("a subscription replays committed history after the offset, then goes live", async () => {
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: {
         events: [replayEvent(1), replayEvent(2), replayEvent(3, { type: "run.finished" })],
       },
     });
 
-    const { socket, sent } = await subscribe(gateway, token, "session-1");
+    const { socket, sent } = await subscribe(gateway, cookie, "session-1");
 
     expect(sent).toEqual([
       { type: "subscribed", sessionId: "session-1" },
@@ -298,11 +296,11 @@ describe("session subscription and replay", () => {
   });
 
   test("replay resumes from afterSessionSequence, not from zero", async () => {
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: { events: [replayEvent(1), replayEvent(2), replayEvent(3)] },
     });
 
-    const { sent } = await subscribe(gateway, token, "session-1", 2);
+    const { sent } = await subscribe(gateway, cookie, "session-1", 2);
 
     expect(sent[1]).toMatchObject({
       type: "session.events",
@@ -315,14 +313,14 @@ describe("session subscription and replay", () => {
     // §19.4's no-oracle rule applied to sessions: "someone else's" and "never
     // heard of it" must be the same answer, or the socket tells a probe which
     // session ids exist.
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: {
         owner: (sessionId) => (sessionId === "someone-elses" ? "owner-2" : undefined),
       },
     });
 
-    const refused = await subscribe(gateway, token, "someone-elses");
-    const unknown = await subscribe(gateway, token, "session-ghost");
+    const refused = await subscribe(gateway, cookie, "someone-elses");
+    const unknown = await subscribe(gateway, cookie, "session-ghost");
 
     expect(refused.sent).toEqual([{ type: "error", reason: "forbidden" }]);
     expect(unknown.sent).toEqual([{ type: "error", reason: "forbidden" }]);
@@ -334,14 +332,14 @@ describe("session subscription and replay", () => {
   });
 
   test("a retention gap answers resync_required but keeps the tail live", async () => {
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: {
         events: [replayEvent(4), replayEvent(5)],
         bounds: { watermark: 5, earliest: 4 },
       },
     });
 
-    const { sent } = await subscribe(gateway, token, "session-1", 0);
+    const { sent } = await subscribe(gateway, cookie, "session-1", 0);
 
     // The client asked from 0; the journal can serve from 4. Serving the tail
     // silently would look like the session began mid-run.
@@ -356,11 +354,11 @@ describe("session subscription and replay", () => {
   });
 
   test("an offset at or beyond the watermark gets an honest empty frame", async () => {
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: { events: [replayEvent(1)], bounds: { watermark: 1, earliest: 1 } },
     });
 
-    const { sent } = await subscribe(gateway, token, "session-1", 9);
+    const { sent } = await subscribe(gateway, cookie, "session-1", 9);
 
     // through carries the journal's truth (1), not the client's claim (9): the
     // client's own gap detection decides what to do about being ahead.
@@ -377,11 +375,11 @@ describe("session subscription and replay", () => {
     const many = Array.from({ length: BrowserGateway.REPLAY_BATCH_LIMIT + 5 }, (_, i) =>
       replayEvent(i + 1),
     );
-    const { gateway, token } = await setup({
+    const { gateway, cookie } = await setup({
       replay: { events: many, bounds: { watermark: many.length, earliest: 1 } },
     });
 
-    const { sent } = await subscribe(gateway, token, "session-1", 0);
+    const { sent } = await subscribe(gateway, cookie, "session-1", 0);
 
     // §12.6: bounded frames on a browser socket. A full batch promises another
     // frame; a short one ends the replay.
@@ -393,21 +391,21 @@ describe("session subscription and replay", () => {
   });
 
   test("a malformed offset is refused rather than coerced", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
 
     for (const bad of [-1, 1.5, "3", null]) {
-      const { sent, socket } = await subscribe(gateway, token, "session-1", bad as number);
+      const { sent, socket } = await subscribe(gateway, cookie, "session-1", bad as number);
       expect(sent).toEqual([{ type: "error", reason: "malformed" }]);
       expect(socket.data.subscriptions.size).toBe(0);
     }
   });
 
   test("live events reach every subscribed socket and only those", async () => {
-    const { gateway, token } = await setup();
+    const { gateway, cookie } = await setup();
 
-    const tabA = await subscribe(gateway, token, "session-1");
-    const tabB = await subscribe(gateway, token, "session-1");
-    const other = await subscribe(gateway, token, "session-2");
+    const tabA = await subscribe(gateway, cookie, "session-1");
+    const tabB = await subscribe(gateway, cookie, "session-1");
+    const other = await subscribe(gateway, cookie, "session-2");
 
     gateway.publish({ sessionId: "session-1", ...replayEvent(1) });
 

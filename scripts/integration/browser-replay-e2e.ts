@@ -134,7 +134,7 @@ async function browserClient(
 }> {
   const frames: BrowserFrame[] = [];
   const socket = new WebSocket(url, {
-    headers: { Origin: ORIGIN, Cookie: `cc_session=${cookie}` },
+    headers: { Origin: ORIGIN, Cookie: cookie },
   } as never);
 
   const opened = new Promise<void>((resolve, reject) => {
@@ -165,21 +165,21 @@ async function browserClient(
 const serverScript = `
 import { Database } from "bun:sqlite";
 import { CommandOutbox, migrate, Scheduler } from "${repoRoot}packages/control-db/src/index.ts";
-import { AuthService } from "${repoRoot}apps/control-server/src/auth/auth-service.ts";
-import { createSigner } from "${repoRoot}apps/control-server/src/auth/tokens.ts";
+import { createBetterAuth, signUpOwner } from "${repoRoot}apps/control-server/src/auth/better-auth.ts";
 import { createServer } from "${repoRoot}apps/control-server/src/server.ts";
 
 const db = new Database(${JSON.stringify(controlDbHost)});
 migrate(db);
 
-db.query("INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)")
-  .run("user-1", "owner", "hash", 1, Date.now());
+const auth = createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: [${JSON.stringify(ORIGIN)}] });
+await signUpOwner(auth, { username: "owner", password: "dev-password" });
+const ownerId = db.query("SELECT id FROM user WHERE username = 'owner'").get().id;
+
 // Ownership (§12.5): this owner's runner. A session inherits ownership from
 // the runner that owns its work, so the row has to exist before any dispatch.
 db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)")
-  .run("runner-a", "user-1", 1);
+  .run("runner-a", ownerId, 1);
 
-const auth = new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(47)) });
 const outbox = new CommandOutbox(db);
 
 const handle = createServer({
@@ -192,7 +192,15 @@ const handle = createServer({
   outbox,
 });
 
-console.log("TOKEN " + await auth.issueAccessToken("user-1"));
+// A real sign-in: the cookie pair the harness sends on the browser upgrade.
+const signIn = await auth.handler(new Request("http://control.test/api/auth/sign-in/username", {
+  method: "POST",
+  headers: { "content-type": "application/json", origin: ${JSON.stringify(ORIGIN)} },
+  body: JSON.stringify({ username: "owner", password: "dev-password" }),
+}));
+const cookiePair = signIn.headers.get("set-cookie").split(";")[0];
+
+console.log("COOKIE " + cookiePair);
 console.log("READY " + handle.server.port);
 
 Bun.serve({
@@ -273,7 +281,7 @@ try {
   try {
     const out = await serverOut.until("READY ", 30_000);
     port = Number(out.split("READY ")[1]!.split("\n")[0]!.trim());
-    cookie = out.split("TOKEN ")[1]!.split("\n")[0]!.trim();
+    cookie = out.split("COOKIE ")[1]!.split("\n")[0]!.trim();
   } catch (error) {
     throw new Error(`${(error as Error).message}\nserver stderr: ${serverErr.text.slice(-2000)}`);
   }

@@ -103,14 +103,14 @@ type RunnerHandle = {
 const serverScript = `
 import { Database } from "bun:sqlite";
 import { migrate } from "${repoRoot}packages/control-db/src/db.ts";
-import { AuthService } from "${repoRoot}apps/control-server/src/auth/auth-service.ts";
-import { createSigner } from "${repoRoot}apps/control-server/src/auth/tokens.ts";
+import { createBetterAuth } from "${repoRoot}apps/control-server/src/auth/better-auth.ts";
+
 import { createServer } from "${repoRoot}apps/control-server/src/server.ts";
 
 const db = new Database(":memory:");
 migrate(db);
 
-const auth = new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(21)) });
+const auth = createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: ["https://cc.example.test"] });
 
 const handle = createServer({
   db,

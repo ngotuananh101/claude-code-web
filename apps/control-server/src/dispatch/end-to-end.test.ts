@@ -5,8 +5,7 @@ import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
 import { ReconnectLoop } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
 import { asCommandEnvelope } from "../../../runner/src/execution/envelope.ts";
-import { AuthService } from "../auth/auth-service.ts";
-import { createSigner } from "../auth/tokens.ts";
+import { createBetterAuth } from "../auth/better-auth.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -22,7 +21,6 @@ import { createServer, type ServerHandle } from "../server.ts";
  * back, and is not executed twice when it comes back again.
  */
 
-const secret = new Uint8Array(32).fill(29);
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
@@ -36,10 +34,9 @@ afterEach(() => {
 });
 
 function startServer(db: Database, outbox: CommandOutbox): string {
-  const auth = new AuthService({ db, signer: createSigner(secret) });
   handle = createServer({
     db,
-    auth,
+    auth: createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: [origin] }),
     allowedOrigins: [origin],
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"

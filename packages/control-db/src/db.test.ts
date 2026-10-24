@@ -4,9 +4,7 @@ import { migrate } from "./db.ts";
 
 function tableNames(db: Database): string[] {
   return (
-    db
-      .query("SELECT name FROM sqlite_master WHERE type = 'table'")
-      .all() as Array<{ name: string }>
+    db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>
   ).map((row) => row.name);
 }
 
@@ -27,9 +25,9 @@ describe("migrate", () => {
     const db = new Database(":memory:");
     migrate(db);
 
-    const columns = (
-      db.query("PRAGMA table_info(user)").all() as Array<{ name: string }>
-    ).map((column) => column.name);
+    const columns = (db.query("PRAGMA table_info(user)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
     expect(columns).toContain("username");
   });
 

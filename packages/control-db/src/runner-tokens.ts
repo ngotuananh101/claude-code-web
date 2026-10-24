@@ -63,9 +63,7 @@ export function createRunnerToken(
 
 export function listRunners(db: Database): ListedRunner[] {
   return db
-    .prepare(
-      "SELECT id, created_at, revoked_at FROM runners ORDER BY created_at DESC",
-    )
+    .prepare("SELECT id, created_at, revoked_at FROM runners ORDER BY created_at DESC")
     .all()
     .map((row) => {
       const record = row as { id: string; created_at: number; revoked_at: number | null };
