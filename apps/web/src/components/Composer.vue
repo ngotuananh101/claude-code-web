@@ -1,32 +1,19 @@
 <script setup lang="ts">
 import { Input } from "@/components/ui/input";
 
-// A disabled stub on purpose: no dispatch API exists yet (§9 comes next).
-// Saying so beats a textarea that pretends to work.
+// A disabled stub on purpose: no dispatch API exists yet (§11 comes next).
+// Saying so beats a textarea that pretends to work. The card is the shell the
+// real composer lands in — project/branch chips, permission and model
+// pickers, the send button — so §11 only has to fill it.
 </script>
 
 <template>
-  <footer class="composer">
+  <div class="rounded-xl border border-border bg-card shadow-sm">
     <Input
       disabled
-      class="composer-box"
-      placeholder="Sending prompts arrives with the dispatch API — not wired yet."
+      class="h-10 rounded-xl border-0 bg-transparent px-4 text-[13px] text-muted-foreground shadow-none opacity-100 focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100"
+      placeholder="Prompt dispatch arrives with the run API — this box lights up then."
       aria-label="Prompt composer (not wired yet)"
     />
-  </footer>
+  </div>
 </template>
-
-<style scoped>
-.composer {
-  padding: 14px 28px 18px;
-  border-top: 1px solid var(--border);
-}
-
-/* The honest notice stays fully readable: the input's own disabled:opacity-50
-   would dim it past legibility, and this unlayered rule outranks it. */
-.composer-box {
-  opacity: 1;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-</style>

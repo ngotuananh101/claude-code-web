@@ -34,98 +34,42 @@ const emptyCopy = computed(() =>
 </script>
 
 <template>
-  <div class="journal">
-    <p v-if="needsResync" class="repair">
+  <div class="min-h-0 flex-1 overflow-y-auto pt-2.5 pr-7 pb-6">
+    <p
+      v-if="needsResync"
+      class="mt-4.5 ml-5 border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
+    >
       The journal is being repaired. Retention removed history this view
       trusted, so the transcript is restarting from the earliest surviving
       event.
     </p>
 
-    <p v-else-if="events.length === 0" class="empty">{{ emptyCopy }}</p>
+    <p v-else-if="events.length === 0" class="mt-11 ml-5 mb-11 text-sm text-muted-foreground">
+      {{ emptyCopy }}
+    </p>
 
     <template v-for="row in rows" :key="row.kind === 'event' ? row.event.sessionSequence : row.key">
-      <div v-if="row.kind === 'run'" class="run-row">
+      <div
+        v-if="row.kind === 'run'"
+        class="mt-5.5 mb-1.5 ml-5 flex items-center gap-3.5 text-xs text-muted-foreground"
+      >
         <span class="font-mono">{{ row.runId }}</span>
+        <span class="h-px flex-1 bg-border" aria-hidden="true" />
       </div>
-      <div v-else class="event-row">
-        <span class="seq font-mono" :title="row.event.occurredAt">{{ row.event.sessionSequence }}</span>
-        <div class="event-body">
-          <span class="event-type font-mono">{{ row.event.type }}</span>
-          <pre class="payload font-mono">{{ JSON.stringify(row.event.payload, null, 2) }}</pre>
+      <div v-else class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
+        <span
+          class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
+          :title="row.event.occurredAt"
+        >
+          {{ row.event.sessionSequence }}
+        </span>
+        <div>
+          <span class="font-mono text-xs text-muted-foreground">{{ row.event.type }}</span>
+          <pre class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground">{{
+            JSON.stringify(row.event.payload, null, 2)
+          }}</pre>
         </div>
       </div>
     </template>
   </div>
 </template>
-
-<style scoped>
-.journal {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 28px 24px 0;
-}
-
-.repair {
-  margin: 18px 0 0 28px;
-  padding: 10px 14px;
-  background: color-mix(in oklab, var(--destructive) 10%, transparent);
-  border-left: 2px solid var(--destructive);
-  color: var(--destructive);
-  font-size: 13px;
-}
-
-.empty {
-  margin: 44px 28px;
-  color: var(--muted-foreground);
-  font-size: 14px;
-}
-
-.run-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 22px 0 6px 28px;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-
-.run-row::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
-.event-row {
-  display: grid;
-  grid-template-columns: 76px 1fr;
-  padding: 7px 0;
-}
-
-.event-row:hover {
-  background: var(--muted);
-}
-
-.seq {
-  text-align: right;
-  padding-right: 18px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.9;
-  user-select: all;
-}
-
-.event-type {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-
-.payload {
-  margin: 2px 0 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--foreground);
-}
-</style>
