@@ -128,14 +128,19 @@ describe("browser gateway", () => {
     expect(result).toEqual({ ok: false, reason: "origin_not_allowed" });
   });
 
-  test("a missing origin is refused rather than treated as same-origin", async () => {
+  test("a missing origin is a same-origin fetch: the cookie still decides", async () => {
     const { gateway, token } = await setup();
 
-    // Non-browser clients can omit Origin entirely. Treating that as trusted
-    // would make the allowlist opt-out.
-    const result = await gateway.authorize({ cookie: `cc_session=${token}` });
+    // A same-origin GET fetch never carries an Origin header, and authorize
+    // now also serves those (GET /api/sessions). Missing Origin passes the
+    // origin gate; the cookie remains the whole authentication. The WS
+    // upgrade route keeps its own mandatory allowlist check before calling
+    // authorize, so a non-browser handshake is still refused there (§19.1).
+    const sameOrigin = await gateway.authorize({ cookie: `cc_session=${token}` });
+    expect(sameOrigin).toEqual({ ok: true, userId: "user-1" });
 
-    expect(result).toEqual({ ok: false, reason: "origin_not_allowed" });
+    const noCookie = await gateway.authorize({});
+    expect(noCookie).toEqual({ ok: false, reason: "unauthenticated" });
   });
 
   test("an allowed origin without a cookie is refused", async () => {

@@ -300,13 +300,19 @@ async function handleLogin(
 
   const token = await options.auth.issueAccessToken(row.id);
 
+  // Secure only when the request is actually https: on a plain-http origin
+  // (local dev, self-hosted LAN) a Secure cookie is dropped by the browser,
+  // which would turn every login into a silent no-op. The flag still does
+  // its real work wherever TLS terminates at this server.
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       "Content-Type": "application/json",
       // ADR-0001: HttpOnly so script cannot read it, SameSite=Lax so a
       // cross-site form post does not carry it.
-      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}`,
+      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
     },
   });
 }

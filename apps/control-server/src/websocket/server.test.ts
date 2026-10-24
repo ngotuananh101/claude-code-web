@@ -18,7 +18,12 @@ const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
 
-async function start(overrides: { allowedOrigins?: string[] } = {}) {
+async function start(
+  overrides: {
+    allowedOrigins?: string[];
+    verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
+  } = {},
+) {
   const db = new Database(":memory:");
   migrate(db);
   db.query(
@@ -34,6 +39,7 @@ async function start(overrides: { allowedOrigins?: string[] } = {}) {
       credential === "cck_valid"
         ? { ok: true, runnerId: "runner-a", ownerId: "user-1" }
         : { ok: false, reason: "unknown" },
+    ...(overrides.verifyPassword ? { verifyPassword: overrides.verifyPassword } : {}),
   });
 
   return {
@@ -218,6 +224,29 @@ describe("control server routes", () => {
 
     expect(bad.status).toBe(401);
     expect(bad.headers.get("set-cookie")).toBeNull();
+  });
+
+  test("the login cookie is Secure only when the request itself is https", async () => {
+    const { url, db } = await start({
+      verifyPassword: async (plain, hash) => plain === hash,
+    });
+    db.query("UPDATE users SET password_hash = ? WHERE id = ?").run("correct", "user-1");
+
+    const ok = await fetch(`${url}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify({ username: "owner", password: "correct" }),
+    });
+
+    // The test server is plain http, as are local dev and self-hosted LAN
+    // deployments. A Secure cookie on a non-https origin is dropped by the
+    // browser entirely — login would 200 and never stick. The flag still
+    // rides on https requests, where it does its real work.
+    expect(ok.status).toBe(200);
+    const cookie = ok.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Secure");
   });
 
   test("a login from a disallowed origin is refused before the password is checked", async () => {

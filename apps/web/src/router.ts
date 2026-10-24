@@ -14,7 +14,10 @@ export const router = createRouter({
   ],
 });
 
-router.beforeEach(async () => {
+router.beforeEach(async (to) => {
+  // The login route must not probe: an unauthorized visitor landing on it
+  // would have the guard redirect to /login from /login, forever.
+  if (to.path === "/login") return true;
   const authorized = await loadSessions();
   return authorized ? true : "/login";
 });

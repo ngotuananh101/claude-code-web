@@ -78,7 +78,11 @@ export class BrowserGateway {
   async authorize(input: AuthorizeInput): Promise<BrowserAuthorizeResult> {
     // Order matters: the Origin check runs first so a foreign page learns
     // nothing about whether the cookie it caused the browser to send is valid.
-    if (!input.origin || !this.#allowedOrigins.has(input.origin)) {
+    // A missing Origin is a same-origin GET fetch — browsers send no Origin
+    // header on those, and authorize now also serves such reads — so it passes
+    // the gate and the cookie decides. The WS upgrade route checks the
+    // allowlist itself before calling authorize (§19.1).
+    if (input.origin !== undefined && !this.#allowedOrigins.has(input.origin)) {
       return { ok: false, reason: "origin_not_allowed" };
     }
 
