@@ -3,7 +3,8 @@
  *
  * Wires the surfaces onto one `Bun.serve` instance:
  *
- *   ALL  /api/auth/*    better-auth handler (sign-in/out, sessions), Origin-gated
+ *   POST /auth/login    owner login, Origin-checked, sets an HttpOnly cookie
+ *   POST /auth/logout   revokes the login and closes its live sockets
  *   GET  /healthz       liveness, no configuration in the response
  *   WS   /ws/runner     runner transport, credential in a header
  *   WS   /ws/browser    owner transport, Origin allowlist + session cookie
@@ -29,9 +30,13 @@ import {
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
-import { type BetterAuthInstance, createSessionResolver } from "./auth/better-auth.ts";
+import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
-import { BrowserGateway, type BrowserSocketData } from "./websocket/browser/browser-gateway.ts";
+import {
+  BrowserGateway,
+  type BrowserSocketData,
+  type SessionResolver,
+} from "./websocket/browser/browser-gateway.ts";
 import { runnerWebSocket, upgradeRunner } from "./websocket/runner/route.ts";
 import { RunnerGateway, type RunnerSocketData } from "./websocket/runner/runner-gateway.ts";
 
@@ -41,10 +46,15 @@ export type RunnerCredentialCheck =
 
 export type ServerOptions = {
   db: Database;
-  /** The better-auth instance; mounted at /api/auth/* and read by the gateway. */
-  auth: BetterAuthInstance;
+  /** Owner auth (ADR-0001): signs access tokens, checks them against the DB. */
+  auth: AuthService;
   allowedOrigins: string[];
   verifyRunnerCredential: (credential: string) => RunnerCredentialCheck;
+  /**
+   * Password check for /auth/login. Injectable so tests can answer without
+   * hashing; production gets `verifyPassword` from auth/password.ts.
+   */
+  verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
   /**
    * The command outbox. When supplied, a runner that reaches `ready` is drained
    * immediately, so work queued while it was away goes out as part of the
@@ -70,7 +80,29 @@ export type ServerHandle = {
   stop(): void;
 };
 
-const AUTH_MOUNT = "/api/auth/";
+const COOKIE_NAME = "cc_session";
+const ACCESS_TTL_SECONDS = 15 * 60;
+
+/**
+ * The Cookie header → user id seam the gateway checks on every socket and API
+ * read. `AuthService.authenticate` compares the token's version against the
+ * database, so this is a live-session check, not a signature check (ADR-0001).
+ */
+function createJwtSessionResolver(auth: AuthService): SessionResolver {
+  return async (cookie) => {
+    const result = await auth.authenticate(readCookie(cookie, COOKIE_NAME));
+    return result.ok ? result.userId : null;
+  };
+}
+
+function readCookie(cookie: string | undefined, name: string): string | undefined {
+  if (cookie === undefined) return undefined;
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(`${name}=`)) return trimmed.slice(name.length + 1);
+  }
+  return undefined;
+}
 
 export function createServer(options: ServerOptions): ServerHandle {
   // The gateway and the dispatcher call each other: the gateway reports
@@ -84,7 +116,7 @@ export function createServer(options: ServerOptions): ServerHandle {
   // without a later-binding dance: browser replay (§12.5) is downstream of
   // journaling (§12.2), not the other way around.
   const browserGateway = new BrowserGateway({
-    resolveSession: createSessionResolver(options.auth),
+    resolveSession: createJwtSessionResolver(options.auth),
     allowedOrigins: options.allowedOrigins,
     resolveOwner: (sessionId) => sessionOwner(options.db, sessionId),
     readReplay: (sessionId, after, limit) =>
@@ -94,11 +126,6 @@ export function createServer(options: ServerOptions): ServerHandle {
       earliest: sessionEarliest(options.db, sessionId),
     }),
   });
-
-  // §12.5: a sign-out must reach the sockets it opened, not only the next
-  // request. The gateway did not exist when the auth instance was built, so the
-  // hook registers late; it is read at fire time.
-  options.auth.onSessionDelete((userId) => browserGateway.revoke(userId));
 
   const runnerGateway = new RunnerGateway({
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
@@ -167,18 +194,12 @@ export function createServer(options: ServerOptions): ServerHandle {
         return Response.json({ ok: true, protocolVersion: PROTOCOL_VERSION });
       }
 
-      // better-auth's whole surface, mounted unchanged. The Origin gate wraps
-      // it because the library force-disables its own origin check under test
-      // runners and skips CSRF validation for cookie-less requests — the
-      // server-level allowlist is the control production actually runs on
-      // (§19.1). A missing Origin passes through: same-origin GET fetches carry
-      // none, and the session cookie is still the whole authentication.
-      if (url.pathname.startsWith(AUTH_MOUNT)) {
-        const origin = request.headers.get("origin");
-        if (origin !== null && !allowed.has(origin)) {
-          return new Response("forbidden", { status: 403 });
-        }
-        return options.auth.handler(request);
+      if (url.pathname === "/auth/login" && request.method === "POST") {
+        return handleLogin(request, options, allowed);
+      }
+
+      if (url.pathname === "/auth/logout" && request.method === "POST") {
+        return handleLogout(request, options, allowed, browserGateway);
       }
 
       if (url.pathname === "/api/runners" && request.method === "POST") {
@@ -270,6 +291,100 @@ export function createServer(options: ServerOptions): ServerHandle {
 
 function isBrowserSocket(data: unknown): data is BrowserSocketData {
   return typeof data === "object" && data !== null && "userId" in data;
+}
+
+async function handleLogin(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+): Promise<Response> {
+  // Origin first: a correct password from a hostile page must not mint a
+  // session, and the check must not depend on the password being wrong.
+  const origin = request.headers.get("origin") ?? undefined;
+  if (!origin || !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("bad request", { status: 400 });
+  }
+
+  const record = body as Record<string, unknown>;
+  const username = record["username"];
+  const password = record["password"];
+  if (typeof username !== "string" || typeof password !== "string") {
+    return new Response("bad request", { status: 400 });
+  }
+
+  const row = options.db
+    .query("SELECT id, password_hash FROM users WHERE username = ?")
+    .get(username) as { id: string; password_hash: string } | null;
+
+  // One response for "no such user" and "wrong password": distinguishing them
+  // turns the endpoint into a username oracle.
+  const verify = options.verifyPassword ?? (async () => false);
+  const ok = row ? await verify(password, row.password_hash) : false;
+  if (!row || !ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const token = await options.auth.issueAccessToken(row.id);
+
+  // Secure only when the request is actually https: on a plain-http origin
+  // (local dev, self-hosted LAN) a Secure cookie is dropped by the browser,
+  // which would turn every login into a silent no-op. The flag still does
+  // its real work wherever TLS terminates at this server.
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      // ADR-0001: HttpOnly so script cannot read it, SameSite=Lax so a
+      // cross-site form post does not carry it.
+      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
+    },
+  });
+}
+
+/**
+ * Sign-out (§12.5 + ADR-0001). Bumping the token version kills every
+ * outstanding access token with this one request; `revoke` closes the live
+ * sockets the login opened so a signed-out tab stops streaming immediately.
+ */
+async function handleLogout(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+): Promise<Response> {
+  const origin = request.headers.get("origin") ?? undefined;
+  if (origin !== undefined && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  options.auth.revokeAllSessions(authorized.userId);
+  browserGateway.revoke(authorized.userId);
+
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Set-Cookie": `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+    },
+  });
 }
 
 /**

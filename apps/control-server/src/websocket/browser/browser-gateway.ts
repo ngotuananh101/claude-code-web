@@ -8,9 +8,10 @@
  *     says so explicitly, and a missing Origin is refused rather than trusted —
  *     otherwise a non-browser client could opt out of the check.
  *  2. **Session cookie.** Verified through the injected `resolveSession`, which
- *     delegates to better-auth; the gateway never sees cookie names or tokens,
- *     only "this header belongs to user X". Sessions are read from the table on
- *     every check, so revocation applies to sockets too.
+ *     delegates to the auth core; the gateway never sees cookie names or
+ *     tokens, only "this header belongs to user X". The token's version is
+ *     compared against the database on every check, so revocation applies to
+ *     sockets too (ADR-0001).
  *
  * A third control guards the subscription itself (§12.5): ownership. The
  * journal only replays to the session's owner, and "not yours" answers exactly
@@ -22,7 +23,12 @@
  */
 
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import type { SessionResolver } from "../../auth/better-auth.ts";
+
+/**
+ * Resolves a raw Cookie header to a user id, or null when unauthenticated.
+ * The server wires this to the auth core; the gateway only trusts its answer.
+ */
+export type SessionResolver = (cookie: string | undefined) => Promise<string | null>;
 
 export type BrowserSocketData = {
   userId: string;

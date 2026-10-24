@@ -165,15 +165,18 @@ async function browserClient(
 const serverScript = `
 import { Database } from "bun:sqlite";
 import { CommandOutbox, migrate, Scheduler } from "${repoRoot}packages/control-db/src/index.ts";
-import { createBetterAuth, signUpOwner } from "${repoRoot}apps/control-server/src/auth/better-auth.ts";
+import { AuthService } from "${repoRoot}apps/control-server/src/auth/auth-service.ts";
+import { createSigner } from "${repoRoot}apps/control-server/src/auth/tokens.ts";
 import { createServer } from "${repoRoot}apps/control-server/src/server.ts";
 
 const db = new Database(${JSON.stringify(controlDbHost)});
 migrate(db);
 
-const auth = createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: [${JSON.stringify(ORIGIN)}] });
-await signUpOwner(auth, { username: "owner", password: "dev-password" });
-const ownerId = db.query("SELECT id FROM user WHERE username = 'owner'").get().id;
+const auth = new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(11)) });
+const ownerId = crypto.randomUUID();
+db.query(
+  "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, 1, ?)",
+).run(ownerId, "owner", "hash", Date.now());
 
 // Ownership (§12.5): this owner's runner. A session inherits ownership from
 // the runner that owns its work, so the row has to exist before any dispatch.
@@ -192,13 +195,8 @@ const handle = createServer({
   outbox,
 });
 
-// A real sign-in: the cookie pair the harness sends on the browser upgrade.
-const signIn = await auth.handler(new Request("http://control.test/api/auth/sign-in/username", {
-  method: "POST",
-  headers: { "content-type": "application/json", origin: ${JSON.stringify(ORIGIN)} },
-  body: JSON.stringify({ username: "owner", password: "dev-password" }),
-}));
-const cookiePair = signIn.headers.get("set-cookie").split(";")[0];
+// The exact cookie pair /auth/login would set: the signed token itself.
+const cookiePair = "cc_session=" + await auth.issueAccessToken(ownerId);
 
 console.log("COOKIE " + cookiePair);
 console.log("READY " + handle.server.port);

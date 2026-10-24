@@ -3,7 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import { ReconnectLoop } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
-import { createBetterAuth } from "../auth/better-auth.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -32,7 +33,7 @@ function startServer(): string {
 
   handle = createServer({
     db,
-    auth: createBetterAuth(db, { baseURL: "http://control.test", trustedOrigins: [origin] }),
+    auth: new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(11)) }),
     allowedOrigins: [origin],
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"

@@ -88,7 +88,7 @@ waiting on the dispatch API, and approvals (§13) after that.
 Architecture decisions that needed more than a table row live in
 [`docs/adr/`](docs/adr/):
 
-- [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens (superseded 2026-10-24: better-auth, ADR-015 in ARCHITECTURE.md §24)
+- [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens (reinstated 2026-10-25 after a one-day better-auth interlude)
 - [ADR-0002](docs/adr/0002-toolchain.md) — Fedora target, lockfile-over-pins policy
 - [ADR-0003](docs/adr/0003-provider-gateway.md) — provider auth via a private-LAN Anthropic-compatible gateway; never touches the control plane
 
@@ -98,7 +98,7 @@ Three credentials, three boundaries — none crosses another:
 
 | Credential | Held by | Never reaches |
 | --- | --- | --- |
-| Owner session (better-auth cookie) | Browser (HttpOnly cookie) | Runner |
+| Owner session (`cc_session` JWT cookie) | Browser (HttpOnly cookie) | Runner |
 | Runner credential | Runner daemon | Browser, worker processes |
 | Provider token (gateway) | Runner host config | Control Server, browser, journal |
 

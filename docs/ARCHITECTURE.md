@@ -905,7 +905,8 @@ HTTP là command entrypoint từ browser; WSS chủ yếu phục vụ subscribe/
 | Method | Endpoint | Trách nhiệm |
 | --- | --- | --- |
 | GET | `/healthz` | Liveness không lộ nội bộ |
-| `ANY` | `/api/auth/*` | better-auth mount (sign-in/sign-out/session); Origin allowlist bọc ngoài |
+| `POST` | `/auth/login` | Username/password (argon2id), set cookie `cc_session`; một đáp án duy nhất cho mọi credential failure (no oracle); Origin bắt buộc thuộc allowlist |
+| `POST` | `/auth/logout` | Bump `token_version` + revoke socket subscriptions + clear cookie; Origin tùy chọn (same-origin) |
 | GET | `/api/runners` | Danh sách runner của owner (id + lifecycle, không secret) |
 | POST | `/api/runners` | Mint one-time connector token (hiển thị một lần, chỉ lưu hash) |
 | POST | `/api/runners/:id/revoke` | Revoke credential/dispatch |
@@ -968,7 +969,7 @@ Không trả raw stack traces, credentials hoặc environment. Retryable transpo
 
 | Bảng | Trách nhiệm |
 | --- | --- |
-| `user`, `session`, `account`, `verification` | Owner identity và login lifecycle, do better-auth quản (ADR-015) |
+| `users` | Owner identity: username unique, argon2id `password_hash`, `token_version` cho stateful revocation (ADR-0001) |
 | `runners` | Stable identity, owner, lifecycle (created/revoked) |
 | `runner_credentials` | SHA-256 của connector token; plaintext chỉ tồn tại trong response mint |
 | `runner_connections` | Boot/generation, heartbeat, gateway ownership |
@@ -1313,7 +1314,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | ADR-012 | No mandatory broker/Temporal | Giữ vận hành gọn, có điểm mở rộng rõ |
 | ADR-013 | One Runner owner/workspace | Tránh shared-filesystem split-brain |
 | ADR-014 | Host-native Runner ưu tiên | Tái sử dụng user config và toolchain ít sai khác |
-| ADR-015 | better-auth cho owner auth; Runner là connector với token mint từ web (2026-10-24) | Không tự viết password/session crypto; token hiển thị một lần, DB chỉ giữ hash; systemd unit không chứa secret |
+| ADR-015 | Runner là connector với token mint từ web (2026-10-24); phần owner auth (better-auth) đã đảo ngược 2026-10-25 — quay lại ADR-0001 | Token hiển thị một lần, DB chỉ giữ hash; systemd unit không chứa secret |
 
 ### 24.2. Cần chốt khi bắt đầu implementation
 

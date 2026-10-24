@@ -14,15 +14,31 @@ export function migrate(db: Database): void {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Owner identity moved to better-auth (ADR-0002): the hand-rolled `users` /
-  // `auth_sessions` tables are retired, and enrollment is replaced by
-  // web-minted connector tokens, retiring `enrollments` with it. DROP IF
-  // EXISTS keeps existing databases from carrying dead tables; fresh ones
-  // never create them.
+  // Owner identity is ours again (ADR-0001, reinstated 2026-10-25): the
+  // better-auth tables are retired along with the enrollment they replaced.
+  // DROP IF EXISTS keeps existing databases from carrying dead tables; fresh
+  // ones never create them.
   db.exec(`
     DROP TABLE IF EXISTS enrollments;
+    DROP TABLE IF EXISTS verification;
+    DROP TABLE IF EXISTS account;
+    DROP TABLE IF EXISTS session;
+    DROP TABLE IF EXISTS user;
     DROP TABLE IF EXISTS auth_sessions;
-    DROP TABLE IF EXISTS users;
+  `);
+
+  // The single owner account. `token_version` is the revocation lever: a
+  // signed token names the version it was minted under, and every check
+  // compares that against this row (ADR-0001).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT PRIMARY KEY,
+      username      TEXT NOT NULL UNIQUE,
+      -- A maintained library's output, never hand-rolled (§19.1).
+      password_hash TEXT NOT NULL,
+      token_version INTEGER NOT NULL DEFAULT 1,
+      created_at    INTEGER NOT NULL
+    );
   `);
 
   db.exec(`
@@ -126,74 +142,6 @@ export function migrate(db: Database): void {
       ON active_runs (runner_id);
   `);
 
-  // better-auth's tables (§6, ADR-0002). The library owns web authentication;
-  // this DDL mirrors what its generator emits for SQLite with the username
-  // plugin. Every column is dynamically typed in SQLite, so the declarations
-  // are documentation plus NOT NULL/UNIQUE enforcement — the library writes
-  // whatever shape it reads back.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user (
-      id            TEXT PRIMARY KEY,
-      name          TEXT NOT NULL,
-      email         TEXT NOT NULL UNIQUE,
-      emailVerified INTEGER NOT NULL,
-      image         TEXT,
-      createdAt     TEXT NOT NULL,
-      updatedAt     TEXT NOT NULL,
-      username      TEXT UNIQUE
-    );
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS session (
-      id        TEXT PRIMARY KEY,
-      expiresAt TEXT NOT NULL,
-      token     TEXT NOT NULL UNIQUE,
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL,
-      ipAddress TEXT,
-      userAgent TEXT,
-      userId    TEXT NOT NULL REFERENCES user (id)
-    );
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS account (
-      id                    TEXT PRIMARY KEY,
-      accountId             TEXT NOT NULL,
-      providerId            TEXT NOT NULL,
-      userId                TEXT NOT NULL REFERENCES user (id),
-      accessToken           TEXT,
-      refreshToken          TEXT,
-      idToken               TEXT,
-      accessTokenExpiresAt  INTEGER,
-      refreshTokenExpiresAt INTEGER,
-      scope                 TEXT,
-      password              TEXT,
-      createdAt             TEXT NOT NULL,
-      updatedAt             TEXT NOT NULL
-    );
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS verification (
-      id         TEXT PRIMARY KEY,
-      identifier TEXT NOT NULL,
-      value      TEXT NOT NULL,
-      expiresAt  TEXT NOT NULL,
-      createdAt  TEXT NOT NULL,
-      updatedAt  TEXT NOT NULL
-    );
-  `);
-
-  // The durable event journal (§12.1, §12.2). Events arrive at-least-once, so
-  // both identities are unique: the event id (dedup after a lost ACK) and the
-  // (attempt, local sequence) position (the transcript's order). A conflicting
-  // duplicate is refused and audited, never overwritten.
-  //
-  // `session_sequence` is allocated at ingest, inside the inserting
-  // transaction: the browser replays per session (§12.5), and the offset it
-  // resumes from must not depend on other sessions' traffic.
   db.exec(`
     CREATE TABLE IF NOT EXISTS run_events (
       event_id         TEXT PRIMARY KEY,

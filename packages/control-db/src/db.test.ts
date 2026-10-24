@@ -9,26 +9,29 @@ function tableNames(db: Database): string[] {
 }
 
 describe("migrate", () => {
-  test("creates the better-auth tables", () => {
+  test("creates the owner and runner tables", () => {
     const db = new Database(":memory:");
     migrate(db);
     const names = tableNames(db);
 
-    // The exact set better-auth's own generator emits for SQLite with the
-    // username plugin: user, session, account, verification.
-    for (const table of ["user", "session", "account", "verification"]) {
+    // The owner table (ADR-0001) plus the connector model (ADR-015). The
+    // better-auth tables are dropped, not created.
+    for (const table of ["users", "runners", "runner_credentials"]) {
       expect(names).toContain(table);
+    }
+    for (const gone of ["user", "session", "account", "verification", "auth_sessions"]) {
+      expect(names).not.toContain(gone);
     }
   });
 
-  test("better-auth user table carries the username column", () => {
+  test("users carries the token_version column", () => {
     const db = new Database(":memory:");
     migrate(db);
 
-    const columns = (db.query("PRAGMA table_info(user)").all() as Array<{ name: string }>).map(
+    const columns = (db.query("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(
       (column) => column.name,
     );
-    expect(columns).toContain("username");
+    expect(columns).toContain("token_version");
   });
 
   test("is idempotent", () => {

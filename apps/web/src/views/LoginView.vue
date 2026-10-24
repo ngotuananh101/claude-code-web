@@ -5,7 +5,6 @@ import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { authClient } from "../lib/auth-client.ts";
 
 const router = useRouter();
 const username = ref("");
@@ -15,14 +14,15 @@ const busy = ref(false);
 async function submit(): Promise<void> {
   busy.value = true;
   try {
-    const { error } = await authClient.signIn.username({
-      username: username.value,
-      password: password.value,
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username.value, password: password.value }),
     });
-    if (error !== null) {
-      // The server's own message, which stays non-committal for credential
-      // failures — the form still learns nothing about the account.
-      toast.error(error.message ?? "Đăng nhập không thành công.");
+    if (!response.ok) {
+      // The server answers every credential failure identically (no username
+      // oracle); the toast carries that one message.
+      toast.error("Sai tên đăng nhập hoặc mật khẩu.");
       return;
     }
     await router.push("/");

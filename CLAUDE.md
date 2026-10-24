@@ -48,13 +48,11 @@ through `test:integration:docker`). Web build: `cd apps/web && bun run build`.
 
 Control Server (`bun apps/control-server/src/index.ts`) reads:
 
-- `BETTER_AUTH_SECRET` — required, ≥ 32 chars (better-auth signing key).
-- `BETTER_AUTH_URL` — optional public base URL; defaults to `http://localhost:<port>`.
+- `CC_WEB_JWT_SECRET` — required, ≥ 32 chars (HS256 signing key for `cc_session` access tokens).
 - `CC_WEB_ALLOWED_ORIGINS` — required, comma-separated browser origins.
 - `CC_WEB_PORT` — default 8787. `CC_WEB_DB` — default `./data/control.sqlite`.
 
-Seed an owner (username: 3–30 chars of letters/digits/dots/underscores; the
-password arrives on stdin, never argv):
+Seed an owner (the password arrives on stdin, never argv):
 
 ```sh
 echo -n "…" | bun scripts/seed-user.ts <username>

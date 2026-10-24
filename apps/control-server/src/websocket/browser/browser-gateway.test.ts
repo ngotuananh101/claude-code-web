@@ -2,7 +2,8 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { createBetterAuth, createSessionResolver, signUpOwner } from "../../auth/better-auth.ts";
+import { AuthService } from "../../auth/auth-service.ts";
+import { createSigner } from "../../auth/tokens.ts";
 import {
   BrowserGateway,
   type BrowserGatewayOptions,
@@ -71,15 +72,17 @@ function replayEvent(
   };
 }
 
+const jwtSecret = new Uint8Array(32).fill(11);
+
 async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarness } = {}) {
   const db = new Database(":memory:");
   migrate(db);
 
-  const auth = createBetterAuth(db, {
-    baseURL: "http://control.test",
-    trustedOrigins: [origin],
-  });
-  await signUpOwner(auth, { username: "owner", password: "dev-password" });
+  const auth = new AuthService({ db, signer: createSigner(jwtSecret) });
+  const userId = crypto.randomUUID();
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, 1, ?)",
+  ).run(userId, "owner", "hash", Date.now());
 
   const replay = overrides.replay ?? {};
   const events = replay.events ?? [];
@@ -88,11 +91,17 @@ async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarn
     earliest: events.length > 0 ? events[0]!.sessionSequence : 0,
   };
 
-  const userId = (db.query("SELECT id FROM user WHERE username = 'owner'").get() as { id: string })
-    .id;
-
   const gatewayOptions: BrowserGatewayOptions = {
-    resolveSession: createSessionResolver(auth),
+    // The same seam the server wires: cookie header -> live-session answer.
+    resolveSession: async (cookie) => {
+      const token = cookie
+        ?.split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith("cc_session="))
+        ?.slice("cc_session=".length);
+      const result = await auth.authenticate(token);
+      return result.ok ? result.userId : null;
+    },
     allowedOrigins: overrides.allowedOrigins ?? [origin],
     // §12.5 defaults: this user owns everything the tests subscribe to, unless
     // a test says otherwise.
@@ -104,17 +113,11 @@ async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarn
 
   const gateway = new BrowserGateway(gatewayOptions);
 
-  // A real sign-in is the only way to hold the exact cookie a browser would.
-  const signIn = await auth.handler(
-    new Request("http://control.test/api/auth/sign-in/username", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin },
-      body: JSON.stringify({ username: "owner", password: "dev-password" }),
-    }),
-  );
-  const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  // The exact cookie /auth/login would set: the signed token itself.
+  const token = await auth.issueAccessToken(userId);
+  const cookie = `cc_session=${token}`;
 
-  return { db, gateway, cookie, userId };
+  return { db, gateway, auth, cookie, userId };
 }
 
 describe("browser gateway", () => {
@@ -162,13 +165,13 @@ describe("browser gateway", () => {
     expect(result).toEqual({ ok: false, reason: "unauthenticated" });
   });
 
-  test("a deleted session cannot open a socket", async () => {
+  test("a revoked token cannot open a socket", async () => {
     const { db, gateway, cookie } = await setup();
 
-    // better-auth re-reads the session table on every check, so a deleted
-    // session row (what sign-out does) is dead for the very next call —
-    // the property the old tokenVersion bump provided.
-    db.query("DELETE FROM session").run();
+    // The tokenVersion bump is what sign-out does (ADR-0001): every check
+    // compares the token against the row, so the bump kills this cookie for
+    // the very next call.
+    db.query("UPDATE users SET token_version = token_version + 1").run();
 
     const result = await gateway.authorize({ origin, cookie });
 

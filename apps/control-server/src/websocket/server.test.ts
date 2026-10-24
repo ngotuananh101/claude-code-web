@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate } from "@cc-web/control-db";
-import { createBetterAuth, signUpOwner } from "../auth/better-auth.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -11,7 +12,7 @@ import { createServer, type ServerHandle } from "../server.ts";
  * most likely to be wrong are the wiring ones: which header carries what, which
  * status a refusal returns, and whether the upgrade actually happens.
  *
- * Auth here is the real better-auth instance, not a stub: the mount, the cookie
+ * Auth here is the real AuthService, not a stub: the login route, the cookie
  * name and the session checks are exactly what production runs.
  */
 
@@ -19,41 +20,33 @@ const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
 
+const jwtSecret = new Uint8Array(32).fill(11);
+
 async function start(overrides: { allowedOrigins?: string[] } = {}) {
   const db = new Database(":memory:");
   migrate(db);
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("user-1", "owner", "hash", 1, Date.now());
 
-  const auth = createBetterAuth(db, {
-    baseURL: "http://control.test",
-    trustedOrigins: [origin],
-  });
-  const { user } = await signUpOwner(auth, { username: "owner", password: "dev-password" });
-
+  const auth = new AuthService({ db, signer: createSigner(jwtSecret) });
   handle = createServer({
     db,
     auth,
     allowedOrigins: overrides.allowedOrigins ?? [origin],
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"
-        ? { ok: true, runnerId: "runner-a", ownerId: user.id }
+        ? { ok: true, runnerId: "runner-a", ownerId: "user-1" }
         : { ok: false, reason: "unknown" },
   });
 
-  // A real sign-in through the mounted handler is the only way to mint the
-  // exact cookie the browser would hold.
-  const signIn = await auth.handler(
-    new Request("http://control.test/api/auth/sign-in/username", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin },
-      body: JSON.stringify({ username: "owner", password: "dev-password" }),
-    }),
-  );
-  const setCookie = signIn.headers.get("set-cookie") ?? "";
-  const cookie = setCookie.split(";")[0] ?? "";
+  // The exact cookie /auth/login would set: the signed token itself.
+  const token = await auth.issueAccessToken("user-1");
+  const cookie = `cc_session=${token}`;
 
   return {
     db,
-    userId: user.id,
+    userId: "user-1",
     url: `http://127.0.0.1:${handle.server.port}`,
     wsUrl: `ws://127.0.0.1:${handle.server.port}`,
     cookie,
@@ -192,7 +185,7 @@ describe("control server routes", () => {
     client.send({ type: "subscribe", sessionId: "session-1" });
     await waitFor(() => client.messages.length >= 1);
 
-    const signOut = await fetch(`${url}/api/auth/sign-out`, {
+    const signOut = await fetch(`${url}/auth/logout`, {
       method: "POST",
       headers: { Origin: origin, Cookie: cookie },
     });
@@ -248,17 +241,17 @@ describe("control server routes", () => {
     expect(response.status).toBe(401);
   });
 
-  test("a foreign origin is refused before the better-auth handler sees it", async () => {
+  test("a foreign origin is refused before the login route reads the body", async () => {
     const { url } = await start();
 
-    const response = await fetch(`${url}/api/auth/sign-in/username`, {
+    const response = await fetch(`${url}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://evil.example.test" },
       body: JSON.stringify({ username: "owner", password: "dev-password" }),
     });
 
-    // better-auth force-disables its own origin check under test runners, so
-    // this 403 is the server's gate — which is the one production runs on.
+    // Origin is checked before the body is parsed: a correct password from a
+    // hostile page must not mint a session.
     expect(response.status).toBe(403);
   });
 
@@ -308,7 +301,7 @@ describe("control server routes", () => {
     expect(
       (
         await fetch(`${url}/api/sessions`, {
-          headers: { Origin: origin, Cookie: "better-auth.session_token=nonsense" },
+          headers: { Origin: origin, Cookie: "cc_session=nonsense" },
         })
       ).status,
     ).toBe(401);
@@ -330,10 +323,7 @@ describe("control server routes", () => {
   test("the server binds the configured port", async () => {
     const db = new Database(":memory:");
     migrate(db);
-    const auth = createBetterAuth(db, {
-      baseURL: "http://control.test",
-      trustedOrigins: [origin],
-    });
+    const auth = new AuthService({ db, signer: createSigner(jwtSecret) });
     handle = createServer({
       db,
       auth,

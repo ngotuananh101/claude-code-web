@@ -1,7 +1,7 @@
 # ADR-0001 — Owner authentication with JWT
 
-- Status: superseded (2026-10-24) by ADR-015 in ARCHITECTURE.md §24 — owner auth moved to better-auth
-- Date: 2026-10-23
+- Status: accepted (reinstated 2026-10-25 — the one-day better-auth interlude, the auth half of ADR-015, was reversed; ADR-015's connector-token half stands)
+- Date: 2026-10-23 (reinstated 2026-10-25)
 - Supersedes: nothing. Refines ARCHITECTURE.md §19.1.
 
 ## Context

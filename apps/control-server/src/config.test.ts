@@ -6,7 +6,7 @@ import {
   revokeRunner,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
-import { signUpOwner } from "./auth/better-auth.ts";
+import { hashPassword } from "./auth/password.ts";
 import { buildServerOptions, type ServerConfig } from "./config.ts";
 import { createServer, type ServerHandle } from "./server.ts";
 
@@ -34,20 +34,21 @@ async function start(config: Partial<ServerConfig> = {}) {
 
   const options = buildServerOptions({
     db,
-    baseURL: "http://control.test",
-    secret: "composition-test-secret-0123456789abcdef",
+    secret: new Uint8Array(32).fill(5),
     allowedOrigins: [origin],
     ...config,
   });
 
-  await signUpOwner(options.auth, { username: "owner", password: "correct horse" });
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("user-1", "owner", await hashPassword("correct horse"), 1, Date.now());
 
   handle = createServer(options);
   return { db, url: `http://127.0.0.1:${handle.server.port}` };
 }
 
 async function signIn(url: string, password: string): Promise<Response> {
-  return fetch(`${url}/api/auth/sign-in/username`, {
+  return fetch(`${url}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: origin },
     body: JSON.stringify({ username: "owner", password }),
@@ -55,7 +56,7 @@ async function signIn(url: string, password: string): Promise<Response> {
 }
 
 describe("the real control server wiring", () => {
-  test("sign-in succeeds with the stored password and sets the session cookie", async () => {
+  test("login succeeds with the stored password and sets the session cookie", async () => {
     const { url } = await start();
 
     const response = await signIn(url, "correct horse");
@@ -63,10 +64,10 @@ describe("the real control server wiring", () => {
     // With a refusing stub this was a 401 for every password, which reads as
     // "the owner typed it wrong" rather than "nobody can log in".
     expect(response.status).toBe(200);
-    expect(response.headers.get("set-cookie")).toContain("better-auth.session_token=");
+    expect(response.headers.get("set-cookie")).toContain("cc_session=");
   });
 
-  test("sign-in refuses a wrong password", async () => {
+  test("login refuses a wrong password", async () => {
     const { url } = await start();
 
     const response = await signIn(url, "wrong");

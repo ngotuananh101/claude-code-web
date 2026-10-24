@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { migrate, verifyRunnerCredential } from "@cc-web/control-db";
-import { createBetterAuth, signUpOwner } from "../auth/better-auth.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
 
 /**
@@ -27,12 +28,11 @@ async function start() {
   const db = new Database(":memory:");
   migrate(db);
 
-  const auth = createBetterAuth(db, {
-    baseURL: "http://control.test",
-    trustedOrigins: [origin],
-  });
-  await signUpOwner(auth, { username: "owner", password: "dev-password" });
+  db.query(
+    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("user-1", "owner", "hash", 1, Date.now());
 
+  const auth = new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(11)) });
   handle = createServer({
     db,
     auth,
@@ -40,14 +40,8 @@ async function start() {
     verifyRunnerCredential: (credential) => verifyRunnerCredential(db, credential),
   });
 
-  const signIn = await auth.handler(
-    new Request("http://control.test/api/auth/sign-in/username", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin },
-      body: JSON.stringify({ username: "owner", password: "dev-password" }),
-    }),
-  );
-  const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  // The exact cookie /auth/login would set: the signed token itself.
+  const cookie = `cc_session=${await auth.issueAccessToken("user-1")}`;
 
   return {
     db,

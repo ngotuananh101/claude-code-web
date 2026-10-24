@@ -38,14 +38,9 @@ function main(): void {
   const db = new Database(dbPath);
   migrate(db);
 
-  // The session-signing secret. better-auth uses it for cookie signing and
-  // encryption; a short one weakens every session, so the length floor is
-  // enforced here rather than hoping the operator read the docs.
-  const secret = requireEnv("BETTER_AUTH_SECRET");
-  if (secret.length < 32) {
-    throw new Error("BETTER_AUTH_SECRET must be at least 32 characters");
-  }
-
+  // The signing secret is read as raw bytes; a short one is rejected by
+  // `createSigner` rather than silently weakening every token.
+  const secret = new TextEncoder().encode(requireEnv("CC_WEB_JWT_SECRET"));
   const allowedOrigins = (process.env["CC_WEB_ALLOWED_ORIGINS"] ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -65,11 +60,7 @@ function main(): void {
     throw new Error(`CC_WEB_PORT must be an integer between 0 and 65535, got: ${port}`);
   }
 
-  // Canonical origin better-auth validates cookies and redirects against;
-  // defaulting to the dev upstream keeps the common local setup one-variable.
-  const baseURL = process.env["BETTER_AUTH_URL"] ?? `http://localhost:${port}`;
-
-  const handle = createServer(buildServerOptions({ db, baseURL, secret, allowedOrigins, port }));
+  const handle = createServer(buildServerOptions({ db, secret, allowedOrigins, port }));
 
   console.log(
     `${serverInfo.name} listening on :${handle.server.port} (protocol v${PROTOCOL_VERSION})`,

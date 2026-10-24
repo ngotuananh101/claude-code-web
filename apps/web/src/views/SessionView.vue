@@ -6,7 +6,6 @@ import Composer from "../components/Composer.vue";
 import ConnectionChip from "../components/ConnectionChip.vue";
 import EventJournal from "../components/EventJournal.vue";
 import SessionRail from "../components/SessionRail.vue";
-import { authClient } from "../lib/auth-client.ts";
 import { loadSessions, openSession, resolveSessionLive, sessions } from "../stores/sessions.ts";
 
 const router = useRouter();
@@ -26,9 +25,10 @@ onMounted(() => {
 onUnmounted(() => clearInterval(refresh));
 
 async function signOut(): Promise<void> {
-  // The server deletes the session, which revokes the owner's live socket
-  // (§19.1); the journal then reconnects into the login page.
-  await authClient.signOut();
+  // The server bumps the token version (killing every outstanding token) and
+  // revokes the owner's live socket (§19.1); the journal then reconnects
+  // into the login page.
+  await fetch("/auth/logout", { method: "POST" });
   await router.push("/login");
 }
 </script>
