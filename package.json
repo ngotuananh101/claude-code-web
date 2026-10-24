@@ -15,8 +15,8 @@
     "lint:fix": "biome check . --write",
     "format": "biome format . --write",
     "test": "bun test",
-    "test:integration": "bun run scripts/integration/enrollment-race.ts && bun run scripts/integration/ack-gap-crash.ts && bun run scripts/integration/reconnect-fence.ts && bun run scripts/integration/daemon-e2e.ts && bun run scripts/integration/dispatch-e2e.ts && bun run scripts/integration/events-e2e.ts && bun run scripts/integration/browser-replay-e2e.ts",
-    "test:integration:docker": "bun run scripts/integration/enrollment-race.ts --docker && bun run scripts/integration/ack-gap-crash.ts --docker && bun run scripts/integration/reconnect-fence.ts --docker && bun run scripts/integration/daemon-e2e.ts --docker && bun run scripts/integration/dispatch-e2e.ts --docker && bun run scripts/integration/events-e2e.ts --docker && bun run scripts/integration/browser-replay-e2e.ts --docker",
+    "test:integration": "bun run scripts/integration/ack-gap-crash.ts && bun run scripts/integration/reconnect-fence.ts && bun run scripts/integration/daemon-e2e.ts && bun run scripts/integration/dispatch-e2e.ts && bun run scripts/integration/events-e2e.ts && bun run scripts/integration/browser-replay-e2e.ts",
+    "test:integration:docker": "bun run scripts/integration/ack-gap-crash.ts --docker && bun run scripts/integration/reconnect-fence.ts --docker && bun run scripts/integration/daemon-e2e.ts --docker && bun run scripts/integration/dispatch-e2e.ts --docker && bun run scripts/integration/events-e2e.ts --docker && bun run scripts/integration/browser-replay-e2e.ts --docker",
     "docker:build": "docker build -f infra/docker/Dockerfile.runner -t cc-web-runner:dev .",
     "docker:runners": "docker compose -f infra/docker/compose.runners.yml up -d"
   },

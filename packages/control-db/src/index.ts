@@ -14,12 +14,6 @@ export {
 } from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
-  type ConsumedEnrollment,
-  type CreatedEnrollment,
-  consumeEnrollment,
-  createEnrollment,
-} from "./enrollment.ts";
-export {
   attemptWatermark,
   type IngestResult,
   ingestEvent,

@@ -74,33 +74,25 @@ describe("the real control server wiring", () => {
     expect(response.status).toBe(401);
   });
 
-  test("an enrolled runner credential is accepted by the gateway", async () => {
+  test("a minted connector token is accepted by the gateway", async () => {
     const { db, url } = await start();
 
-    // Enroll through the HTTP surface, then verify the same credential through
-    // the composition used by the real entrypoint. If these two disagree, the
-    // enrollment endpoint is writing something the gateway cannot read.
+    // Mint through the HTTP surface, then verify the same token through the
+    // composition used by the real entrypoint. If these two disagree, the
+    // registry endpoint is writing something the gateway cannot read.
     const login = await signIn(url, "correct horse");
     const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
 
-    const created = (await (
-      await fetch(`${url}/api/runner-enrollments`, {
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
         method: "POST",
         headers: { Origin: origin, Cookie: cookie },
       })
-    ).json()) as { token: string };
+    ).json()) as { runnerId: string; token: string };
 
-    const enrolled = (await (
-      await fetch(`${url}/api/runner-enroll`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: created.token }),
-      })
-    ).json()) as { runnerId: string; credential: string };
-
-    const check = verifyRunnerCredential(db, enrolled.credential);
+    const check = verifyRunnerCredential(db, minted.token);
     expect(check.ok).toBe(true);
-    expect(check).toMatchObject({ runnerId: enrolled.runnerId });
+    expect(check).toMatchObject({ runnerId: minted.runnerId });
   });
 
   test("a revoked runner credential is refused", async () => {

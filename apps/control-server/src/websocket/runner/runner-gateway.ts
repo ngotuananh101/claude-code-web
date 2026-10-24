@@ -40,7 +40,7 @@ export type RunnerSocketData = {
 
 export type CredentialCheck =
   | { ok: true; runnerId: string; ownerId: string }
-  | { ok: false; reason: "unknown" | "expired" };
+  | { ok: false; reason: "unknown" | "revoked" };
 
 export type GatewayState = "offline" | "connected" | "ready" | "revoked";
 

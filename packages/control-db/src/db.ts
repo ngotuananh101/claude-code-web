@@ -14,28 +14,13 @@ export function migrate(db: Database): void {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS enrollments (
-      id          TEXT PRIMARY KEY,
-      owner_id    TEXT NOT NULL,
-      -- SHA-256 of the token. The token itself is never persisted, so a database
-      -- read cannot be replayed as an enrollment (§6.1).
-      token_hash  TEXT NOT NULL UNIQUE,
-      created_at  INTEGER NOT NULL,
-      expires_at  INTEGER NOT NULL,
-      consumed_at INTEGER
-    );
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS enrollments_token_hash
-      ON enrollments (token_hash);
-  `);
-
   // Owner identity moved to better-auth (ADR-0002): the hand-rolled `users` /
-  // `auth_sessions` tables are retired. DROP IF EXISTS keeps existing databases
-  // from carrying dead tables; fresh ones never create them.
+  // `auth_sessions` tables are retired, and enrollment is replaced by
+  // web-minted connector tokens, retiring `enrollments` with it. DROP IF
+  // EXISTS keeps existing databases from carrying dead tables; fresh ones
+  // never create them.
   db.exec(`
+    DROP TABLE IF EXISTS enrollments;
     DROP TABLE IF EXISTS auth_sessions;
     DROP TABLE IF EXISTS users;
   `);
