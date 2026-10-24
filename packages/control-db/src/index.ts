@@ -26,8 +26,10 @@ export {
   type JournalEvent,
 } from "./journal.ts";
 export {
+  listSessions,
   type ReplayEvent,
   readSessionEvents,
+  type SessionSummary,
   sessionEarliest,
   sessionOwner,
   sessionWatermark,

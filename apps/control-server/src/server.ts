@@ -21,6 +21,7 @@ import {
   createEnrollment,
   ingestEvent,
   issueRunnerCredential,
+  listSessions,
   readSessionEvents,
   Scheduler,
   sessionEarliest,
@@ -58,6 +59,11 @@ export type ServerOptions = {
    * do exactly that — but the real entrypoint always passes one.
    */
   outbox?: CommandOutbox;
+  /**
+   * Fixed listen port. The vite dev proxy needs a stable upstream, so the
+   * entrypoint passes one; tests omit it and get an ephemeral port.
+   */
+  port?: number;
 };
 
 export type ServerHandle = {
@@ -152,7 +158,7 @@ export function createServer(options: ServerOptions): ServerHandle {
   const allowed = new Set(options.allowedOrigins);
 
   const server = Bun.serve<RunnerSocketData | BrowserSocketData>({
-    port: 0,
+    port: options.port ?? 0,
 
     async fetch(request, srv) {
       const url = new URL(request.url);
@@ -173,6 +179,10 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/runner-enroll" && request.method === "POST") {
         return handleRunnerEnroll(request, options);
+      }
+
+      if (url.pathname === "/api/sessions" && request.method === "GET") {
+        return handleListSessions(request, options, allowed, browserGateway);
       }
 
       if (url.pathname === "/ws/runner") {
@@ -352,6 +362,40 @@ async function handleCreateEnrollment(
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     },
   );
+}
+
+/**
+ * The owner's session list for the sidebar (§16.1).
+ *
+ * Same authentication as every browser call: Origin first, then the session
+ * cookie — the list is scoped to the authorized owner inside `listSessions`,
+ * so the query itself is the access rule rather than a filter applied after.
+ * `no-store` because the answer is identity-bearing and changes with the
+ * journal (§19.4's credential-response rule, applied to the whole surface).
+ */
+async function handleListSessions(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+): Promise<Response> {
+  const origin = request.headers.get("origin") ?? undefined;
+  if (!origin || !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  return new Response(JSON.stringify({ sessions: listSessions(options.db, authorized.userId) }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
 }
 
 /**

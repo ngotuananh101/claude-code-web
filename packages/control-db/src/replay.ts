@@ -129,3 +129,93 @@ export function sessionOwner(db: Database, sessionId: string): string | undefine
 
   return activeRow?.owner_id;
 }
+
+/** One sidebar row: enough to recognize the session and know its state. */
+export type SessionSummary = {
+  sessionId: string;
+  watermark: number;
+  eventCount: number;
+  /** The last journaled event's type, or null when only a dispatch exists. */
+  lastEventType: string | null;
+  /** When the tail was observed, for ordering; 0 when only a dispatch exists. */
+  lastIngestedAt: number;
+  /** True while the session holds an active run. */
+  live: boolean;
+};
+
+/**
+ * The owner's sessions, most recently active first (§16.1's sidebar).
+ *
+ * A session appears either because the journal holds its events or because a
+ * dispatched run is in flight — a run that has not produced its first event
+ * yet is exactly the one the owner wants listed.
+ */
+export function listSessions(db: Database, ownerId: string): SessionSummary[] {
+  const rows = db
+    .prepare(
+      `SELECT e.session_id AS session_id,
+              MAX(e.session_sequence) AS watermark,
+              COUNT(*) AS event_count,
+              MAX(e.ingested_at) AS last_ingested_at,
+              (a.session_id IS NOT NULL) AS live
+       FROM run_events e
+       JOIN runners r ON r.id = e.runner_id
+       LEFT JOIN active_runs a ON a.session_id = e.session_id
+       WHERE r.owner_id = ?
+       GROUP BY e.session_id`,
+    )
+    .all(ownerId) as Array<{
+    session_id: string;
+    watermark: number;
+    event_count: number;
+    last_ingested_at: number;
+    live: number;
+  }>;
+
+  const dispatched = db
+    .prepare(
+      `SELECT DISTINCT a.session_id AS session_id, a.dispatched_at AS dispatched_at
+       FROM active_runs a
+       JOIN runners r ON r.id = a.runner_id
+       WHERE r.owner_id = ?`,
+    )
+    .all(ownerId) as Array<{ session_id: string; dispatched_at: number }>;
+
+  const byId = new Map<string, SessionSummary>();
+  for (const row of rows) {
+    byId.set(row.session_id, {
+      sessionId: row.session_id,
+      watermark: row.watermark,
+      eventCount: row.event_count,
+      lastEventType: null,
+      lastIngestedAt: row.last_ingested_at,
+      live: row.live === 1,
+    });
+  }
+  for (const row of dispatched) {
+    if (byId.has(row.session_id)) continue;
+    byId.set(row.session_id, {
+      sessionId: row.session_id,
+      watermark: 0,
+      eventCount: 0,
+      lastEventType: null,
+      lastIngestedAt: row.dispatched_at,
+      live: true,
+    });
+  }
+
+  // The tail's type needs the row itself, so it is a second pass per session —
+  // a sidebar is a handful of rows, not a transcript.
+  const summaries = [...byId.values()];
+  for (const summary of summaries) {
+    if (summary.eventCount === 0) continue;
+    const tail = db
+      .prepare(
+        "SELECT type FROM run_events WHERE session_id = ? ORDER BY session_sequence DESC LIMIT 1",
+      )
+      .get(summary.sessionId) as { type: string } | null;
+    summary.lastEventType = tail?.type ?? null;
+  }
+
+  return summaries.sort((a, b) => b.lastIngestedAt - a.lastIngestedAt);
+}

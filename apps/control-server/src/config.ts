@@ -23,6 +23,8 @@ export type ServerConfig = {
   /** Raw bytes of the JWT signing secret. `createSigner` rejects a short one. */
   secret: Uint8Array;
   allowedOrigins: string[];
+  /** Fixed listen port for the vite dev proxy; omitted means ephemeral. */
+  port?: number;
 };
 
 export function buildServerOptions(config: ServerConfig): ServerOptions {
@@ -32,6 +34,7 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
     db: config.db,
     auth,
     allowedOrigins: config.allowedOrigins,
+    ...(config.port === undefined ? {} : { port: config.port }),
     // Read through the database on every upgrade, so a rotation or revoke takes
     // effect on the next connection rather than at the next restart (§6.3).
     verifyRunnerCredential: (credential) => {

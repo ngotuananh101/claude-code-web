@@ -2,7 +2,13 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
 import { ingestEvent, type JournalEvent } from "./journal.ts";
-import { readSessionEvents, sessionEarliest, sessionOwner, sessionWatermark } from "./replay.ts";
+import {
+  listSessions,
+  readSessionEvents,
+  sessionEarliest,
+  sessionOwner,
+  sessionWatermark,
+} from "./replay.ts";
 
 /**
  * The browser's read model over the journal (§12.5).
@@ -42,6 +48,7 @@ function seedSession(db: Database, sessionId: string, count: number): void {
       db,
       event({
         sessionId,
+        attemptId: `attempt-${sessionId}`,
         eventId: `evt-${sessionId}-${i}`,
         localSequence: i,
         type: i === count ? "run.finished" : "message.delta",
@@ -161,5 +168,90 @@ describe("session ownership", () => {
   test("an unknown session has no owner", () => {
     const db = setup();
     expect(sessionOwner(db, "session-nobody")).toBeUndefined();
+  });
+});
+
+describe("listing an owner's sessions", () => {
+  function registerRunner(db: Database, runnerId: string, ownerId: string): void {
+    db.prepare("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      runnerId,
+      ownerId,
+      1,
+    );
+  }
+
+  test("summarizes each session with its watermark, tail, and liveness", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    seedSession(db, "session-1", 4);
+    seedSession(db, "session-2", 1);
+
+    const sessions = listSessions(db, "owner-1");
+
+    // The sidebar's whole job in one row: which session, how far it goes, what
+    // happened last, and whether something is running right now.
+    expect(sessions).toHaveLength(2);
+    const first = sessions.find((s) => s.sessionId === "session-1");
+    expect(first).toMatchObject({
+      sessionId: "session-1",
+      watermark: 4,
+      eventCount: 4,
+      lastEventType: "run.finished",
+      live: false,
+    });
+    const second = sessions.find((s) => s.sessionId === "session-2");
+    expect(second?.watermark).toBe(1);
+  });
+
+  test("a dispatched session appears before any event is journaled, marked live", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    db.prepare(
+      `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
+       VALUES ('run-1', 'session-fresh', 'runner-a', 'attempt-1', 1)`,
+    ).run();
+
+    const sessions = listSessions(db, "owner-1");
+
+    // §16.1: the sidebar must not wait for the first event — a run in flight
+    // is the moment the owner most wants to see the session listed.
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      sessionId: "session-fresh",
+      watermark: 0,
+      eventCount: 0,
+      lastEventType: null,
+      live: true,
+    });
+  });
+
+  test("another owner's sessions are invisible", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    registerRunner(db, "runner-b", "owner-2");
+    seedSession(db, "session-mine", 2);
+    ingestEvent(
+      db,
+      event({
+        sessionId: "session-theirs",
+        eventId: "evt-theirs-1",
+        runnerId: "runner-b",
+        attemptId: "attempt-b",
+        localSequence: 1,
+      }),
+    );
+
+    const mine = listSessions(db, "owner-1");
+    expect(mine.map((s) => s.sessionId)).toEqual(["session-mine"]);
+  });
+
+  test("most recently active first", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    seedSession(db, "session-old", 1);
+    seedSession(db, "session-new", 1);
+
+    const sessions = listSessions(db, "owner-1");
+    expect(sessions.map((s) => s.sessionId)).toEqual(["session-new", "session-old"]);
   });
 });

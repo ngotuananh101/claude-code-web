@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { migrate } from "@cc-web/control-db";
+import { ingestEvent, migrate } from "@cc-web/control-db";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
@@ -233,5 +233,81 @@ describe("control server routes", () => {
     // CSRF: a correct password from a hostile origin must not mint a session.
     expect(response.status).toBe(403);
     expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  test("the server binds the configured port", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const auth = new AuthService({ db, signer: createSigner(secret) });
+    handle = createServer({
+      db,
+      auth,
+      allowedOrigins: [origin],
+      verifyRunnerCredential: () => ({ ok: false, reason: "unknown" }),
+      port: 8944,
+    });
+
+    // The vite dev proxy needs a stable upstream; a random port would turn
+    // every restart into a config edit.
+    expect(handle.server.port).toBe(8944);
+  });
+
+  test("the sessions list answers the owner's sessions", async () => {
+    const { url, token, db } = await start();
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      "user-1",
+      1,
+    );
+    ingestEvent(db, {
+      eventId: "evt-1",
+      runnerId: "runner-a",
+      bootId: "boot-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      localSequence: 1,
+      occurredAt: "2026-10-24T00:00:00.000Z",
+      type: "run.started",
+      payload: { commandId: "cmd-1" },
+    });
+
+    const response = await fetch(`${url}/api/sessions`, {
+      headers: { Origin: origin, Cookie: `cc_session=${token}` },
+    });
+    const body = (await response.json()) as { sessions: Array<Record<string, unknown>> };
+
+    // The sidebar's single read: what the owner's sessions are and how far
+    // each one goes, scoped to this owner and cache-free like every
+    // identity-bearing response.
+    expect(response.status).toBe(200);
+    expect(body.sessions[0]).toMatchObject({
+      sessionId: "session-1",
+      watermark: 1,
+      eventCount: 1,
+      lastEventType: "run.started",
+      live: false,
+    });
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  test("the sessions list needs the session cookie", async () => {
+    const { url } = await start();
+
+    expect((await fetch(`${url}/api/sessions`, { headers: { Origin: origin } })).status).toBe(401);
+    expect(
+      (
+        await fetch(`${url}/api/sessions`, {
+          headers: { Origin: origin, Cookie: "cc_session=nonsense" },
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetch(`${url}/api/sessions`, {
+          headers: { Origin: "https://evil.example.test", Cookie: "cc_session=whatever" },
+        })
+      ).status,
+    ).toBe(403);
   });
 });

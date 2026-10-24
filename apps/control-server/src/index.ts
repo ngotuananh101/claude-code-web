@@ -53,7 +53,14 @@ function main(): void {
     throw new Error("CC_WEB_ALLOWED_ORIGINS must list at least one origin");
   }
 
-  const handle = createServer(buildServerOptions({ db, secret, allowedOrigins }));
+  // Fixed by default so the vite dev proxy has a stable upstream; 0 would
+  // pick a random port and turn every restart into a config edit.
+  const port = Number(process.env["CC_WEB_PORT"] ?? 8787);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`CC_WEB_PORT must be an integer between 0 and 65535, got: ${port}`);
+  }
+
+  const handle = createServer(buildServerOptions({ db, secret, allowedOrigins, port }));
 
   console.log(
     `${serverInfo.name} listening on :${handle.server.port} (protocol v${PROTOCOL_VERSION})`,
