@@ -52,3 +52,4 @@ coverage/
 # playwright / test artifacts
 test-results/
 playwright-report/
+.superpowers/

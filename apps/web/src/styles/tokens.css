@@ -1,0 +1,27 @@
+/*
+ * The design's constants: cc-web is an instrument panel for watching coding
+ * agents work, so the palette is a cool instrument white with ink and two
+ * working accents — pine for anything alive, amber for anything that needs
+ * the operator's eye. Two voices, never mixed in one line:
+ *
+ *   --voice    Instrument Sans  — the human side: prose, labels, session copy
+ *   --machine  IBM Plex Mono    — the machine side: sequence numbers, event
+ *                                 types, payloads, watermarks
+ *
+ * The journal's gutter numbers are not decoration; they are the replay
+ * coordinate system the operator thinks in (§12.5), which is why the machine
+ * voice owns them.
+ */
+:root {
+  --paper: #fafaf7;
+  --ink: #1a211e;
+  --line: #e3e6e0;
+  --pine: #106b57;
+  --pine-wash: #e8f1ee;
+  --amber: #9a6700;
+  --amber-wash: #f7efdd;
+  --mute: #6b7570;
+
+  --voice: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --machine: "IBM Plex Mono", ui-monospace, monospace;
+}
