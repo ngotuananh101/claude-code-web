@@ -47,7 +47,12 @@ function makeLink(): FakeLink {
   };
 }
 
-function harness(options: { maxAttempts?: number } = {}) {
+function harness(
+  options: {
+    maxAttempts?: number;
+    onEventsAcked?: (ack: { attemptId: string; through: number }) => void;
+  } = {},
+) {
   const links: FakeLink[] = [];
   const events: LoopEvent[] = [];
   const sleeps: number[] = [];
@@ -77,6 +82,7 @@ function harness(options: { maxAttempts?: number } = {}) {
       sleeps.push(ms);
     },
     onEvent: (event) => events.push(event),
+    ...(options.onEventsAcked === undefined ? {} : { onEventsAcked: options.onEventsAcked }),
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   });
 
@@ -486,5 +492,44 @@ describe("runner reconnect loop", () => {
     await Bun.sleep(10);
 
     expect(calls).toBe(0);
+  });
+});
+
+describe("event frames", () => {
+  test("an events.ack is handed to the ack callback", async () => {
+    const acks: Array<{ attemptId: string; through: number }> = [];
+    const h = harness({ onEventsAcked: (ack) => acks.push(ack) });
+    await h.loop.start();
+    h.link.receive({ type: "hello.ok", generation: 1, connectionState: "connected" });
+    h.link.receive({ type: "reconcile.ok", ready: true });
+
+    h.link.receive({ type: "events.ack", attemptId: "attempt-1", through: 4 });
+
+    // The loop is transport, not policy: it recognizes the frame and hands it
+    // over — the outbox decides what the number means.
+    expect(acks).toEqual([{ attemptId: "attempt-1", through: 4 }]);
+  });
+
+  test("sendFrame delivers on a ready link and refuses otherwise", async () => {
+    const h = harness();
+    const loop = h.loop;
+
+    // Before any connection exists there is nothing to carry the frame.
+    expect(loop.sendFrame({ type: "events", events: [] })).toBe(false);
+
+    await loop.start();
+    h.link.receive({ type: "hello.ok", generation: 1, connectionState: "connected" });
+    h.link.receive({ type: "reconcile.ok", ready: true });
+
+    expect(loop.sendFrame({ type: "events", events: [{ eventId: "evt-1" }] })).toBe(true);
+    expect(h.link.sent.at(-1)).toEqual({ type: "events", events: [{ eventId: "evt-1" }] });
+
+    // After the link drops the loop is mid-retry: sending into a dead socket
+    // would look delivered while the bytes went nowhere. Let the retry chain
+    // run its microtasks first — the drop itself is still synchronous.
+    h.link.drop(1006);
+    await loop.settle();
+    expect(loop.state).not.toBe("ready");
+    expect(loop.sendFrame({ type: "events", events: [] })).toBe(false);
   });
 });

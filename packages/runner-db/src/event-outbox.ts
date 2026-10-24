@@ -103,6 +103,21 @@ export function pendingEvents(db: Database, attemptId: string): PendingEvent[] {
 }
 
 /**
+ * Every attempt that still has an unacknowledged row, in stable id order.
+ *
+ * The sender asks this first — one query for "who has work?" instead of a
+ * per-attempt row scan on every reconnect.
+ */
+export function pendingEventAttempts(db: Database): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT attempt_id FROM event_outbox WHERE acknowledged = 0 ORDER BY attempt_id`,
+    )
+    .all() as Array<{ attempt_id: string }>;
+  return rows.map((row) => row.attempt_id);
+}
+
+/**
  * Acknowledge everything contiguous up to `sequence`.
  *
  * Returns the watermark actually reached, which may be lower than requested when

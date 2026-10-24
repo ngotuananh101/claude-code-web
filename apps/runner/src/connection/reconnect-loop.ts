@@ -85,6 +85,11 @@ export type ReconnectLoopOptions = {
    * runs.
    */
   onCommand?: CommandHandler;
+  /**
+   * Called for every `events.ack` the server sends (§12.2). The loop is
+   * transport: the outbox decides what the watermark retires.
+   */
+  onEventsAcked?: (ack: { attemptId: string; through: number }) => void;
   maxAttempts?: number;
 };
 
@@ -226,8 +231,36 @@ export class ReconnectLoop {
         return;
       }
 
+      case "events.ack": {
+        const attemptId = record["attemptId"];
+        const through = record["through"];
+        if (typeof attemptId !== "string" || attemptId === "" || typeof through !== "number") {
+          return;
+        }
+        this.#options.onEventsAcked?.({ attemptId, through });
+        return;
+      }
+
       default:
         return;
+    }
+  }
+
+  /**
+   * Send an application frame on the live, ready link (§12.2).
+   *
+   * Returns false when the loop cannot carry it — no link yet, mid-retry, or a
+   * dead socket — so a caller keeps what it tried to send. A send that returns
+   * true means the bytes were handed to the socket, nothing more: delivery is
+   * proven by an ACK, never by this.
+   */
+  sendFrame(payload: Record<string, unknown>): boolean {
+    if (this.#state !== "ready" || this.#link === undefined) return false;
+    try {
+      this.#link.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
     }
   }
 

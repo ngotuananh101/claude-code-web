@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { createSdkStream } from "@cc-web/agent-adapter";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
+import { EventPump } from "./connection/event-pump.ts";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
 import { dialWebSocket } from "./connection/websocket-link.ts";
 import type { SdkStream } from "./execution/executor.ts";
@@ -78,6 +79,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // Idempotent, so a crash during an earlier migration is not a boot loop.
   migrateRunnerDb(db);
 
+  // §12.2: the outbox pump. It is declared before the loop and the controller
+  // because both trigger it — the loop on `ready` (a reconnect is the earliest
+  // moment backlog rows can move) and on every ACK, the controller when a run
+  // settles and its rows are complete. Its `send` closes over the loop binding
+  // and only runs from those triggers, all of which fire after the loop exists.
+  const pump = new EventPump({
+    db,
+    runnerId: identity.runnerId,
+    bootId: bootId(),
+    send: (frame) => loop.sendFrame(frame),
+  });
+
   // §10: accepted commands become runs here. The controller owns the inbox →
   // attempt → SDK sequence, including the crash recovery that has to happen
   // before the first command is accepted.
@@ -86,6 +99,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     localRunnerId: identity.runnerId,
     workspacePathFor: options.workspacePathFor ?? (() => undefined),
     sdk: options.sdk ?? ((input) => createSdkStream(input)),
+    onSettled: () => pump.flush(),
   });
 
   const loop = new ReconnectLoop({
@@ -110,7 +124,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     }),
     inventory: options.inventory ?? (() => []),
     sleep: (ms) => Bun.sleep(ms),
-    onEvent: (event) => options.onEvent?.(event),
+    onEvent: (event) => {
+      // §12.2: on `ready` the backlog moves. Rows pending from before the
+      // reconnect (or from a process that died mid-run) are exactly what the
+      // resend exists for, and this is the first moment the link can carry them.
+      if (event.type === "ready") pump.flush();
+      options.onEvent?.(event);
+    },
+    // An ACK retires rows and self-drives the next bounded batch of its attempt.
+    onEventsAcked: (ack) => pump.handleAck(ack),
     // The controller persists the command, decides whether this is a first
     // delivery, and starts the run. The receipt is returned before the run is
     // awaited, so `accepted` keeps meaning "durable", not "finished" (§9.4).

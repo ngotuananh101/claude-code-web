@@ -71,10 +71,12 @@ Phase 0 passed on this host — see [`docs/phase0-results.md`](docs/phase0-resul
 for what was proven and what still is not.
 
 Phase 1 primitives, transport, auth, outbox, scheduler, the runner daemon,
-dispatch over a live socket, and execution of an accepted command under a
-workspace lock are implemented and tested — see
+dispatch over a live socket, execution of an accepted command under a
+workspace lock, run cancel with a bounded shutdown drain, and event delivery
+from the runner's outbox into the server's journal (at-least-once, deduplicated,
+with a contiguous-ACK watermark) are implemented and tested — see
 [`docs/phase1-results.md`](docs/phase1-results.md) for what is proven and what is
-still missing. Sending run events back to the server's journal is the next phase.
+still missing. Replaying the journal to the browser is the next phase.
 
 ## Decisions
 

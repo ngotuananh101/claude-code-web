@@ -38,6 +38,12 @@ export type ControllerOptions = {
   sdk: SdkStream;
   /** Injected clock, so expiry is testable without waiting for it. */
   now?: () => number;
+  /**
+   * Called once per attempt after its run settles, whatever the outcome. The
+   * event pump uses it as its "this attempt's rows are complete" trigger —
+   * the controller itself knows nothing about a socket.
+   */
+  onSettled?: (attemptId: string) => void;
 };
 
 /** One tracked run: what shutdown or cancel needs to reach it. */
@@ -54,6 +60,7 @@ export class RunController {
   readonly #workspacePathFor: (workspaceId: string) => string | undefined;
   readonly #sdk: SdkStream;
   readonly #now: () => number;
+  readonly #onSettled: ((attemptId: string) => void) | undefined;
 
   /** Every run in flight, keyed by attempt id, so shutdown can wait or cancel. */
   readonly #inFlight = new Map<string, InFlightRun>();
@@ -67,6 +74,7 @@ export class RunController {
     this.#workspacePathFor = options.workspacePathFor;
     this.#sdk = options.sdk;
     this.#now = options.now ?? Date.now;
+    this.#onSettled = options.onSettled;
 
     // §9.7: whatever was in flight when the previous process died is
     // interrupted, not resumed. Doing it here means it happens before the first
@@ -170,6 +178,15 @@ export class RunController {
         .catch(() => undefined)
         .finally(() => {
           this.#inFlight.delete(attemptId);
+          // Fired after the delete so a synchronous trigger observes a
+          // controller that no longer counts this attempt. Advisory: a
+          // throwing trigger must not reject the tracked promise, which
+          // settle() awaits.
+          try {
+            this.#onSettled?.(attemptId);
+          } catch {
+            // The pump's problem, on the pump's next trigger.
+          }
         }),
     };
     this.#inFlight.set(attemptId, run);

@@ -1,7 +1,13 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrateRunnerDb } from "./db.ts";
-import { ackUpTo, appendEvent, highestContiguousAcked, pendingEvents } from "./event-outbox.ts";
+import {
+  ackUpTo,
+  appendEvent,
+  highestContiguousAcked,
+  pendingEventAttempts,
+  pendingEvents,
+} from "./event-outbox.ts";
 
 function freshDb(): Database {
   const db = new Database(":memory:");
@@ -146,5 +152,34 @@ describe("event outbox", () => {
     const db = freshDb();
     const result = ackUpTo(db, { attemptId: "never-existed", sequence: 5 });
     expect(result.ackedThrough).toBe(0);
+  });
+});
+
+describe("pending attempts", () => {
+  test("lists each attempt that still has an unacknowledged row", () => {
+    const db = freshDb();
+    append(db, 1);
+    appendEvent(db, {
+      eventId: "evt-other-1",
+      attemptId: "attempt-2",
+      localSequence: 1,
+      sessionId: "session-2",
+      runId: "run-2",
+      type: "run.started",
+      payload: {},
+      occurredAt: "2026-10-23T00:00:00.000Z",
+    });
+
+    // The sender asks "who has work?" before asking "which rows?" — one query
+    // per reconnect instead of a scan of every attempt's rows.
+    expect(pendingEventAttempts(db)).toEqual(["attempt-1", "attempt-2"]);
+
+    ackUpTo(db, { attemptId: attempt, sequence: 1 });
+    expect(pendingEventAttempts(db)).toEqual(["attempt-2"]);
+  });
+
+  test("an empty outbox lists nothing", () => {
+    const db = freshDb();
+    expect(pendingEventAttempts(db)).toEqual([]);
   });
 });

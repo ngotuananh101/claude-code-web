@@ -27,6 +27,7 @@ export {
   appendEvent,
   highestContiguousAcked,
   type PendingEvent,
+  pendingEventAttempts,
   pendingEvents,
 } from "./event-outbox.ts";
 export {

@@ -5,11 +5,14 @@
   generations, command inbox, event outbox with a contiguous ACK watermark,
   reconciliation, runner and browser WebSocket transport, owner authentication,
   the central command outbox, the scheduler, the runner reconnect loop, dispatch
-  on the live transport, and execution of an accepted command on the runner.
+  on the live transport, execution of an accepted command on the runner, run
+  cancel with a bounded shutdown drain, and event ingestion from the runner's
+  outbox into the server's journal.
 - Status: **all four Phase 1 surfaces exist and are tested, the entrypoints are
   wired to real implementations, and a command dispatched by the scheduler now
-  reaches a runner over a live socket, is receipted back, and runs the SDK under
-  a workspace lock with redacted, ordered events.**
+  reaches a runner over a live socket, is receipted back, runs the SDK under a
+  workspace lock with redacted, ordered events, and those events arrive in the
+  server's journal exactly once per event id however often they are resent.**
 
 ## What exists
 
@@ -46,8 +49,12 @@
 | `runner/redact` | Cost and credential fields stripped from every replayed event | unit |
 | `agent-adapter` | SDK option mapping; `resume` by id, never `continue`; lazy import | unit |
 | `runner/daemon` | Identity → loop → controller; `stop()` waits for in-flight runs | unit + integration |
+| `control-db/journal` | Ingest answers stored/duplicate/conflict; session sequence allocated in-transaction; conflicts audited without payloads | unit |
+| `control-server/runner-gateway` (events) | Events only from a `ready` connection; identity and type validated against the protocol before ingest | unit |
+| `runner/event-pump` | Persist → send → ACK; bounded batches; an ACK self-drives the next batch | unit |
+| runner → server journal | A run's events reach `run_events` in order; a lost ACK replayed after a restart is deduplicated and re-acknowledged | integration (real processes) |
 
-323 unit tests across 33 files, 5 integration probes.
+361 unit tests across 35 files, 6 integration probes.
 
 ## Integration evidence
 

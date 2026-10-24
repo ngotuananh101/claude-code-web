@@ -581,3 +581,48 @@ describe("draining", () => {
     await draining;
   });
 });
+
+describe("notifying the event pump", () => {
+  test("a settled run reports its attempt id to the onSettled hook", async () => {
+    const { db } = setup();
+    const settled: string[] = [];
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })(),
+      onSettled: (attemptId) => settled.push(attemptId),
+    });
+
+    await controller.handle(command);
+    await controller.settle();
+
+    // The hook is what turns "the run is over" into "send its events now"
+    // without the controller knowing a socket exists.
+    expect(settled).toEqual(["attempt-1"]);
+  });
+
+  test("a failed run settles too — its events still need delivery", async () => {
+    const { db } = setup();
+    const settled: string[] = [];
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => ({
+        [Symbol.asyncIterator]() {
+          return { next: () => Promise.reject(new Error("transport died")) };
+        },
+      }),
+      onSettled: (attemptId) => settled.push(attemptId),
+    });
+
+    await controller.handle(command);
+    await controller.settle();
+
+    expect(settled).toEqual(["attempt-1"]);
+  });
+});
