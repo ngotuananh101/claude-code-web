@@ -20,6 +20,17 @@
   },
   "overrides": [
     {
+      "includes": [
+        "apps/web/src/components/ui/**",
+        "apps/web/src/lib/utils.ts",
+        "apps/web/src/styles/index.css",
+        "apps/web/components.json"
+      ],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": { "enabled": false }
+    },
+    {
       "includes": ["**/*.md"],
       "formatter": { "enabled": false }
     },
