@@ -1,6 +1,6 @@
 {
   "$schema": "https://shadcn-vue.com/schema.json",
-  "style": "reka-vega",
+  "style": "reka-maia",
   "typescript": true,
   "tailwind": {
     "config": "",
@@ -21,6 +21,6 @@
   },
   "menuColor": "default",
   "menuAccent": "subtle",
-  "font": "inter",
+  "font": "figtree",
   "registries": {}
 }
