@@ -5,14 +5,14 @@ import { sessions } from "../stores/sessions.ts";
 const repairing = computed(() => sessions.stream?.needsResync ?? false);
 
 const label = computed(() => {
-  if (repairing.value) return "repairing transcript";
+  if (repairing.value) return "đang sửa journal";
   switch (sessions.connection) {
     case "live":
-      return "connected";
+      return "đã kết nối";
     case "connecting":
-      return "connecting";
+      return "đang kết nối";
     case "closed":
-      return "reconnecting";
+      return "đang kết nối lại";
   }
 });
 

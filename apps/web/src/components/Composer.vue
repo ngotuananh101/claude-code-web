@@ -12,8 +12,8 @@ import { Input } from "@/components/ui/input";
     <Input
       disabled
       class="h-10 rounded-xl border-0 bg-transparent px-4 text-[13px] text-muted-foreground shadow-none opacity-100 focus-visible:border-transparent focus-visible:ring-0 disabled:opacity-100"
-      placeholder="Prompt dispatch arrives with the run API — this box lights up then."
-      aria-label="Prompt composer (not wired yet)"
+      placeholder="Gửi prompt sẽ có cùng run API — khung này sẽ sáng từ lúc đó."
+      aria-label="Ô soạn prompt (chưa kết nối)"
     />
   </div>
 </template>

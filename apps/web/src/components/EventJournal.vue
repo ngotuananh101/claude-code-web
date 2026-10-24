@@ -29,7 +29,7 @@ const rows = computed<Row[]>(() => {
 });
 
 const emptyCopy = computed(() =>
-  props.sessionLive ? "Waiting for the first event." : "Nothing journaled for this session.",
+  props.sessionLive ? "Đang chờ sự kiện đầu tiên." : "Phiên này chưa có gì trong journal.",
 );
 </script>
 
@@ -39,9 +39,8 @@ const emptyCopy = computed(() =>
       v-if="needsResync"
       class="mt-4.5 ml-5 border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
     >
-      The journal is being repaired. Retention removed history this view
-      trusted, so the transcript is restarting from the earliest surviving
-      event.
+      Journal đang được sửa chữa. Retention đã xoá phần lịch sử mà view này
+      đang giữ, bản ghi sẽ bắt đầu lại từ sự kiện còn sót sớm nhất.
     </p>
 
     <p v-else-if="events.length === 0" class="mt-11 ml-5 mb-11 text-sm text-muted-foreground">

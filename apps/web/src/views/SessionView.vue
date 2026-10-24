@@ -71,7 +71,7 @@ async function refreshNow(): Promise<void> {
           <span>{{ active.watermark }}</span>
           <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
             <i class="size-[7px] animate-pulse rounded-full bg-primary" />
-            live
+            đang chạy
           </span>
         </span>
       </header>
@@ -84,7 +84,7 @@ async function refreshNow(): Promise<void> {
         :session-live="activeLive"
       />
       <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        Waiting for the journal…
+        Đang chờ journal…
       </div>
 
       <div class="z-10 px-7 pt-2 pb-4.5">
@@ -97,7 +97,7 @@ async function refreshNow(): Promise<void> {
         <div class="grid justify-items-center gap-1.5 text-center">
           <h1 class="text-[26px] font-medium tracking-tight">{{ greeting }}</h1>
           <p class="text-sm text-muted-foreground">
-            Open a session from the rail, or wait for a runner to start one.
+            Chọn một phiên ở thanh bên, hoặc đợi runner mở phiên mới.
           </p>
         </div>
 
@@ -115,7 +115,7 @@ async function refreshNow(): Promise<void> {
             class="cursor-pointer rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
             @click="refreshNow"
           >
-            refresh
+            làm mới
           </button>
           <button
             v-if="sessions.sessions.length > 0"
@@ -123,7 +123,7 @@ async function refreshNow(): Promise<void> {
             class="cursor-pointer rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
             @click="router.push(`/sessions/${sessions.sessions[0]!.sessionId}`)"
           >
-            open latest journal
+            mở journal mới nhất
           </button>
         </div>
       </div>

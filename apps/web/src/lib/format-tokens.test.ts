@@ -9,11 +9,11 @@ describe("formatTokens", () => {
 
   test("thousands collapse to one decimal", () => {
     expect(formatTokens(1_000)).toBe("1K");
-    expect(formatTokens(12_345)).toBe("12.3K");
+    expect(formatTokens(12_345)).toBe("12,3K");
   });
 
   test("millions and billions keep two decimals", () => {
-    expect(formatTokens(1_234_567)).toBe("1.23M");
-    expect(formatTokens(2_500_000_000)).toBe("2.5B");
+    expect(formatTokens(1_234_567)).toBe("1,23M");
+    expect(formatTokens(2_500_000_000)).toBe("2,5B");
   });
 });

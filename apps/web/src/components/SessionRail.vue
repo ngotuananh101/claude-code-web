@@ -66,7 +66,7 @@ async function signOut(): Promise<void> {
       <RouterLink
         to="/"
         class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-mono text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-        title="Dashboard"
+        title="Tổng quan"
       >
         cc
       </RouterLink>
@@ -74,7 +74,7 @@ async function signOut(): Promise<void> {
       <span class="ml-auto flex items-center gap-0.5">
         <button
           type="button"
-          aria-label="Go back"
+          aria-label="Quay lại"
           :disabled="!canGoBack"
           class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           @click="router.back()"
@@ -83,7 +83,7 @@ async function signOut(): Promise<void> {
         </button>
         <button
           type="button"
-          aria-label="Go forward"
+          aria-label="Tiến"
           :disabled="!canGoForward"
           class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           @click="router.forward()"
@@ -94,15 +94,6 @@ async function signOut(): Promise<void> {
     </div>
 
     <nav class="grid gap-0.5 px-3 pt-4">
-      <Button
-        variant="secondary"
-        class="h-9 w-full justify-start gap-2.5 rounded-lg text-[13px] font-normal"
-        title="Detach — the next session lands here as soon as a runner starts one"
-        @click="newSession"
-      >
-        <SquarePen :size="15" class="text-muted-foreground" />
-        New session
-      </Button>
       <RouterLink
         to="/"
         class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
@@ -113,8 +104,22 @@ async function signOut(): Promise<void> {
         "
       >
         <LayoutDashboard :size="15" />
-        Dashboard
+        Tổng quan
       </RouterLink>
+      <button
+        type="button"
+        class="flex h-9 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors"
+        :class="
+          route.name === 'sessions' && route.params.sessionId == null
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+        "
+        title="Tháo journal — phiên kế tiếp sẽ hiện ở đây ngay khi runner bắt đầu"
+        @click="newSession"
+      >
+        <SquarePen :size="15" />
+        Phiên mới
+      </button>
       <RouterLink
         to="/runners"
         class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
@@ -138,14 +143,14 @@ async function signOut(): Promise<void> {
         <Input
           v-model="query"
           class="h-8 rounded-lg pl-8 text-xs"
-          placeholder="Search sessions"
+          placeholder="Tìm phiên"
           type="search"
         />
       </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-      <p class="px-2.5 pt-2 pb-1.5 text-xs font-medium text-muted-foreground">Sessions</p>
+      <p class="px-2.5 pt-2 pb-1.5 text-xs font-medium text-muted-foreground">Phiên</p>
       <ul v-if="filtered.length > 0" class="grid content-start gap-0.5">
         <li v-for="s in filtered" :key="s.sessionId">
           <Button
@@ -165,7 +170,7 @@ async function signOut(): Promise<void> {
               <span
                 v-if="s.live"
                 class="size-[7px] animate-pulse rounded-full bg-primary"
-                title="A run is in flight"
+                title="Có một run đang chạy"
               />
             </span>
           </Button>
@@ -175,15 +180,16 @@ async function signOut(): Promise<void> {
         v-else-if="sessions.loaded && sessions.sessions.length > 0"
         class="px-2.5 py-2 text-xs text-muted-foreground"
       >
-        No sessions match.
+        Không có phiên nào khớp.
       </p>
       <p
         v-else-if="sessions.loaded"
         class="px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
       >
-        No sessions yet. Enroll a runner and dispatch a run — they land here as they start.
+        Chưa có phiên nào. Kết nối một runner và chạy lệnh — phiên sẽ xuất hiện
+        ở đây ngay khi bắt đầu.
       </p>
-      <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">Reading the journal…</p>
+      <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">Đang đọc journal…</p>
     </div>
 
     <footer class="border-t border-sidebar-border px-3 py-2.5">
@@ -197,7 +203,7 @@ async function signOut(): Promise<void> {
         <span class="flex-1 truncate text-[13px]">owner</span>
         <button
           type="button"
-          aria-label="Sign out"
+          aria-label="Đăng xuất"
           class="grid size-7 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-destructive"
           @click="signOut"
         >

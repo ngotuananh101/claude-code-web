@@ -31,10 +31,10 @@ const mintedSeq = computed(() => {
 const setupCommands = computed(() => {
   if (minted.value === null) return "";
   return [
-    `CC_WEB_RUNNER_TOKEN=<token above> cc-web-runner setup \\`,
+    `CC_WEB_RUNNER_TOKEN=<token phía trên> cc-web-runner setup \\`,
     `  --server ${origin} --runner-id ${minted.value.runnerId}`,
     ``,
-    `cc-web-runner connect   # or: cc-web-runner service install`,
+    `cc-web-runner connect   # hoặc: cc-web-runner service install`,
   ].join("\n");
 });
 
@@ -43,7 +43,9 @@ function pad(n: number): string {
 }
 
 function fmt(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
+  // Pinned vi-VN for the same reason as the rail's timestamps: deterministic
+  // alongside the Vietnamese labels around it.
+  return new Date(ms).toLocaleString("vi-VN", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -97,8 +99,8 @@ onMounted(() => void load());
       <p class="wordmark font-mono">cc-web / runners</p>
       <h1>Connectors.</h1>
       <p class="lede">
-        A runner is a connector on the host where your projects live: it dials
-        out to this server, receives commands, and journals what the agent did.
+        Runner là connector chạy trên máy chứa dự án của bạn: nó tự kết nối ra
+        server này, nhận lệnh, và ghi lại những gì agent đã làm vào journal.
       </p>
 
       <div class="toolbar">
@@ -108,9 +110,9 @@ onMounted(() => void load());
       <section v-if="minted" class="event minted">
         <span class="seq font-mono" aria-hidden="true">{{ mintedSeq }}</span>
         <div class="event-body">
-          <p class="minted-title">One-time runner token</p>
+          <p class="minted-title">Token runner dùng một lần</p>
           <p class="minted-note">
-            Shown once — the server stores only its hash. Copy it now.
+            Chỉ hiển thị một lần — server chỉ lưu hash của nó. Copy ngay bây giờ.
           </p>
           <div class="secret font-mono">
             <span class="secret-value">{{ minted.token }}</span>
@@ -122,13 +124,13 @@ onMounted(() => void load());
           </div>
           <pre class="setup font-mono">{{ setupCommands }}</pre>
           <Button variant="outline" size="sm" class="done" @click="minted = null">
-            Done
+            Xong
           </Button>
         </div>
       </section>
 
       <p v-if="runners.length === 0 && minted === null" class="empty">
-        No runners yet. Mint a token and run the setup command on the host.
+        Chưa có runner nào. Mint một token rồi chạy lệnh setup trên máy đó.
       </p>
 
       <div v-for="(runner, i) in runners" :key="runner.runnerId" class="event-row">
@@ -138,8 +140,8 @@ onMounted(() => void load());
         <div class="event-body">
           <span class="runner-id font-mono">{{ runner.runnerId }}</span>
           <span class="runner-meta font-mono">
-            registered {{ fmt(runner.createdAt) }}
-            <template v-if="runner.revokedAt !== null"> · revoked {{ fmt(runner.revokedAt) }}</template>
+            đã kết nối {{ fmt(runner.createdAt) }}
+            <template v-if="runner.revokedAt !== null"> · đã thu hồi {{ fmt(runner.revokedAt) }}</template>
           </span>
         </div>
       </div>

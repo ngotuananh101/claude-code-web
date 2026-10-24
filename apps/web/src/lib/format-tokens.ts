@@ -1,6 +1,8 @@
 /**
  * Dashboard token numbers: 999 stays exact, then K/M/B with the fewest
- * decimals that still say something. Called per render on KPI cards.
+ * decimals that still say something. Called per render on KPI cards. The
+ * decimal separator follows vi-VN (a comma), matching the rest of the UI's
+ * locale.
  */
 export function formatTokens(tokens: number): string {
   if (tokens < 1_000) return String(tokens);
@@ -14,7 +16,7 @@ export function formatTokens(tokens: number): string {
     if (value >= size) {
       const decimals = suffix === "K" ? 1 : 2;
       const scaled = Number(value) / Number(size);
-      return `${trimTo(scaled, decimals)}${suffix}`;
+      return `${trimTo(scaled, decimals).replace(".", ",")}${suffix}`;
     }
   }
   return String(tokens);

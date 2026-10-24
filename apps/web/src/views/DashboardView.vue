@@ -50,25 +50,25 @@ const kpis = computed<Kpi[]>(() => {
   const totals = stats.value?.totals;
   return [
     {
-      label: "Tokens in",
+      label: "Token vào",
       value: totals?.inputTokens ?? 0,
       icon: ArrowDownLeft,
       tone: "text-chart-1",
     },
     {
-      label: "Cache read",
+      label: "Đọc cache",
       value: totals?.cacheReadTokens ?? 0,
       icon: Database,
       tone: "text-chart-2",
     },
     {
-      label: "Cache creation",
+      label: "Tạo cache",
       value: totals?.cacheCreationTokens ?? 0,
       icon: Layers,
       tone: "text-chart-3",
     },
     {
-      label: "Tokens out",
+      label: "Token ra",
       value: totals?.outputTokens ?? 0,
       icon: ArrowUpRight,
       tone: "text-chart-4",
@@ -76,7 +76,7 @@ const kpis = computed<Kpi[]>(() => {
   ];
 });
 
-const today = new Date().toLocaleDateString("en-US", {
+const today = new Date().toLocaleDateString("vi-VN", {
   weekday: "long",
   month: "long",
   day: "numeric",
@@ -102,10 +102,10 @@ const bars = computed<Bar[]>(() => {
   const scale = (tokens: number): number =>
     max === 0 ? 0 : Math.max(tokens > 0 ? 1.5 : 0, (tokens / max) * (CHART.height - 6));
   const fills: Array<[keyof DayTokens, string, string]> = [
-    ["inputTokens", "fill-chart-1", "in"],
-    ["cacheReadTokens", "fill-chart-2", "cache read"],
-    ["cacheCreationTokens", "fill-chart-3", "cache creation"],
-    ["outputTokens", "fill-chart-4", "out"],
+    ["inputTokens", "fill-chart-1", "vào"],
+    ["cacheReadTokens", "fill-chart-2", "đọc cache"],
+    ["cacheCreationTokens", "fill-chart-3", "tạo cache"],
+    ["outputTokens", "fill-chart-4", "ra"],
   ];
   return daily.map((day, index) => {
     let top = CHART.height;
@@ -126,10 +126,10 @@ type DayTokens = {
 };
 
 const legend: Array<{ label: string; swatch: string }> = [
-  { label: "in", swatch: "bg-chart-1" },
-  { label: "cache read", swatch: "bg-chart-2" },
-  { label: "cache creation", swatch: "bg-chart-3" },
-  { label: "out", swatch: "bg-chart-4" },
+  { label: "vào", swatch: "bg-chart-1" },
+  { label: "đọc cache", swatch: "bg-chart-2" },
+  { label: "tạo cache", swatch: "bg-chart-3" },
+  { label: "ra", swatch: "bg-chart-4" },
 ];
 
 const hasUsage = computed(
@@ -149,10 +149,10 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
   <div class="min-h-0 flex-1 overflow-y-auto">
     <div class="mx-auto grid w-full max-w-[900px] gap-5 px-7 py-7">
       <header>
-        <p class="font-mono text-[13px] text-primary">cc-web / overview</p>
-        <h1 class="mt-3 mb-1 text-[26px] font-medium tracking-tight">Overview.</h1>
+        <p class="font-mono text-[13px] text-primary">cc-web / tổng quan</p>
+        <h1 class="mt-3 mb-1 text-[26px] font-medium tracking-tight">Tổng quan.</h1>
         <p class="text-sm text-muted-foreground">
-          Token usage and journal activity — {{ today }}.
+          Token đã dùng và hoạt động journal — {{ today }}.
         </p>
       </header>
 
@@ -169,13 +169,13 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
           <p class="mt-2 text-[22px] leading-tight font-medium tabular-nums">
             {{ formatTokens(kpi.value) }}
           </p>
-          <p class="mt-0.5 text-[11px] text-muted-foreground">all time</p>
+          <p class="mt-0.5 text-[11px] text-muted-foreground">toàn bộ thời gian</p>
         </div>
       </div>
 
       <section class="rounded-xl border border-border bg-card p-4.5">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 class="text-sm font-medium">Usage — last 14 days</h2>
+          <h2 class="text-sm font-medium">Lượng dùng — 14 ngày gần nhất</h2>
           <div class="flex items-center gap-3.5">
             <span
               v-for="item in legend"
@@ -188,14 +188,14 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
           </div>
         </div>
         <p v-if="stats !== null && !hasUsage" class="py-10 text-center text-sm text-muted-foreground">
-          No usage journaled yet — it lands here as runs complete.
+          Chưa có dữ liệu usage — số liệu sẽ về đây khi các run hoàn tất.
         </p>
         <svg
           v-else
           class="w-full"
           :viewBox="`0 0 ${CHART.width} ${CHART.height}`"
           role="img"
-          aria-label="Daily token usage"
+          aria-label="Token dùng theo ngày"
         >
           <g v-for="(bar, i) in bars" :key="i">
             <rect
@@ -226,7 +226,7 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
           <h2 class="mb-3 text-sm font-medium">Journal</h2>
           <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-[13px]">
             <div>
-              <dt class="text-xs text-muted-foreground">Sessions</dt>
+              <dt class="text-xs text-muted-foreground">Phiên</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.sessions ?? "—" }}</dd>
             </div>
             <div>
@@ -234,15 +234,15 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.runs ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Events</dt>
+              <dt class="text-xs text-muted-foreground">Sự kiện</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.events ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Runners enrolled</dt>
+              <dt class="text-xs text-muted-foreground">Runner đã kết nối</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ runnersEnrolled ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Live now</dt>
+              <dt class="text-xs text-muted-foreground">Đang chạy</dt>
               <dd class="mt-0.5 flex items-center gap-1.5 font-medium tabular-nums">
                 {{ liveCount }}
                 <i
@@ -255,9 +255,9 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
         </section>
 
         <section class="rounded-xl border border-border bg-card p-4.5">
-          <h2 class="mb-3 text-sm font-medium">Recent sessions</h2>
+          <h2 class="mb-3 text-sm font-medium">Phiên gần đây</h2>
           <p v-if="recent.length === 0" class="text-sm text-muted-foreground">
-            No sessions yet — enroll a runner and dispatch a run.
+            Chưa có phiên nào — kết nối runner và chạy lệnh đầu tiên.
           </p>
           <ul v-else class="grid content-start gap-0.5">
             <li v-for="s in recent" :key="s.sessionId">
@@ -267,11 +267,11 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
               >
                 <span class="min-w-0 flex-1 truncate font-mono text-xs">{{ s.sessionId }}</span>
                 <span class="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-                  {{ s.eventCount }} events · {{ relativeTime(s.lastIngestedAt) }}
+                  {{ s.eventCount }} sự kiện · {{ relativeTime(s.lastIngestedAt) }}
                   <i
                     v-if="s.live"
                     class="size-[7px] animate-pulse rounded-full bg-primary"
-                    title="A run is in flight"
+                    title="Có một run đang chạy"
                   />
                 </span>
               </RouterLink>
