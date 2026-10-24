@@ -19,8 +19,11 @@
 
 import {
   ConnectionRegistry,
+  EVENT_TYPES,
   negotiateHello,
+  PROTOCOL_VERSION,
   type RunnerCommand,
+  type RunnerEvent,
   type RunnerRunState,
   RunRegistry,
   reconcile,
@@ -41,7 +44,11 @@ export type CredentialCheck =
 
 export type GatewayState = "offline" | "connected" | "ready" | "revoked";
 
-export type RefusalReason = "not_negotiated" | "already_negotiated" | "unknown_message";
+export type RefusalReason =
+  | "not_negotiated"
+  | "already_negotiated"
+  | "not_ready"
+  | "unknown_message";
 
 export type HandleResult =
   | { ok: true }
@@ -99,6 +106,16 @@ type GatewayOptions = {
    * knows nothing about a database.
    */
   onReceipt?: (runnerId: string, receipt: CommandReceipt) => void;
+  /**
+   * Called with a validated batch of runner events (§12.2). Returns the
+   * per-attempt watermarks the journal can acknowledge through, which the
+   * gateway relays as `events.ack` frames. The hook owns the journal because
+   * this class deliberately knows nothing about a database.
+   */
+  onEvents?: (
+    runnerId: string,
+    events: RunnerEvent[],
+  ) => Array<{ attemptId: string; through: number }>;
 };
 
 /** What a successful authorization hands to the socket that carries it. */
@@ -122,6 +139,9 @@ export class RunnerGateway {
   readonly #runs: RunRegistry;
   readonly #onReady: ((runnerId: string) => void) | undefined;
   readonly #onReceipt: ((runnerId: string, receipt: CommandReceipt) => void) | undefined;
+  readonly #onEvents:
+    | ((runnerId: string, events: RunnerEvent[]) => Array<{ attemptId: string; through: number }>)
+    | undefined;
   readonly #live = new Map<string, Connection>();
 
   constructor(options: GatewayOptions) {
@@ -131,6 +151,7 @@ export class RunnerGateway {
     this.#runs = options.runs ?? new RunRegistry();
     this.#onReady = options.onReady;
     this.#onReceipt = options.onReceipt;
+    this.#onEvents = options.onEvents;
   }
 
   /**
@@ -269,6 +290,9 @@ export class RunnerGateway {
 
       case "command.receipt":
         return this.#handleReceipt(connection, record);
+
+      case "events":
+        return this.#handleEvents(connection, record["events"]);
 
       default:
         // Unknown message types are refused rather than ignored: silently
@@ -479,6 +503,53 @@ export class RunnerGateway {
     return { ok: true };
   }
 
+  /**
+   * A batch of events from a ready runner (§12.2).
+   *
+   * Validation is structural and about identity: every field the journal keys
+   * on must be present and typed, the event type must be one the protocol
+   * defines, and the claimed runner id must be the authenticated one — a
+   * journal is a durable public record (§12.3), so nothing unvalidated is
+   * written into it and nobody writes under someone else's name (§19.2).
+   */
+  #handleEvents(connection: Connection, raw: unknown): HandleResult {
+    if (connection.state !== "ready") {
+      // Same stance as dispatch: a runner whose reconciliation has not
+      // succeeded cannot vouch for what it reports.
+      return this.#refuse(connection, "not_ready");
+    }
+
+    const runnerId = connection.socket.data.runnerId;
+    const events = asValidatedEvents(raw, runnerId);
+    if (!events) {
+      this.#send(connection, { type: "error", reason: "malformed_event" });
+      return { ok: false, reason: "malformed" };
+    }
+
+    if (!this.#onEvents) {
+      return this.#refuse(connection, "unknown_message");
+    }
+
+    let acks: Array<{ attemptId: string; through: number }>;
+    try {
+      acks = this.#onEvents(runnerId, events);
+    } catch {
+      // The journal refused the batch. No ACK: the runner keeps the rows
+      // pending and resends, which is exactly the at-least-once contract.
+      this.#send(connection, { type: "error", reason: "ingest_failed" });
+      return { ok: false, reason: "malformed" };
+    }
+
+    for (const ack of acks) {
+      this.#send(connection, {
+        type: "events.ack",
+        attemptId: ack.attemptId,
+        through: ack.through,
+      });
+    }
+    return { ok: true };
+  }
+
   #serverInventory(connection: Connection): Array<ReturnType<typeof toServerRunState>> {
     // Scoped to this runner's sessions. A registry shared across runners would
     // otherwise reconcile work belonging to someone else.
@@ -529,4 +600,63 @@ function newConnectionId(): string {
 
 function asArray<T>(value: unknown): T[] | undefined {
   return Array.isArray(value) ? (value as T[]) : undefined;
+}
+
+const EVENT_TYPE_SET: ReadonlySet<string> = new Set(EVENT_TYPES);
+
+/**
+ * Structural + identity validation of an events frame body. Returns the typed
+ * events, or undefined when anything the journal keys on is missing, mistyped,
+ * invented, or claimed under another runner's identity.
+ */
+function asValidatedEvents(raw: unknown, authenticatedRunnerId: string): RunnerEvent[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+  const events: RunnerEvent[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const record = entry as Record<string, unknown>;
+
+    if (
+      record["protocolVersion"] !== PROTOCOL_VERSION ||
+      typeof record["eventId"] !== "string" ||
+      record["eventId"] === "" ||
+      typeof record["bootId"] !== "string" ||
+      record["bootId"] === "" ||
+      typeof record["sessionId"] !== "string" ||
+      record["sessionId"] === "" ||
+      typeof record["runId"] !== "string" ||
+      record["runId"] === "" ||
+      typeof record["attemptId"] !== "string" ||
+      record["attemptId"] === "" ||
+      typeof record["localSequence"] !== "number" ||
+      !Number.isInteger(record["localSequence"]) ||
+      record["localSequence"] < 1 ||
+      typeof record["occurredAt"] !== "string" ||
+      record["occurredAt"] === "" ||
+      typeof record["type"] !== "string" ||
+      !EVENT_TYPE_SET.has(record["type"])
+    ) {
+      return undefined;
+    }
+
+    // The credential authenticated this connection; the payload's claim about
+    // who is speaking must agree with it or the event is someone else's.
+    if (record["runnerId"] !== authenticatedRunnerId) return undefined;
+
+    events.push({
+      protocolVersion: PROTOCOL_VERSION,
+      eventId: record["eventId"],
+      runnerId: record["runnerId"] as string,
+      bootId: record["bootId"],
+      sessionId: record["sessionId"],
+      runId: record["runId"],
+      attemptId: record["attemptId"],
+      localSequence: record["localSequence"],
+      occurredAt: record["occurredAt"],
+      type: record["type"] as RunnerEvent["type"],
+      payload: record["payload"] ?? null,
+    });
+  }
+  return events;
 }

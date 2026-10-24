@@ -20,6 +20,12 @@ export {
   createEnrollment,
 } from "./enrollment.ts";
 export {
+  attemptWatermark,
+  type IngestResult,
+  ingestEvent,
+  type JournalEvent,
+} from "./journal.ts";
+export {
   issueRunnerCredential,
   revokeRunner,
   type VerifiedRunner,

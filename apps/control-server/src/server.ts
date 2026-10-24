@@ -15,9 +15,11 @@
 
 import type { Database } from "bun:sqlite";
 import {
+  attemptWatermark,
   type CommandOutbox,
   consumeEnrollment,
   createEnrollment,
+  ingestEvent,
   issueRunnerCredential,
   Scheduler,
 } from "@cc-web/control-db";
@@ -79,6 +81,20 @@ export function createServer(options: ServerOptions): ServerHandle {
     verifyCredential: options.verifyRunnerCredential,
     onReady: (runnerId) => dispatcher?.drain(runnerId),
     onReceipt: (runnerId, receipt) => dispatcher?.handleReceipt(runnerId, receipt),
+    // §12.1, §12.2: journal every event before any ACK is written, and let the
+    // ACK carry only the contiguous watermark the journal can vouch for. A resend
+    // of what already committed answers `duplicate` and allocates nothing, which
+    // is what makes a lost ACK heal itself instead of doubling the journal.
+    onEvents: (_runnerId, events) => {
+      for (const event of events) {
+        ingestEvent(options.db, event);
+      }
+      const attempts = new Set(events.map((event) => event.attemptId));
+      return [...attempts].map((attemptId) => ({
+        attemptId,
+        through: attemptWatermark(options.db, attemptId),
+      }));
+    },
   });
 
   if (options.outbox) {

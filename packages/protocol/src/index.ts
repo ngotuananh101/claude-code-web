@@ -69,6 +69,53 @@ export type EventType =
   | "usage.updated"
   | "session.updated";
 
+/**
+ * The `EventType` union as a runtime list. The wire carries event types as
+ * strings, and a server that accepted any string would journal invented types
+ * forever; this list is what validation checks against. The `satisfies` plus the
+ * completeness check below make the list and the union impossible to drift
+ * apart at typecheck time.
+ */
+export const EVENT_TYPES = [
+  "command.accepted",
+  "command.rejected",
+  "run.started",
+  "run.status",
+  "run.finished",
+  "run.failed",
+  "run.interrupted",
+  "message.started",
+  "message.delta",
+  "message.completed",
+  "tool.started",
+  "tool.completed",
+  "approval.requested",
+  "approval.resolved",
+  "approval.expired",
+  "question.requested",
+  "question.answered",
+  "workspace.changed",
+  "usage.updated",
+  "session.updated",
+] as const satisfies readonly EventType[];
+
+type EventTypesCoverEventType = EventType extends (typeof EVENT_TYPES)[number] ? true : false;
+// If this line fails to compile, EVENT_TYPES is missing an EventType member.
+type _EventTypesAreComplete = [EventTypesCoverEventType] extends [true] ? true : false;
+
+/** Runner → Server: a batch of journaled events (§12.2). */
+export type EventBatchFrame = {
+  type: "events";
+  events: RunnerEvent[];
+};
+
+/** Server → Runner: the contiguous watermark an attempt is acknowledged through. */
+export type EventAckFrame = {
+  type: "events.ack";
+  attemptId: string;
+  through: number;
+};
+
 export type RunnerHello = {
   protocolVersion: ProtocolVersion;
   runnerId: string;

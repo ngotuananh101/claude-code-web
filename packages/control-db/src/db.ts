@@ -162,6 +162,54 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS active_runs_runner
       ON active_runs (runner_id);
   `);
+
+  // The durable event journal (§12.1, §12.2). Events arrive at-least-once, so
+  // both identities are unique: the event id (dedup after a lost ACK) and the
+  // (attempt, local sequence) position (the transcript's order). A conflicting
+  // duplicate is refused and audited, never overwritten.
+  //
+  // `session_sequence` is allocated at ingest, inside the inserting
+  // transaction: the browser replays per session (§12.5), and the offset it
+  // resumes from must not depend on other sessions' traffic.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_events (
+      event_id         TEXT PRIMARY KEY,
+      runner_id        TEXT NOT NULL,
+      boot_id          TEXT NOT NULL,
+      session_id       TEXT NOT NULL,
+      run_id           TEXT NOT NULL,
+      attempt_id       TEXT NOT NULL,
+      local_sequence   INTEGER NOT NULL,
+      session_sequence INTEGER NOT NULL,
+      type             TEXT NOT NULL,
+      payload          TEXT NOT NULL,
+      occurred_at      TEXT NOT NULL,
+      ingested_at      INTEGER NOT NULL,
+      UNIQUE (attempt_id, local_sequence)
+    );
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS run_events_session_order
+      ON run_events (session_id, session_sequence);
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS run_events_attempt
+      ON run_events (attempt_id, local_sequence);
+  `);
+
+  // §12.1: "conflicting duplicate phải được audit". The journal keeps the first
+  // observation; this table is the record that something else claimed the same
+  // identity, which is either a runner bug or an attack worth investigating.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS event_ingest_conflicts (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id    TEXT NOT NULL,
+      detail      TEXT NOT NULL,
+      detected_at INTEGER NOT NULL
+    );
+  `);
 }
 
 /**

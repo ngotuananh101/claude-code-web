@@ -298,3 +298,170 @@ describe("runner gateway", () => {
     expect(gateway.stateOf("runner-a")).toBe("connected");
   });
 });
+
+describe("event ingestion", () => {
+  /** Drive one socket through hello + reconcile so it is ready. */
+  function readySocket(gateway: RunnerGateway) {
+    const made = makeSocket();
+    gateway.handleOpen(made.socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(made.socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(made.socket, JSON.stringify({ type: "reconcile", runner: [] }));
+    return made;
+  }
+
+  function wireframe(sequence: number, eventId: string) {
+    return {
+      protocolVersion: 1,
+      eventId,
+      runnerId: "runner-a",
+      bootId: "boot-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      localSequence: sequence,
+      occurredAt: "2026-10-24T00:00:00.000Z",
+      type: "run.started",
+      payload: { commandId: "cmd-1" },
+    };
+  }
+
+  test("a ready runner's events reach the journal hook and are acknowledged", () => {
+    const seen: Array<{ runnerId: string; count: number }> = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: (runnerId, events) => {
+        seen.push({ runnerId, count: events.length });
+        return [{ attemptId: "attempt-1", through: 2 }];
+      },
+    });
+
+    const { socket, sent } = readySocket(gateway);
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "events", events: [wireframe(1, "evt-1"), wireframe(2, "evt-2")] }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    // The hook receives the authenticated identity's events, not a claim in
+    // the payload it might have wanted to trust.
+    expect(seen).toEqual([{ runnerId: "runner-a", count: 2 }]);
+    expect(sent.at(-1)).toEqual({ type: "events.ack", attemptId: "attempt-1", through: 2 });
+  });
+
+  test("a batch spanning two attempts is acknowledged per attempt", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: () => [
+        { attemptId: "attempt-1", through: 1 },
+        { attemptId: "attempt-2", through: 3 },
+      ],
+    });
+
+    const { socket, sent } = readySocket(gateway);
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "events", events: [wireframe(1, "evt-1")] }),
+    );
+
+    // §12.2: the watermark is per attempt — one attempt's gap must not hold
+    // another attempt's acknowledgements hostage.
+    expect(sent.filter((f) => f.type === "events.ack")).toEqual([
+      { type: "events.ack", attemptId: "attempt-1", through: 1 },
+      { type: "events.ack", attemptId: "attempt-2", through: 3 },
+    ]);
+  });
+
+  test("events before reconciliation are refused, not journaled", () => {
+    let reached = 0;
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: () => {
+        reached += 1;
+        return [];
+      },
+    });
+
+    const made = makeSocket();
+    gateway.handleOpen(made.socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(made.socket, JSON.stringify({ type: "hello", hello }));
+    // Still `connected`, not `ready`: the same stance as dispatch — a runner
+    // whose reconciliation has not succeeded cannot vouch for its events.
+    const result = gateway.handleMessage(
+      made.socket,
+      JSON.stringify({ type: "events", events: [wireframe(1, "evt-1")] }),
+    );
+
+    expect(result).toEqual({ ok: false, reason: "not_ready" });
+    expect(made.sent.at(-1)).toMatchObject({ type: "error", reason: "not_ready" });
+    expect(reached).toBe(0);
+  });
+
+  test("an event claiming another runner's identity is refused and never journaled", () => {
+    let reached = 0;
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: () => {
+        reached += 1;
+        return [];
+      },
+    });
+
+    const { socket, sent } = readySocket(gateway);
+    const impostor = { ...wireframe(1, "evt-1"), runnerId: "runner-b" };
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "events", events: [impostor] }),
+    );
+
+    // §19.2: the credential authenticated runner-a; a payload claiming
+    // runner-b is a journal-writing attempt under someone else's name.
+    expect(result).toEqual({ ok: false, reason: "malformed" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "malformed_event" });
+    expect(reached).toBe(0);
+  });
+
+  test("an event with an unknown type string is refused and never journaled", () => {
+    let reached = 0;
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: () => {
+        reached += 1;
+        return [];
+      },
+    });
+
+    const { socket, sent } = readySocket(gateway);
+    const invented = { ...wireframe(1, "evt-1"), type: "run.exploded" };
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "events", events: [invented] }),
+    );
+
+    // The journal is durable and public (§12.3): a type nobody defines would
+    // be stored forever and every reader would have to tolerate it.
+    expect(result).toEqual({ ok: false, reason: "malformed" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "malformed_event" });
+    expect(reached).toBe(0);
+  });
+
+  test("an events frame whose body is not an array is refused", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onEvents: () => [],
+    });
+
+    const { socket } = readySocket(gateway);
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "events", events: "nope" }),
+    );
+
+    expect(result).toEqual({ ok: false, reason: "malformed" });
+  });
+});
