@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,21 +10,19 @@ import { authClient } from "../lib/auth-client.ts";
 const router = useRouter();
 const username = ref("");
 const password = ref("");
-const failed = ref(false);
 const busy = ref(false);
 
 async function submit(): Promise<void> {
   busy.value = true;
-  failed.value = false;
   try {
     const { error } = await authClient.signIn.username({
       username: username.value,
       password: password.value,
     });
     if (error !== null) {
-      // One message for every failure: whether the username exists is not
-      // something the form will leak.
-      failed.value = true;
+      // The server's own message, which stays non-committal for credential
+      // failures — the form still learns nothing about the account.
+      toast.error(error.message ?? "Đăng nhập không thành công.");
       return;
     }
     await router.push("/");
@@ -64,9 +63,6 @@ async function submit(): Promise<void> {
           autocomplete="current-password"
           placeholder="Mật khẩu"
         />
-        <p v-if="failed" class="mt-0.5 text-center text-sm text-destructive" role="alert">
-          Sai tên đăng nhập hoặc mật khẩu.
-        </p>
         <Button
           type="submit"
           :disabled="busy || username === '' || password === ''"

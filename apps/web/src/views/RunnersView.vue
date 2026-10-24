@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -18,7 +19,6 @@ type RunnerRow = {
 const runners = ref<RunnerRow[]>([]);
 const minted = ref<{ runnerId: string; token: string } | null>(null);
 const mintBusy = ref(false);
-const copied = ref(false);
 const origin = location.origin;
 
 /** The journal's numbering: the newest runner is event 0001. */
@@ -54,16 +54,21 @@ function fmt(ms: number): string {
 
 async function load(): Promise<void> {
   const response = await fetch("/api/runners");
-  if (!response.ok) return;
+  if (!response.ok) {
+    toast.error(await response.text());
+    return;
+  }
   runners.value = ((await response.json()) as { runners: RunnerRow[] }).runners;
 }
 
 async function mint(): Promise<void> {
   mintBusy.value = true;
-  copied.value = false;
   try {
     const response = await fetch("/api/runners", { method: "POST" });
-    if (!response.ok) return;
+    if (!response.ok) {
+      toast.error(await response.text());
+      return;
+    }
     minted.value = (await response.json()) as { runnerId: string; token: string };
     await load();
   } finally {
@@ -73,9 +78,14 @@ async function mint(): Promise<void> {
 
 async function copyToken(): Promise<void> {
   if (minted.value === null) return;
-  await navigator.clipboard.writeText(minted.value.token);
-  copied.value = true;
-  setTimeout(() => (copied.value = false), 2000);
+  try {
+    await navigator.clipboard.writeText(minted.value.token);
+    toast.success("Token đã copy");
+  } catch {
+    // An unfocused window or a clipboard the page may not write. The value
+    // stays select-all, so the owner can still copy it by hand.
+    toast.error("Không copy được token — chọn và copy thủ công.");
+  }
 }
 
 onMounted(() => void load());
@@ -104,9 +114,7 @@ onMounted(() => void load());
           </p>
           <div class="secret font-mono">
             <span class="secret-value">{{ minted.token }}</span>
-            <button class="copy" type="button" @click="copyToken">
-              {{ copied ? "copied" : "copy" }}
-            </button>
+            <button class="copy" type="button" @click="copyToken">copy</button>
           </div>
           <div class="field">
             <span class="field-label font-mono">runner id</span>
