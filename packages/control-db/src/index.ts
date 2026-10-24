@@ -41,6 +41,12 @@ export {
   verifyRunnerCredential,
 } from "./runner-credentials.ts";
 export {
+  createRunnerToken,
+  type ListedRunner,
+  listRunners,
+  type MintedRunnerToken,
+} from "./runner-tokens.ts";
+export {
   type DispatchDecision,
   type DispatchRequest,
   type RunnerCapacity,
