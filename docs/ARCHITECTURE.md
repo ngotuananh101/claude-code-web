@@ -910,6 +910,7 @@ HTTP là command entrypoint từ browser; WSS chủ yếu phục vụ subscribe/
 | GET | `/api/runners` | Danh sách runner của owner (id + lifecycle, không secret) |
 | POST | `/api/runners` | Mint one-time connector token (hiển thị một lần, chỉ lưu hash) |
 | POST | `/api/runners/:id/revoke` | Revoke credential/dispatch |
+| GET | `/api/stats/usage` | Usage tổng hợp cho dashboard: token in/cache read/cache creation/out (all-time + daily series), sessions/runs/events counts; đọc từ usage trên `message.completed`, owner-scoped, `no-store` |
 | GET | `/api/workspaces` | Workspace có quyền truy cập |
 | POST | `/api/runners/:id/workspaces` | Request registration có local validation |
 | POST | `/api/workspaces/:id/sessions` | Tạo app session pin location |

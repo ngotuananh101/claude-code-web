@@ -47,3 +47,9 @@ export {
   type RunnerState,
   Scheduler,
 } from "./scheduler.ts";
+export {
+  type UsageDay,
+  type UsageStats,
+  type UsageTotals,
+  usageStats,
+} from "./stats.ts";

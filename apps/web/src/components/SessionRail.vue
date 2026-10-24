@@ -1,15 +1,35 @@
 <script setup lang="ts">
-import { LogOut, Search, Server, SquarePen } from "@lucide/vue";
+import {
+  ChevronLeft,
+  ChevronRight,
+  LayoutDashboard,
+  LogOut,
+  Search,
+  Server,
+  SquarePen,
+} from "@lucide/vue";
 import { computed, onUnmounted, ref } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { relativeTime } from "../lib/relative-time.ts";
-import { closeSession, openSession, sessions } from "../stores/sessions.ts";
+import { closeSession, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 
+const route = useRoute();
 const router = useRouter();
 const query = ref("");
+
+// vue-router writes {back, current, forward} into history.state; reading it
+// on every route change is what keeps the arrows honest.
+const canGoBack = computed(() => {
+  void route.fullPath;
+  return window.history.state?.back != null;
+});
+const canGoForward = computed(() => {
+  void route.fullPath;
+  return window.history.state?.forward != null;
+});
 
 // The rail's "5m ago" stays honest on an open page.
 const now = ref(Date.now());
@@ -24,11 +44,11 @@ const filtered = computed(() => {
   return sessions.sessions.filter((s) => s.sessionId.toLowerCase().includes(needle));
 });
 
-// "New session" is a detach, honestly labelled as such: §11's dispatch API is
-// what will let a prompt create a session from here. Until then the greeting
-// state is where the operator lands between journals.
+// "New session" leaves the held journal for the composer page: §11's dispatch
+// API is what will let a prompt create a session from there.
 function newSession(): void {
   closeSession();
+  void router.push("/sessions");
 }
 
 async function signOut(): Promise<void> {
@@ -43,12 +63,34 @@ async function signOut(): Promise<void> {
 <template>
   <aside class="flex h-full w-[270px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
     <div class="flex items-center gap-2.5 px-4 pt-4.5">
-      <span
-        class="grid size-7 shrink-0 place-items-center rounded-lg bg-primary font-mono text-xs font-semibold text-primary-foreground"
+      <RouterLink
+        to="/"
+        class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-mono text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-85"
+        title="Dashboard"
       >
         cc
+      </RouterLink>
+      <RouterLink to="/" class="truncate text-sm font-medium hover:opacity-80">cc-web</RouterLink>
+      <span class="ml-auto flex items-center gap-0.5">
+        <button
+          type="button"
+          aria-label="Go back"
+          :disabled="!canGoBack"
+          class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+          @click="router.back()"
+        >
+          <ChevronLeft :size="15" />
+        </button>
+        <button
+          type="button"
+          aria-label="Go forward"
+          :disabled="!canGoForward"
+          class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+          @click="router.forward()"
+        >
+          <ChevronRight :size="15" />
+        </button>
       </span>
-      <span class="text-sm font-medium">cc-web</span>
     </div>
 
     <nav class="grid gap-0.5 px-3 pt-4">
@@ -62,8 +104,25 @@ async function signOut(): Promise<void> {
         New session
       </Button>
       <RouterLink
+        to="/"
+        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        :class="
+          route.name === 'dashboard'
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+        "
+      >
+        <LayoutDashboard :size="15" />
+        Dashboard
+      </RouterLink>
+      <RouterLink
         to="/runners"
-        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        :class="
+          route.name === 'runners'
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+        "
       >
         <Server :size="15" />
         Runners
@@ -96,7 +155,7 @@ async function signOut(): Promise<void> {
               s.sessionId === sessions.activeId &&
               'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
             "
-            @click="openSession(s.sessionId)"
+            @click="router.push(`/sessions/${s.sessionId}`)"
           >
             <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
               {{ s.sessionId }}

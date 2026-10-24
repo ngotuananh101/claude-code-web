@@ -27,6 +27,7 @@ import {
   sessionEarliest,
   sessionOwner,
   sessionWatermark,
+  usageStats,
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
@@ -212,6 +213,10 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/sessions" && request.method === "GET") {
         return handleListSessions(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/stats/usage" && request.method === "GET") {
+        return handleUsageStats(request, options, allowed, browserGateway);
       }
 
       if (url.pathname === "/ws/runner") {
@@ -489,6 +494,37 @@ async function handleListSessions(
   }
 
   return new Response(JSON.stringify({ sessions: listSessions(options.db, authorized.userId) }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * The dashboard's usage read (token in/cache/out totals, a daily series,
+ * volume counts). Same authentication shape as the session list: Origin
+ * first, then the cookie, and the aggregation is scoped to the authorized
+ * owner inside `usageStats` — the query is the access rule.
+ */
+async function handleUsageStats(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  return new Response(JSON.stringify(usageStats(options.db, authorized.userId)), {
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });

@@ -151,6 +151,30 @@ export type SessionResyncFrame = {
   fromSequence: number;
 };
 
+/**
+ * Usage accounting for the dashboard (§12.3 usage side). The numbers come
+ * from the API's token fields on assistant messages; cost figures are
+ * redacted before the journal and never appear here (§19.4).
+ */
+export type UsageTotals = {
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+};
+
+export type UsageDay = UsageTotals & { day: string };
+
+export type UsageStats = {
+  /** All-time sums; the dashboard's KPI cards. */
+  totals: UsageTotals;
+  /** The last N UTC days, zero-filled, oldest first; the chart's series. */
+  daily: UsageDay[];
+  sessions: number;
+  runs: number;
+  events: number;
+};
+
 export type RunnerHello = {
   protocolVersion: ProtocolVersion;
   runnerId: string;

@@ -92,7 +92,7 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <main class="runners">
+  <div class="runners overflow-y-auto">
     <div class="page">
       <p class="wordmark font-mono">cc-web / runners</p>
       <h1>Connectors.</h1>
@@ -144,7 +144,7 @@ onMounted(() => void load());
         </div>
       </div>
     </div>
-  </main>
+  </div>
 </template>
 
 <style scoped>
