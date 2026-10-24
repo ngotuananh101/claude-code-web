@@ -1,5 +1,10 @@
 # Phase 1 — protocol primitives and transport
 
+> 2026-10-24: the enrollment token flow and the JWT owner auth described here
+> were replaced the next day by better-auth (owner) and web-minted connector
+> tokens (runners) — ADR-015 in `docs/ARCHITECTURE.md` §24. The body below is
+> kept as the historical record of what phase 1 shipped.
+
 - Date: 2026-10-23
 - Scope: enrollment, credentials, identity, hello negotiation, connection
   generations, command inbox, event outbox with a contiguous ACK watermark,

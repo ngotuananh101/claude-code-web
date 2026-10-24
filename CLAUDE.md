@@ -25,12 +25,11 @@ generated theme variables (`var(--primary)`, `var(--muted-foreground)`,
 `var(--border)`, …) or Tailwind utilities, never a custom palette.
 
 After every shadcn-vue CLI run, check `git diff apps/web/src/styles/index.css`:
-while a `font` is configured the CLI injects a Google Fonts `@import` at the
-top of that file. The repo's `components.json` deliberately has no `font`
-(resolving to zero font imports), and the import must not come back — the
-Inter face is self-hosted via `@fontsource-variable/inter` (imported in
-`apps/web/src/main.ts`) and the control plane must not pull UI fonts from
-the network.
+with `"font": "inter"` in `components.json` the CLI injects a Google Fonts
+`@import` at the top of that file. The owner chose to keep it (655ce1a,
+2026-10-24) — the theme loads Inter from Google Fonts and the import must not
+be stripped. `@fontsource-variable/inter` (imported in `apps/web/src/main.ts`)
+keeps the same face available when the network is not; the two may coexist.
 
 One more invariant lives in `biome.json` (a strict-JSON file, so it cannot
 carry a comment): the generated-file protection override must stay **last**
@@ -40,3 +39,33 @@ this repo watched `biome check --write` rewrite `Input.vue` when the `*.vue`
 override sat below the protection one. After any `biome.json` edit, run
 `biome check --write` against the four paths: it must refuse with
 "provided but ignored".
+
+## Commands and environment
+
+Checks: `bun test`, `bun run typecheck` (tsc -b + apps/web), `bun run lint`
+(biome), `bun run test:integration` (probe scripts; `--docker` variant chains
+through `test:integration:docker`). Web build: `cd apps/web && bun run build`.
+
+Control Server (`bun apps/control-server/src/index.ts`) reads:
+
+- `BETTER_AUTH_SECRET` — required, ≥ 32 chars (better-auth signing key).
+- `BETTER_AUTH_URL` — optional public base URL; defaults to `http://localhost:<port>`.
+- `CC_WEB_ALLOWED_ORIGINS` — required, comma-separated browser origins.
+- `CC_WEB_PORT` — default 8787. `CC_WEB_DB` — default `./data/control.sqlite`.
+
+Seed an owner (username: 3–30 chars of letters/digits/dots/underscores; the
+password arrives on stdin, never argv):
+
+```sh
+echo -n "…" | bun scripts/seed-user.ts <username>
+```
+
+Runner connector (single-file build via `bun run build:runner` →
+`dist/cc-web-runner`; see ADR-015 in `docs/ARCHITECTURE.md`):
+
+- `setup --server <origin> --runner-id <id>` — token from `CC_WEB_RUNNER_TOKEN`,
+  a TTY prompt, or piped stdin (never argv); writes `identity.json` (0600) into
+  `CC_WEB_RUNNER_HOME` (default `~/.cc-web-runner`).
+- `connect` (alias `run`) — start the daemon from the stored identity.
+- `service install | uninstall | print` — manage the systemd unit
+  (`cc-web-runner.service`); the unit carries no secret.

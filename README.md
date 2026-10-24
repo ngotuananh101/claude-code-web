@@ -3,7 +3,7 @@
 Web control plane for Claude coding agents: a browser chat UI that drives Claude
 Agent SDK runs on one or more remote Runners.
 
-**Status:** Phase 1 complete — enrollment, auth, transport, scheduling, dispatch
+**Status:** Phase 1 complete — connector tokens, auth, transport, scheduling, dispatch
 and runner-side execution. The first browser slice is live: sign in, the session
 rail, and the live event journal (§12.5 replay + live tail) rendering in the
 browser. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (blueprint v2.0) and
@@ -88,7 +88,7 @@ waiting on the dispatch API, and approvals (§13) after that.
 Architecture decisions that needed more than a table row live in
 [`docs/adr/`](docs/adr/):
 
-- [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens + `tokenVersion` revocation
+- [ADR-0001](docs/adr/0001-auth-jwt.md) — owner auth with JWT access tokens (superseded 2026-10-24: better-auth, ADR-015 in ARCHITECTURE.md §24)
 - [ADR-0002](docs/adr/0002-toolchain.md) — Fedora target, lockfile-over-pins policy
 - [ADR-0003](docs/adr/0003-provider-gateway.md) — provider auth via a private-LAN Anthropic-compatible gateway; never touches the control plane
 
@@ -98,7 +98,7 @@ Three credentials, three boundaries — none crosses another:
 
 | Credential | Held by | Never reaches |
 | --- | --- | --- |
-| Owner JWT | Browser (HttpOnly cookie) | Runner |
+| Owner session (better-auth cookie) | Browser (HttpOnly cookie) | Runner |
 | Runner credential | Runner daemon | Browser, worker processes |
 | Provider token (gateway) | Runner host config | Control Server, browser, journal |
 

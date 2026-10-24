@@ -13,7 +13,7 @@
 3. [Kiến trúc tổng thể](#3-kiến-trúc-tổng-thể)
 4. [Stack và cấu trúc repository](#4-stack-và-cấu-trúc-repository)
 5. [Domain model và quyền sở hữu](#5-domain-model-và-quyền-sở-hữu)
-6. [Runner enrollment và authentication](#6-runner-enrollment-và-authentication)
+6. [Runner connector và authentication](#6-runner-connector-và-authentication)
 7. [Kế thừa cấu hình Claude Code](#7-kế-thừa-cấu-hình-claude-code)
 8. [Overrides và configuration diagnostics](#8-overrides-và-configuration-diagnostics)
 9. [Durable command delivery](#9-durable-command-delivery)
@@ -114,7 +114,7 @@ Vue + shadcn-vue + CodeMirror
         ▼
 Control Server — Bun + Hono
 ├── Web authentication / authorization
-├── Runner registry / enrollment
+├── Runner registry / connector tokens
 ├── Workspace / session / run services
 ├── Scheduler / assignment authority
 ├── Command outbox / dispatcher
@@ -202,7 +202,7 @@ apps/
     auth/
     http/routes/
     websocket/{browser,runner}/
-    enrollment/
+    runners/
     scheduling/
     commands/
     events/
@@ -282,18 +282,18 @@ Server lưu cả:
 
 UI có thể hiển thị “Running — Runner mất kết nối, quan sát cuối 2 phút trước”. Không đổi `running` thành `failed` chỉ vì socket đóng.
 
-## 6. Runner enrollment và authentication
+## 6. Runner connector và authentication
 
-### 6.1. Enrollment
+### 6.1. Connector model
 
-1. Owner tạo enrollment token một lần, TTL ngắn và scope rõ ràng.
-2. Operator chạy `runner enroll` với Control Server URL và token qua input an toàn; tránh đưa secret vào shell history/process args.
-3. Runner tạo identity, đăng ký với Server qua HTTPS.
-4. Server consume token atomically, gán `runnerId`, trả credential riêng cho Runner.
-5. Credential được lưu local với quyền đọc hạn chế.
-6. Runner mở outbound WSS bằng credential đó.
+Runner là connector kiểu cloudflared: một file thực thi, dials ra Server, không cần inbound port.
 
-Enrollment token không được dùng như credential vĩnh viễn. Không tự reconnect bằng một token đã revoke.
+1. Owner mint token trên web (`POST /api/runners`): `runnerId` là UUID, token hiển thị đúng một lần; database chỉ giữ SHA-256 của token.
+2. Operator chạy `cc-web-runner setup --server <origin> --runner-id <id>` trên máy Runner; token đọc từ `CC_WEB_RUNNER_TOKEN`, TTY prompt hoặc stdin — không bao giờ qua argv (shell history/`ps`).
+3. `setup` ghi `identity.json` (mode 0600, atomic qua temp + rename) vào `CC_WEB_RUNNER_HOME` (mặc định `~/.cc-web-runner`): `runnerId`, `controlUrl`, credential.
+4. `cc-web-runner connect` mở outbound WSS bằng credential trong identity; `cc-web-runner service install` cài systemd unit — unit không chứa secret, chỉ trỏ `ExecStart` về binary với subcommand `connect` và `CC_WEB_RUNNER_HOME`.
+5. Credential trong identity là credential dài hạn; mint token chỉ là cơ chế cấp credential đầu tiên. Không reconnect bằng credential đã revoke.
+6. Rotate = mint token mới cho runner đang có và chạy lại `setup` (ghi đè identity, revoke credential cũ trong cùng transaction).
 
 ### 6.2. Handshake
 
@@ -573,7 +573,7 @@ Các `ExecutionContext` helpers là code ứng dụng cần xây. Cancellation, 
 
 Environment provider/config của Runner được kế thừa có chủ đích. Nếu truyền SDK `env`, đó là replacement, không tự merge; giữ những giá trị cần thiết như PATH/HOME và provider variables. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
 
-Không truyền Control Server secrets vào Runner. Không truyền Runner enrollment/auth credential vào run worker environment nếu worker không cần. Cùng OS user vẫn không có secret isolation hoàn toàn; env filtering chỉ giảm exposure.
+Không truyền Control Server secrets vào Runner. Không truyền Runner connector credential vào run worker environment nếu worker không cần. Cùng OS user vẫn không có secret isolation hoàn toàn; env filtering chỉ giảm exposure.
 
 ### 10.4. Session resume
 
@@ -904,10 +904,10 @@ HTTP là command entrypoint từ browser; WSS chủ yếu phục vụ subscribe/
 
 | Method | Endpoint | Trách nhiệm |
 | --- | --- | --- |
-| GET | `/api/health` | Liveness không lộ nội bộ |
-| GET | `/api/me` | User identity |
-| GET | `/api/runners` | Registry + connection/capacity |
-| POST | `/api/runner-enrollments` | Tạo one-time enrollment |
+| GET | `/healthz` | Liveness không lộ nội bộ |
+| `ANY` | `/api/auth/*` | better-auth mount (sign-in/sign-out/session); Origin allowlist bọc ngoài |
+| GET | `/api/runners` | Danh sách runner của owner (id + lifecycle, không secret) |
+| POST | `/api/runners` | Mint one-time connector token (hiển thị một lần, chỉ lưu hash) |
 | POST | `/api/runners/:id/revoke` | Revoke credential/dispatch |
 | GET | `/api/workspaces` | Workspace có quyền truy cập |
 | POST | `/api/runners/:id/workspaces` | Request registration có local validation |
@@ -968,10 +968,10 @@ Không trả raw stack traces, credentials hoặc environment. Retryable transpo
 
 | Bảng | Trách nhiệm |
 | --- | --- |
-| `users`, `auth_sessions` | Owner identity và login lifecycle |
-| `runners` | Stable identity, owner, credential reference, capabilities |
+| `user`, `session`, `account`, `verification` | Owner identity và login lifecycle, do better-auth quản (ADR-015) |
+| `runners` | Stable identity, owner, lifecycle (created/revoked) |
+| `runner_credentials` | SHA-256 của connector token; plaintext chỉ tồn tại trong response mint |
 | `runner_connections` | Boot/generation, heartbeat, gateway ownership |
-| `enrollments` | Hashed token reference, expiry, consumed state |
 | `workspaces` | Runner ownership, display metadata, trust status |
 | `sessions` | Workspace/Runner pin, SDK ID, title, visibility |
 | `runs`, `execution_attempts` | Desired/observed state, assignment epoch, usage, errors |
@@ -1036,7 +1036,7 @@ Authorization theo resource ở mọi API/subscription/RPC. Revoke login ngắt 
 - Server kiểm tra message.runnerId với authenticated identity.
 - Runner không có quyền subscribe events/secrets của Runner khác.
 - Local operator policy là giới hạn tối đa cho command từ Server.
-- Enrollment/auth secrets không đi vào tool output hoặc worker env không cần thiết.
+- Connector/auth secrets không đi vào tool output hoặc worker env không cần thiết.
 - Compromised Control Server vẫn là rủi ro lớn: nó có quyền gửi tác vụ đến Runner; local allowlists và OS isolation giới hạn blast radius.
 
 ### 19.3. Agent boundary
@@ -1091,7 +1091,7 @@ Không cần inbound port trên máy Runner cho control protocol. Model/provider
 - Caddy/proxy WebSocket timeouts và idle behavior phải kiểm thử.
 - Docker tùy chọn: mount đúng config/data, UID/GID và paths; host helpers không tự có trong image.
 
-Không dùng `bun build --compile` ở MVP. SDK native binary cần xử lý asset extraction riêng khi compile single executable; chỉ triển khai theo tài liệu và test platform matrix khi thật sự cần. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
+Connector runner được compile thành single executable (`bun run build:runner`, smoke bởi `scripts/integration/runner-binary.ts`): `setup`/`connect`/`service` chạy trên binary compiled. Chạy agent thật từ binary compiled chưa được verify — SDK native binary cần xử lý asset extraction riêng khi compile single executable; phải verify theo tài liệu SDK và platform matrix trước khi tin binary cho run thật. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
 
 ### 20.4. Graceful shutdown
 
@@ -1109,7 +1109,7 @@ Backup ba nhóm riêng:
 
 SQLite dùng consistent backup API/snapshot, không copy main DB file rồi bỏ WAL. Ưu tiên draining/maintenance khi snapshot nhiều nhóm dữ liệu. Mã hóa backups, không commit secrets vào Git.
 
-Restore Runner phải không tạo identity clone đang cùng hoạt động. Thay máy/restore cần quy trình revoke/re-enroll hoặc giữ identity chỉ khi instance cũ đã được dừng chắc chắn.
+Restore Runner phải không tạo identity clone đang cùng hoạt động. Thay máy/restore cần quy trình revoke rồi mint token mới + chạy lại `setup`, hoặc giữ identity chỉ khi instance cũ đã được dừng chắc chắn.
 
 ### 20.6. Observability
 
@@ -1273,7 +1273,7 @@ Script Runner nhỏ chứng minh bundled CLI, Bun compatibility, config inherita
 
 ### Phase 1 — Control/Runner protocol
 
-Enrollment/auth, two-Runner connectivity, registry/capabilities, local SQLite inbox/outbox, central outbox, commands/events ACK, boot identity và reconciliation. Test mất mạng/crash trước khi xây UI đầy đủ.
+Connector token/auth, two-Runner connectivity, registry/capabilities, local SQLite inbox/outbox, central outbox, commands/events ACK, boot identity và reconciliation. Test mất mạng/crash trước khi xây UI đầy đủ.
 
 ### Phase 2 — Chat product MVP
 
@@ -1313,6 +1313,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | ADR-012 | No mandatory broker/Temporal | Giữ vận hành gọn, có điểm mở rộng rõ |
 | ADR-013 | One Runner owner/workspace | Tránh shared-filesystem split-brain |
 | ADR-014 | Host-native Runner ưu tiên | Tái sử dụng user config và toolchain ít sai khác |
+| ADR-015 | better-auth cho owner auth; Runner là connector với token mint từ web (2026-10-24) | Không tự viết password/session crypto; token hiển thị một lần, DB chỉ giữ hash; systemd unit không chứa secret |
 
 ### 24.2. Cần chốt khi bắt đầu implementation
 

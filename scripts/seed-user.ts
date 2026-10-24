@@ -1,12 +1,15 @@
 /**
- * Seeds an owner account so signing in works on a fresh database (§6, ADR-0002).
+ * Seeds an owner account so signing in works on a fresh database (§6, ADR-015).
  *
  * The password is read from stdin, never argv: a process listing is world
  * readable on most systems, and a secret that passes through the command
- * line stays there (the same rule §19.4 sets for enrollment tokens).
+ * line stays there (the same rule §19.4 sets for connector tokens).
  *
  *   bun scripts/seed-user.ts <username> < password.txt
  *   echo -n "…" | bun scripts/seed-user.ts <username>
+ *
+ * The username follows better-auth's default rule: 3–30 chars of letters,
+ * digits, dots or underscores (`demo_owner`, not `demo-owner`).
  */
 
 import { Database } from "bun:sqlite";
