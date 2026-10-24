@@ -4,14 +4,11 @@ import Composer from "../components/Composer.vue";
 import ConnectionChip from "../components/ConnectionChip.vue";
 import EventJournal from "../components/EventJournal.vue";
 import SessionRail from "../components/SessionRail.vue";
-import { loadSessions, openSession, sessions } from "../stores/sessions.ts";
+import { loadSessions, openSession, resolveSessionLive, sessions } from "../stores/sessions.ts";
 
 const active = computed(() => sessions.sessions.find((s) => s.sessionId === sessions.activeId));
 
-// The machine's own live flag is frame-level; the session's live flag from
-// the listing is the truth about "a run is in flight" even before the first
-// event arrives.
-const activeLive = computed(() => sessions.stream?.live ?? active.value?.live ?? false);
+const activeLive = computed(() => resolveSessionLive(active.value?.live, sessions.stream?.live));
 
 let refresh: ReturnType<typeof setInterval> | undefined;
 

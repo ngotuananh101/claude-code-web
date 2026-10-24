@@ -91,7 +91,27 @@ export function closeSession(): void {
 }
 
 function mirror(): void {
-  if (machine !== null) sessions.stream = { ...machine.state() };
+  // A fresh events array per frame, not just a fresh stream object: the
+  // machine mutates its array in place, and Vue's component props compare is
+  // shallow — a reused reference would leave the journal on its first (empty)
+  // render no matter what arrived.
+  if (machine !== null)
+    sessions.stream = { ...machine.state(), events: [...machine.state().events] };
+}
+
+/**
+ * Whether the active session shows its live flag. Two sources, and neither
+ * alone is enough: the listing's `live` is the server's truth about "a run is
+ * in flight" but only refreshes with the next listing read, while the
+ * stream's frame-level flag is instant yet always false across a replay —
+ * an in-flight run can sit quiet long enough for its last frame to be a
+ * replay batch. Either signal saying "live" is live.
+ */
+export function resolveSessionLive(
+  listingLive: boolean | undefined,
+  streamLive: boolean | null,
+): boolean {
+  return listingLive === true || streamLive === true;
 }
 
 /** Wires the store to the socket singleton once, at app start. */
