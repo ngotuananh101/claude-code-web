@@ -1,7 +1,23 @@
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import vue from "@vitejs/plugin-vue";
+import ts5 from "typescript5";
 import { defineConfig } from "vite";
+import { registerTS } from "vue/compiler-sfc";
+
+/**
+ * The repo's TypeScript is v7 — the native port, whose JS surface carries no
+ * API (`sys` and friends are gone). @vue/compiler-sfc resolves the shadcn-vue
+ * components' imported `defineProps` types (reka-ui's `PrimitiveProps`,
+ * `LabelProps`) through a full TypeScript JS module, so with only v7 present
+ * every generated component failed to compile ("Failed to resolve extends
+ * base type") in both `vite dev` and `vite build`. `registerTS` is the
+ * compiler's official injection point for that module: hand it the JS
+ * TypeScript 5 distribution, aliased as `typescript5` in the root
+ * package.json so the v7 binary used by `tsc -b` is untouched.
+ */
+type CompilerTs = Parameters<typeof registerTS>[0] extends () => infer T ? T : never;
+registerTS((): CompilerTs => ts5 as unknown as CompilerTs);
 
 /**
  * The dev server fronts the control server: `/auth` and `/api` are plain HTTP
