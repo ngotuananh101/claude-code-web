@@ -16,7 +16,9 @@ import {
   acceptCommand,
   beginAttempt,
   type CommandEnvelope,
+  finishAttempt,
   recoverStaleAttempts,
+  releaseAttempt,
 } from "@cc-web/runner-db";
 import { asCommandEnvelope, commandIdOf } from "./envelope.ts";
 import { executeRun, type SdkStream } from "./executor.ts";
@@ -38,6 +40,14 @@ export type ControllerOptions = {
   now?: () => number;
 };
 
+/** One tracked run: what shutdown or cancel needs to reach it. */
+type InFlightRun = {
+  attemptId: string;
+  runId: string;
+  controller: AbortController;
+  promise: Promise<void>;
+};
+
 export class RunController {
   readonly #db: Database;
   readonly #localRunnerId: string;
@@ -45,8 +55,11 @@ export class RunController {
   readonly #sdk: SdkStream;
   readonly #now: () => number;
 
-  /** Every run in flight, so shutdown can wait rather than guess. */
-  readonly #inFlight = new Set<Promise<void>>();
+  /** Every run in flight, keyed by attempt id, so shutdown can wait or cancel. */
+  readonly #inFlight = new Map<string, InFlightRun>();
+
+  /** Set the moment draining begins; a draining runner accepts no new work. */
+  #draining = false;
 
   constructor(options: ControllerOptions) {
     this.#db = options.db;
@@ -72,6 +85,18 @@ export class RunController {
       };
     }
 
+    // §20.4: draining means no new accepts. Refused before the inbox persists
+    // it, so the command stays the server's to redeliver after the restart —
+    // not trusted to a process that is on its way out.
+    if (this.#draining) {
+      return {
+        commandId: parsed.commandId,
+        attemptId: parsed.attemptId ?? "",
+        accepted: false,
+        reason: "draining",
+      };
+    }
+
     const accepted = acceptCommand(this.#db, parsed, {
       localRunnerId: this.#localRunnerId,
       now: this.#now(),
@@ -88,6 +113,15 @@ export class RunController {
     // A duplicate is already in the inbox and its work is running or done.
     // Answering from the stored state is the whole point (§9.3).
     if (accepted.duplicate) {
+      return receipt(parsed, true);
+    }
+
+    // §14.2: a cancel is not a run. Persisted above like every command, it now
+    // routes to the abort of the run it names — treating it as a start would
+    // execute the cancel as a prompt against a locked workspace.
+    if (parsed.kind === "run.cancel") {
+      const target = this.#findByAttemptId(parsed.attemptId) ?? this.#findByRunId(parsed.runId);
+      if (target !== undefined) target.controller.abort();
       return receipt(parsed, true);
     }
 
@@ -119,14 +153,26 @@ export class RunController {
 
     // The attempt is recorded, so the run is now this process's responsibility.
     // Tracked rather than awaited: the receipt must not wait for a run that can
-    // take minutes (§9.4 — accepted is not started).
-    const run = executeRun(this.#db, parsed, { workspacePath, sdk: this.#sdk })
-      .then(() => undefined)
-      .catch(() => undefined)
-      .finally(() => {
-        this.#inFlight.delete(run);
-      });
-    this.#inFlight.add(run);
+    // take minutes (§9.4 — accepted is not started). The controller keeps the
+    // abort handle so a later cancel or shutdown can reach the live run (§14.2,
+    // §20.4).
+    const controller = new AbortController();
+    const run: InFlightRun = {
+      attemptId,
+      runId: parsed.runId ?? "",
+      controller,
+      promise: executeRun(this.#db, parsed, {
+        workspacePath,
+        sdk: this.#sdk,
+        signal: controller.signal,
+      })
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => {
+          this.#inFlight.delete(attemptId);
+        }),
+    };
+    this.#inFlight.set(attemptId, run);
 
     return receipt(parsed, true);
   }
@@ -135,8 +181,54 @@ export class RunController {
   async settle(): Promise<void> {
     // A run can finish and release another; follow the set until it is empty.
     while (this.#inFlight.size > 0) {
-      await Promise.all([...this.#inFlight]);
+      await Promise.all([...this.#inFlight.values()].map((run) => run.promise));
     }
+  }
+
+  /**
+   * Draining shutdown (§20.4): bounded, unlike `settle()`.
+   *
+   * In-flight runs get a grace period to finish on their own; whatever is still
+   * going is then cancelled deliberately — the abort makes a live SDK stream
+   * throw within seconds, and the executor records that as `interrupted`. A run
+   * that survives even its own abort (a wedged subprocess) gets the same verdict
+   * a crash would (§9.7): written here as `interrupted` with the lock released,
+   * so the database is truthful now rather than after the next boot's sweep.
+   * `finishAttempt` is write-once (§22.2) — if such a run somehow settles later,
+   * its own terminal write refuses to overwrite this one.
+   */
+  async drain(options: { graceMs: number }): Promise<{ abandoned: string[] }> {
+    this.#draining = true;
+    const sleep = (ms: number) => Bun.sleep(ms);
+
+    if (this.#inFlight.size > 0) {
+      await Promise.race([this.settle(), sleep(options.graceMs)]);
+    }
+
+    if (this.#inFlight.size > 0) {
+      for (const run of this.#inFlight.values()) run.controller.abort();
+      await Promise.race([this.settle(), sleep(options.graceMs)]);
+    }
+
+    const abandoned: string[] = [];
+    for (const run of this.#inFlight.values()) {
+      finishAttempt(this.#db, { attemptId: run.attemptId, state: "interrupted" });
+      releaseAttempt(this.#db, run.attemptId);
+      abandoned.push(run.attemptId);
+    }
+    return { abandoned };
+  }
+
+  #findByAttemptId(attemptId: string | undefined): InFlightRun | undefined {
+    return attemptId === undefined ? undefined : this.#inFlight.get(attemptId);
+  }
+
+  #findByRunId(runId: string | undefined): InFlightRun | undefined {
+    if (runId === undefined) return undefined;
+    for (const run of this.#inFlight.values()) {
+      if (run.runId === runId) return run;
+    }
+    return undefined;
   }
 }
 

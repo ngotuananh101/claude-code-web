@@ -675,7 +675,7 @@ Giữ semantic message IDs và structured blocks, không chỉ một string tran
 
 ```text
 command.accepted / command.rejected
-run.started / run.status / run.finished / run.failed
+run.started / run.status / run.finished / run.failed / run.interrupted
 message.started / message.delta / message.completed
 tool.started / tool.completed
 approval.requested / approval.resolved / approval.expired
@@ -684,6 +684,8 @@ workspace.changed / usage.updated / session.updated
 ```
 
 Tên trên là app protocol, không phải SDK event names. Version schema và adapter độc lập với raw SDK types.
+
+`run.interrupted` là outcome terminal cho attempt dừng mà không quan sát được kết quả SDK thật — abort do cancel/shutdown (§14.2, §20.4) hoặc ambiguous launch window (§9.7). Nó không phải failure: server phân biệt `interrupted`/`cancelled` theo cancel audit, không theo event này.
 
 ### 12.5. Web replay
 

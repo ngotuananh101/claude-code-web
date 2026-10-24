@@ -54,6 +54,7 @@ export type EventType =
   | "run.status"
   | "run.finished"
   | "run.failed"
+  | "run.interrupted"
   | "message.started"
   | "message.delta"
   | "message.completed"

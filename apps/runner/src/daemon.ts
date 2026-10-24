@@ -45,6 +45,12 @@ export type DaemonOptions = {
    * daemon runs without a model call.
    */
   sdk?: SdkStream;
+  /**
+   * How long `stop()` waits for in-flight runs, first to finish on their own
+   * and then to observe the deliberate cancel, before abandoning them as
+   * interrupted (§20.4). Default 5000ms each.
+   */
+  shutdownGraceMs?: number;
   onEvent?: (event: unknown) => void;
 };
 
@@ -120,10 +126,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     runs,
     stop: async () => {
       loop.stop();
-      // Runs write events and release locks; closing the database underneath
-      // one would lose both. Waiting is the difference between a clean stop and
-      // an interrupted attempt on the next boot.
-      await runs.settle();
+      // §20.4: bounded draining. A grace period for runs to finish on their
+      // own, then a deliberate cancel, then the interrupted verdict for
+      // whatever ignores both — never an unbounded wait that hands shutdown's
+      // fate to a wedged subprocess.
+      const { abandoned } = await runs.drain({ graceMs: options.shutdownGraceMs ?? 5000 });
+      if (abandoned.length > 0) {
+        // Attempt ids are structural, safe to log (§19.4 bans credential and
+        // payload logging, not ids — §20.6 asks for exactly these).
+        console.warn(`shutdown abandoned ${abandoned.length} attempt(s): ${abandoned.join(", ")}`);
+      }
       db.close();
     },
   };

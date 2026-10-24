@@ -49,7 +49,7 @@ export type RunInput = {
 };
 
 export type TerminalOutcome = {
-  state: "finished" | "failed";
+  state: "finished" | "failed" | "interrupted";
   sdkSessionId?: string;
 };
 
@@ -133,8 +133,26 @@ export async function executeRun(
   // a thrown stream carries `run.failed`. A stream that yields a result and
   // then dies has already produced its terminal event, so the catch must not
   // add a second one — and must not overwrite the state that event recorded.
-  let state: "finished" | "failed" = "finished";
+  let state: "finished" | "failed" | "interrupted" = "finished";
   let terminalWritten = false;
+
+  // Why the abort is recognized by the signal and not by the thrown error: the
+  // SDK's abort error is an `Error` subclass that sets no `name` (verified in
+  // 0.3.309: `new AbortError("Operation aborted")` reports `name === "Error"`),
+  // so no property of the object identifies it — and §4.2 forbids importing the
+  // SDK here to `instanceof` it. The signal is this runner's own causal action
+  // and only this process fires it, so `signal.aborted` at the moment the stream
+  // died is the whole fact.
+  const aborted = () => options.signal?.aborted === true;
+
+  // The outcome for a run stopped before any terminal SDK frame. `interrupted`,
+  // not `failed`: §14.2 keeps a deliberate cancel apart from a broken run, and
+  // the payload is a constant — the abort error's text says nothing an operator
+  // can act on, and this row is replayed to the browser and the journal (§12.3).
+  const recordInterrupted = (): void => {
+    state = "interrupted";
+    append("run.interrupted", { reason: "aborted" });
+  };
 
   try {
     // Everything after the lock check is inside the guard, `run.started`
@@ -187,14 +205,24 @@ export async function executeRun(
         terminalWritten = true;
       }
     }
+
+    // The loop can also end normally on an abort: the pending read unblocks and
+    // the iterator returns instead of throwing. Without this check the run
+    // would be recorded `finished` with no terminal event at all — the state a
+    // crashed process leaves, arrived at on a path that knew better.
+    if (!terminalWritten && aborted()) recordInterrupted();
   } catch (error) {
     // Only a run that has not reported a terminal outcome is a failure. A throw
     // after `run.finished` is a transport problem that happened after the run
     // was already over, and writing `failed` here would make the attempt row
     // disagree with the event that recorded the outcome.
     if (!terminalWritten) {
-      state = "failed";
-      append("run.failed", { error: sanitizeError(error) });
+      if (aborted()) {
+        recordInterrupted();
+      } else {
+        state = "failed";
+        append("run.failed", { error: sanitizeError(error) });
+      }
     }
   } finally {
     // Released even if recording the outcome fails. The two are separate

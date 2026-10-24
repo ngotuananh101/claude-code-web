@@ -25,7 +25,10 @@ import { saveIdentity } from "./identity/identity-store.ts";
 const dirs: string[] = [];
 const daemons: Daemon[] = [];
 
-async function setup(sdk: SdkStream): Promise<{ daemon: Daemon; dir: string }> {
+async function setup(
+  sdk: SdkStream,
+  extra?: { shutdownGraceMs?: number },
+): Promise<{ daemon: Daemon; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
   dirs.push(dir);
   await saveIdentity(dir, {
@@ -41,6 +44,7 @@ async function setup(sdk: SdkStream): Promise<{ daemon: Daemon; dir: string }> {
     sdkVersion: "0.3.309",
     workspacePathFor: (id) => (id === "workspace-1" ? join(dir, "project") : undefined),
     sdk,
+    ...(extra?.shutdownGraceMs === undefined ? {} : { shutdownGraceMs: extra.shutdownGraceMs }),
   });
   daemons.push(daemon);
 
@@ -130,6 +134,43 @@ describe("shutdown with a run in flight", () => {
         .prepare("SELECT state FROM local_attempts WHERE attempt_id = ?")
         .get("attempt-1") as { state: string } | undefined;
       expect(attempt?.state).toBe("finished");
+
+      const lock = db
+        .prepare("SELECT attempt_id FROM workspace_locks WHERE workspace_path = ?")
+        .get(join(dir, "project"));
+      expect(lock).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("stop aborts a hanging run instead of waiting forever", async () => {
+    // A stream that never settles and ignores its abort signal: the shape a
+    // wedged SDK subprocess would leave behind. Before drain(), stop() waited
+    // on settle() with no ceiling — this test would hang, not fail.
+    const zombie: SdkStream = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => new Promise<IteratorResult<Record<string, unknown>>>((_resolve) => {}),
+        };
+      },
+    });
+
+    const { daemon, dir } = await setup(zombie, { shutdownGraceMs: 20 });
+
+    expect((await daemon.runs.handle(command)).accepted).toBe(true);
+
+    // Bounded: the two grace windows pass, the run is abandoned, stop returns.
+    await daemon.stop();
+
+    const db = new Database(join(dir, "runner.db"), { readonly: true });
+    try {
+      // §20.4/§9.7: the abandoned attempt is interrupted and its lock freed —
+      // the same verdict the next boot's sweep would reach, written at shutdown.
+      const attempt = db
+        .prepare("SELECT state FROM local_attempts WHERE attempt_id = ?")
+        .get("attempt-1") as { state: string } | undefined;
+      expect(attempt?.state).toBe("interrupted");
 
       const lock = db
         .prepare("SELECT attempt_id FROM workspace_locks WHERE workspace_path = ?")

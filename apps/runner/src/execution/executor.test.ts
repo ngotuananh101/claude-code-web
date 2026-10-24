@@ -736,3 +736,163 @@ describe("redaction", () => {
     expect(payloads).not.toContain("total_cost_usd");
   });
 });
+
+describe("an aborted run", () => {
+  test("a stream that throws when its abort signal fires is interrupted, not failed", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    // The shape the real SDK produces on abort (verified against 0.3.309): the
+    // stream throws an `Error` whose `name` is `"Error"` — the SDK's AbortError
+    // subclass sets no name, so nothing about the thrown object identifies the
+    // abort. The runner's own signal is the only reliable witness: it fired, and
+    // only this process fires it.
+    const controller = new AbortController();
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "assistant", message: { content: [{ type: "text", text: "partial" }] } };
+        await new Promise<never>((_, reject) => {
+          controller.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Operation aborted")),
+            {
+              once: true,
+            },
+          );
+        });
+      })();
+
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      signal: controller.signal,
+    });
+    await Bun.sleep(10);
+    controller.abort();
+
+    const outcome = await run;
+
+    // §14.2/§9.7: a run stopped without an observed SDK outcome is interrupted.
+    // Recording it as failed would make a deliberate cancel indistinguishable
+    // from a broken run, and §14.4 keeps those outcomes apart on purpose.
+    expect(outcome.state).toBe("interrupted");
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "message.completed",
+      "run.interrupted",
+    ]);
+    // The payload is a constant, not the thrown error's text: the abort error
+    // carries nothing an operator can act on, and a redacted non-secret is still
+    // noise next to a fact the reader already has.
+    const interrupted = list.find((e) => e.type === "run.interrupted");
+    expect(interrupted && JSON.parse(interrupted.payload)).toEqual({ reason: "aborted" });
+  });
+
+  test("an abort that loses the race to a terminal result keeps the real outcome", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    // §14.2: the run may really have finished before the cancel arrived. The
+    // observed outcome wins; a late abort must not rewrite history.
+    const controller = new AbortController();
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+        await new Promise<never>((_, reject) => {
+          controller.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Operation aborted")),
+            {
+              once: true,
+            },
+          );
+        });
+      })();
+
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      signal: controller.signal,
+    });
+    await Bun.sleep(10);
+    controller.abort();
+
+    const outcome = await run;
+
+    expect(outcome.state).toBe("finished");
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+    const types = events(db).map((e) => e.type);
+    expect(types).toEqual(["run.started", "run.finished"]);
+    expect(types).not.toContain("run.interrupted");
+  });
+
+  test("a stream that ends silently after the abort is still interrupted", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    // The other legal teardown shape: the abort unblocks the pending read and
+    // the iterator returns instead of throwing. The loop then ends normally with
+    // no result frame — an outcome the catch never sees. Without a check after
+    // the loop, this run would be recorded as `finished` with no terminal event.
+    const controller = new AbortController();
+    const sdk: SdkStream = () =>
+      (async function* () {
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      })();
+
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      signal: controller.signal,
+    });
+    await Bun.sleep(10);
+    controller.abort();
+
+    const outcome = await run;
+
+    expect(outcome.state).toBe("interrupted");
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    expect(events(db).map((e) => e.type)).toEqual(["run.started", "run.interrupted"]);
+  });
+
+  test("a throw without an abort signal is still an ordinary failure", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const outcome = await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk: failingStream(new Error("the model refused the request")),
+    });
+
+    // No signal, no cancellation: the same throw as before the abort path
+    // existed. Classification must not drift for runs that were never aborted.
+    expect(outcome.state).toBe("failed");
+    expect(attemptState(db, "attempt-1")).toBe("failed");
+  });
+});

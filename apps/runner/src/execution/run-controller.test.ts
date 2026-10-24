@@ -320,3 +320,264 @@ describe("workspace contention", () => {
     await controller.settle();
   });
 });
+
+describe("cancelling a run", () => {
+  /**
+   * A stream shaped like the real SDK under abort (§14.2): it holds until the
+   * abort fires, then throws an ordinary `Error` — nothing about the object
+   * identifies the abort, which is exactly why the runner's own signal has to
+   * be the witness.
+   */
+  function abortableStream(): SdkStream {
+    return (options) =>
+      (async function* () {
+        await new Promise<never>((_, reject) => {
+          options.abort?.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+            once: true,
+          });
+        });
+      })();
+  }
+
+  test("a cancel command aborts the in-flight run and it is recorded interrupted", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: abortableStream(),
+    });
+
+    await controller.handle(command);
+
+    const cancel = await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      payload: null,
+    });
+    await controller.settle();
+
+    // The cancel itself is durable and receipted; it names the run it stops.
+    expect(cancel).toEqual({
+      commandId: "cmd-cancel",
+      attemptId: "attempt-1",
+      accepted: true,
+    });
+
+    // §14.2: cancelled, not failed — and the cancel command must not become a
+    // run of its own, which is what treating every command as a start would do.
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    expect(attemptState(db, "cmd-cancel")).toBeUndefined();
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+
+    const types = db
+      .prepare("SELECT type FROM event_outbox ORDER BY local_sequence")
+      .all() as Array<{ type: string }>;
+    expect(types.map((t) => t.type)).toContain("run.interrupted");
+  });
+
+  test("a cancel can find its target by run id when no attempt id is given", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: abortableStream(),
+    });
+
+    await controller.handle(command);
+
+    const cancel = await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      runId: "run-1",
+      payload: null,
+    });
+    await controller.settle();
+
+    expect(cancel.accepted).toBe(true);
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+  });
+
+  test("a cancel for a run that is already over changes nothing", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })(),
+    });
+
+    await controller.handle(command);
+    await controller.settle();
+
+    // §14.2: the run really finished before the cancel arrived. The observed
+    // outcome stands; the cancel is durable and honest about doing nothing.
+    const cancel = await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      payload: null,
+    });
+
+    expect(cancel.accepted).toBe(true);
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+  });
+
+  test("a cancel naming an unknown run is receipted and aborts nothing", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    const cancel = await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      runId: "run-nobody",
+      payload: null,
+    });
+
+    expect(cancel.accepted).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM local_attempts").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("draining", () => {
+  /** A stream that ignores everything, including its abort signal. */
+  function zombieStream(): SdkStream {
+    return () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => new Promise<IteratorResult<Record<string, unknown>>>((_resolve) => {}),
+        };
+      },
+    });
+  }
+
+  test("drain waits out the grace period for a run that finishes on its own", async () => {
+    const { db } = setup();
+    const { sdk, release } = holdableStream();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+    });
+
+    await controller.handle(command);
+    Bun.sleep(5).then(release);
+
+    const result = await controller.drain({ graceMs: 500 });
+
+    // Natural completion inside the window: nothing abandoned, real outcome kept.
+    expect(result).toEqual({ abandoned: [] });
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+  });
+
+  test("drain aborts a run that outlives the grace period", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      // Holds like a live SDK stream, then throws on abort the way the SDK does.
+      sdk: (options) =>
+        (async function* () {
+          await new Promise<never>((_, reject) => {
+            options.abort?.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+              once: true,
+            });
+          });
+        })(),
+    });
+
+    await controller.handle(command);
+
+    const result = await controller.drain({ graceMs: 10 });
+
+    // §20.4: deliberate cancel after the grace period. The executor observes
+    // the abort, so the run ends interrupted — not abandoned.
+    expect(result).toEqual({ abandoned: [] });
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+
+  test("drain abandons a run that survives its own abort, and records it interrupted", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: zombieStream(),
+    });
+
+    await controller.handle(command);
+
+    const result = await controller.drain({ graceMs: 10 });
+
+    // The run ignored the abort — the shape a wedged SDK subprocess would leave.
+    // drain still returns (shutdown is bounded), and the database already tells
+    // the truth: interrupted with the lock freed, the same verdict the next
+    // boot's sweep would reach (§9.7), reached now instead of later.
+    expect(result.abandoned).toEqual(["attempt-1"]);
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+
+  test("no new run is accepted once draining has begun", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: zombieStream(),
+    });
+
+    await controller.handle(command);
+    const draining = controller.drain({ graceMs: 50 });
+    await Bun.sleep(5);
+
+    // §20.4: draining means no new accepts or starts. The receipt refuses, so
+    // the server redelivers after the restart instead of trusting work into a
+    // process that is on its way out.
+    const late = await controller.handle({
+      ...command,
+      commandId: "cmd-2",
+      runId: "run-2",
+      attemptId: "attempt-2",
+    });
+    expect(late).toEqual({
+      commandId: "cmd-2",
+      attemptId: "attempt-2",
+      accepted: false,
+      reason: "draining",
+    });
+    // Refused before an attempt row exists: nothing for reconciliation to
+    // explain, and the command stays the server's to redeliver.
+    expect(attemptState(db, "attempt-2")).toBeUndefined();
+
+    await draining;
+  });
+});
