@@ -24,4 +24,26 @@
 
   --voice: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   --machine: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* shadcn semantic variables mapped onto the design tokens above, so the
+     components render in the approved palette instead of the preset's red.
+     tokens.css imports after index.css, so this :root wins the cascade for
+     everything it sets. --destructive stays at the generated value — red is
+     correct for destructive. */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: #ffffff;
+  --popover: #ffffff;
+  --primary: var(--pine);
+  --primary-foreground: #ffffff;
+  --secondary: #f4f5f1;
+  --secondary-foreground: var(--ink);
+  --muted: #f4f5f1;
+  --muted-foreground: var(--mute);
+  --accent: var(--pine-wash);
+  --accent-foreground: var(--ink);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--pine);
+  --radius: 0.375rem;
 }
