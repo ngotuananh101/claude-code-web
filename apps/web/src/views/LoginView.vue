@@ -119,19 +119,10 @@ h1 {
   gap: 10px;
 }
 
-.field {
-  height: 40px;
-}
-
 .error {
   margin: 2px 0 0;
   text-align: center;
   color: var(--destructive);
   font-size: 13px;
-}
-
-.submit {
-  height: 40px;
-  margin-top: 6px;
 }
 </style>
