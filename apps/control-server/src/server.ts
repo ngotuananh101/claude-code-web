@@ -96,6 +96,11 @@ export function createServer(options: ServerOptions): ServerHandle {
     }),
   });
 
+  // §12.5: a sign-out must reach the sockets it opened, not only the next
+  // request. The gateway did not exist when the auth instance was built, so the
+  // hook registers late; it is read at fire time.
+  options.auth.onSessionDelete((userId) => browserGateway.revoke(userId));
+
   const runnerGateway = new RunnerGateway({
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,

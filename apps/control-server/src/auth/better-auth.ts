@@ -20,6 +20,8 @@ import { BunSqliteDialect } from "kysely-bun-sqlite";
 
 export type BetterAuthInstance = ReturnType<typeof createBetterAuth>;
 
+export type SessionDeleteHandler = (userId: string) => void;
+
 export type CreateBetterAuthOptions = {
   /** Canonical server origin, e.g. http://localhost:8787. */
   baseURL: string;
@@ -37,7 +39,7 @@ export type CreateBetterAuthOptions = {
    * `BrowserGateway.revoke` is what keeps a signed-out login from keeping its
    * live event socket — the old `tokenVersion` bump, rebuilt on sessions.
    */
-  onSessionDelete?: (userId: string) => void;
+  onSessionDelete?: SessionDeleteHandler;
 };
 
 export function createBetterAuth(db: Database, options: CreateBetterAuthOptions) {
@@ -51,7 +53,11 @@ export function createBetterAuth(db: Database, options: CreateBetterAuthOptions)
   // Kysely instance or a `{ dialect }` object trips its identity sniffing.)
   const kysely = new Kysely({ dialect: new BunSqliteDialect({ database: db }) });
 
-  return betterAuth({
+  // Late-bound so `createServer` can attach the gateway after the instance was
+  // built by `buildServerOptions` — the hook is read at fire time, not captured.
+  let sessionDeleteHandler = options.onSessionDelete;
+
+  const auth = betterAuth({
     database: { db: kysely, type: "sqlite", transaction: true },
     baseURL: options.baseURL,
     ...(options.secret === undefined ? {} : { secret: options.secret }),
@@ -64,10 +70,16 @@ export function createBetterAuth(db: Database, options: CreateBetterAuthOptions)
       session: {
         delete: {
           after: async (session) => {
-            options.onSessionDelete?.(session.userId);
+            sessionDeleteHandler?.(session.userId);
           },
         },
       },
+    },
+  });
+
+  return Object.assign(auth, {
+    onSessionDelete(handler: SessionDeleteHandler): void {
+      sessionDeleteHandler = handler;
     },
   });
 }

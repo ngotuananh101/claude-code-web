@@ -176,6 +176,34 @@ describe("control server routes", () => {
     });
   });
 
+  test("signing out closes the owner's live socket with the revocation code", async () => {
+    const { url, wsUrl, cookie, db, userId } = await start();
+
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      userId,
+      1,
+    );
+    db.query(
+      "INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("run-1", "session-1", "runner-a", "attempt-1", 1);
+
+    const client = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    client.send({ type: "subscribe", sessionId: "session-1" });
+    await waitFor(() => client.messages.length >= 1);
+
+    const signOut = await fetch(`${url}/api/auth/sign-out`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+
+    // An open subscription must not survive the login that opened it: refusing
+    // the next message would still stream every committed event to a sign-out
+    // owner (§12.5). 4001 is the gateway's revocation code.
+    expect(signOut.status).toBe(200);
+    expect(await client.closed).toBe(4001);
+  });
+
   test("the browser route refuses a subscription to a session the user does not own", async () => {
     const { wsUrl, cookie, db } = await start();
 
