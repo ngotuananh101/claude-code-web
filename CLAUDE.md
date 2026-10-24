@@ -21,3 +21,19 @@ at the call site: extra classes, a wrapper element, or theme variables. The
 cc-web palette is mapped onto shadcn's semantic variables in
 `apps/web/src/styles/tokens.css` — that file is ours to edit; the generated
 `index.css` is not.
+
+After every shadcn-vue CLI run, check `git diff apps/web/src/styles/index.css`:
+while a `font` is configured the CLI injects a Google Fonts `@import` at the
+top of that file. The repo's `components.json` deliberately has no `font`
+(resolving to zero font imports), and the import must not come back — the
+interface's two voices are self-hosted fontsource faces and the control plane
+must not pull UI fonts from the network.
+
+One more invariant lives in `biome.json` (a strict-JSON file, so it cannot
+carry a comment): the generated-file protection override must stay **last**
+in the `overrides` array. Biome merges overrides in array order and a later
+matching entry would re-enable lint/format/assist on the generated files —
+this repo watched `biome check --write` rewrite `Input.vue` when the `*.vue`
+override sat below the protection one. After any `biome.json` edit, run
+`biome check --write` against the four paths: it must refuse with
+"provided but ignored".
