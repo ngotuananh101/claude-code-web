@@ -151,7 +151,9 @@ async function signOut(): Promise<void> {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
       <p class="px-2.5 pt-2 pb-1.5 text-xs font-medium text-muted-foreground">Phiên</p>
-      <ul v-if="filtered.length > 0" class="grid content-start gap-0.5">
+      <!-- grid-cols-1 = minmax(0,1fr): without it the implicit auto column
+           sizes to the rows' nowrap min-content and overflows the rail. -->
+      <ul v-if="filtered.length > 0" class="grid grid-cols-1 content-start gap-0.5">
         <li v-for="s in filtered" :key="s.sessionId">
           <Button
             variant="ghost"

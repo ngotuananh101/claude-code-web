@@ -259,7 +259,9 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
           <p v-if="recent.length === 0" class="text-sm text-muted-foreground">
             Chưa có phiên nào — kết nối runner và chạy lệnh đầu tiên.
           </p>
-          <ul v-else class="grid content-start gap-0.5">
+          <!-- Same as the rail's session list: minmax(0,1fr) keeps the row
+               inside the card however long the session id is. -->
+          <ul v-else class="grid grid-cols-1 content-start gap-0.5">
             <li v-for="s in recent" :key="s.sessionId">
               <RouterLink
                 :to="`/sessions/${s.sessionId}`"
