@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const router = useRouter();
 const username = ref("");
@@ -37,21 +40,26 @@ async function submit(): Promise<void> {
         Sign in to follow sessions live from the journal — every event, in
         order, exactly as the runners wrote it.
       </p>
-      <form @submit.prevent="submit">
-        <label>
-          <span>Username</span>
-          <input v-model="username" autocomplete="username" autofocus />
-        </label>
-        <label>
-          <span>Password</span>
-          <input v-model="password" type="password" autocomplete="current-password" />
-        </label>
+      <form class="login-form" @submit.prevent="submit">
+        <div class="field">
+          <Label class="field-label" for="username">Username</Label>
+          <Input id="username" v-model="username" autocomplete="username" autofocus />
+        </div>
+        <div class="field">
+          <Label class="field-label" for="password">Password</Label>
+          <Input
+            id="password"
+            v-model="password"
+            type="password"
+            autocomplete="current-password"
+          />
+        </div>
         <p v-if="failed" class="error" role="alert">
           That username and password don't match.
         </p>
-        <button type="submit" :disabled="busy || username === '' || password === ''">
+        <Button type="submit" :disabled="busy || username === '' || password === ''">
           Sign in
-        </button>
+        </Button>
       </form>
     </div>
   </main>
@@ -91,55 +99,24 @@ h1 {
   margin: 0 0 28px;
 }
 
-form {
+.login-form {
   display: grid;
   gap: 16px;
 }
 
-label {
+.field {
   display: grid;
   gap: 6px;
-  font-size: 13px;
 }
 
-label span {
+.field-label {
   color: var(--mute);
-}
-
-input {
-  font: inherit;
-  color: var(--ink);
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 9px 12px;
-  outline: none;
-}
-
-input:focus {
-  border-color: var(--pine);
-  box-shadow: 0 0 0 3px var(--pine-wash);
+  font-size: 13px;
 }
 
 .error {
   color: var(--amber);
   font-size: 13px;
   margin: 0;
-}
-
-button {
-  font: inherit;
-  font-weight: 500;
-  color: #fff;
-  background: var(--pine);
-  border: none;
-  border-radius: 6px;
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
-button:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 </style>

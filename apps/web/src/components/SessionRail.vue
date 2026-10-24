@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Button } from "@/components/ui/button";
 import { openSession, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 </script>
@@ -10,7 +11,8 @@ import ConnectionChip from "./ConnectionChip.vue";
 
     <ul v-if="sessions.sessions.length > 0" class="session-list">
       <li v-for="s in sessions.sessions" :key="s.sessionId">
-        <button
+        <Button
+          variant="ghost"
           class="session-row"
           :class="{ active: s.sessionId === sessions.activeId }"
           @click="openSession(s.sessionId)"
@@ -20,7 +22,7 @@ import ConnectionChip from "./ConnectionChip.vue";
             <span class="mono">{{ s.watermark }}</span>
             <i v-if="s.live" class="live-dot" title="A run is in flight" />
           </span>
-        </button>
+        </Button>
       </li>
     </ul>
     <p v-else-if="sessions.loaded" class="rail-empty">

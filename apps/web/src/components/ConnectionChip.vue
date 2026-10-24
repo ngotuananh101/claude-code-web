@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { Badge } from "@/components/ui/badge";
 import { sessions } from "../stores/sessions.ts";
 
 const repairing = computed(() => sessions.stream?.needsResync ?? false);
@@ -23,22 +24,30 @@ const tone = computed(() => {
 </script>
 
 <template>
-  <div class="chip" :class="tone">
-    <i class="dot" />
-    <span class="mono">{{ label }}</span>
+  <div class="chip">
+    <Badge variant="outline" class="chip-status" :class="tone">
+      <i class="dot" />
+      <span class="mono">{{ label }}</span>
+    </Badge>
   </div>
 </template>
 
 <style scoped>
 .chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin: 14px 20px 16px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
+}
+
+.chip-status {
+  gap: 8px;
   font-size: 12px;
+  border-color: var(--line);
   color: var(--mute);
+}
+
+.chip-status .mono {
+  font-size: 12px;
 }
 
 .dot {
@@ -47,14 +56,26 @@ const tone = computed(() => {
   border-radius: 50%;
 }
 
+.pine {
+  color: var(--pine);
+}
+
 .pine .dot {
   background: var(--pine);
   animation: livepulse 2.4s ease-in-out infinite;
 }
 
+.amber {
+  color: var(--amber);
+}
+
 .amber .dot {
   background: var(--amber);
   animation: livepulse 1.2s ease-in-out infinite;
+}
+
+.mute {
+  color: var(--mute);
 }
 
 .mute .dot {
