@@ -1,3 +1,6 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 /* Tailwind v4 entry. shadcn-vue's init writes its theme variables into this
  * file; the cc-web design tokens stay in tokens.css and win the cascade by
  * import order — this file is imported first in main.ts.
