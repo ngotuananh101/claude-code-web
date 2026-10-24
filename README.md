@@ -24,7 +24,7 @@ no inbound port is required on a Runner host.
 
 | Path | Contents |
 | --- | --- |
-| `apps/web` | Vue 3 + Vite SPA: login, session rail, event journal; composer arrives with the dispatch API |
+| `apps/web` | Vue 3 + Vite SPA: login, session rail, event journal; shadcn-vue (Tailwind v4) for component primitives; composer arrives with the dispatch API |
 | `apps/control-server` | Hono HTTP API, browser + runner WebSocket gateways, scheduling, journal |
 | `apps/runner` | Runner daemon: connection loop, inbox/outbox, supervisor, worker processes |
 | `packages/protocol` | Wire envelopes, command/event schemas — shared by server, runner and web |

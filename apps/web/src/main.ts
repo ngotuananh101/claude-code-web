@@ -6,6 +6,7 @@
  * the machine voice — the journal's sequence numbers, event types, payloads.
  */
 
+import "./styles/index.css";
 import "@fontsource/instrument-sans/400.css";
 import "@fontsource/instrument-sans/500.css";
 import "@fontsource/ibm-plex-mono/400.css";
