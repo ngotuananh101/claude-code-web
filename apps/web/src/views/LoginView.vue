@@ -34,19 +34,24 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <main class="login">
-    <p class="brand font-mono">cc-web</p>
-    <section class="panel">
-      <h1>Đăng nhập</h1>
-      <p class="lede">
+  <main class="relative grid min-h-full place-items-center p-4">
+    <p class="absolute top-4 left-4.5 font-mono text-sm text-foreground">
+      cc-web
+    </p>
+    <section class="w-full max-w-[360px]">
+      <h1
+        class="mb-1.5 text-center text-[28px] font-medium leading-tight tracking-tight"
+      >
+        Đăng nhập
+      </h1>
+      <p class="mb-5 text-center text-sm leading-normal text-muted-foreground">
         Theo dõi phiên làm việc của coding agent, trực tiếp từ journal.
       </p>
-      <form class="panel-form" @submit.prevent="submit">
+      <form class="grid gap-2" @submit.prevent="submit">
         <Label class="sr-only" for="username">Tên đăng nhập</Label>
         <Input
           id="username"
           v-model="username"
-          class="field"
           autocomplete="username"
           autofocus
           placeholder="Tên đăng nhập"
@@ -55,17 +60,15 @@ async function submit(): Promise<void> {
         <Input
           id="password"
           v-model="password"
-          class="field"
           type="password"
           autocomplete="current-password"
           placeholder="Mật khẩu"
         />
-        <p v-if="failed" class="error" role="alert">
+        <p v-if="failed" class="mt-0.5 text-center text-sm text-destructive" role="alert">
           Sai tên đăng nhập hoặc mật khẩu.
         </p>
         <Button
           type="submit"
-          class="submit"
           :disabled="busy || username === '' || password === ''"
         >
           Tiếp tục
@@ -74,55 +77,3 @@ async function submit(): Promise<void> {
     </section>
   </main>
 </template>
-
-<style scoped>
-.login {
-  min-height: 100%;
-  display: grid;
-  place-items: center;
-  position: relative;
-  padding: 24px;
-}
-
-.brand {
-  position: absolute;
-  top: 22px;
-  left: 26px;
-  margin: 0;
-  font-size: 13px;
-  color: var(--foreground);
-}
-
-.panel {
-  width: min(360px, 100%);
-}
-
-h1 {
-  margin: 0 0 8px;
-  text-align: center;
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
-.lede {
-  margin: 0 0 30px;
-  text-align: center;
-  color: var(--muted-foreground);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.panel-form {
-  display: grid;
-  gap: 10px;
-}
-
-.error {
-  margin: 2px 0 0;
-  text-align: center;
-  color: var(--destructive);
-  font-size: 13px;
-}
-</style>
