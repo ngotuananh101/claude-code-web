@@ -21,7 +21,11 @@ import {
   createEnrollment,
   ingestEvent,
   issueRunnerCredential,
+  readSessionEvents,
   Scheduler,
+  sessionEarliest,
+  sessionOwner,
+  sessionWatermark,
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import type { Server } from "bun";
@@ -76,6 +80,22 @@ export function createServer(options: ServerOptions): ServerHandle {
   // their own.
   let dispatcher: Dispatcher | undefined;
 
+  // Built first so the runner gateway's ingest hook can broadcast into it
+  // without a later-binding dance: browser replay (§12.5) is downstream of
+  // journaling (§12.2), not the other way around.
+  const browserGateway = new BrowserGateway({
+    auth: options.auth,
+    allowedOrigins: options.allowedOrigins,
+    cookieName: COOKIE_NAME,
+    resolveOwner: (sessionId) => sessionOwner(options.db, sessionId),
+    readReplay: (sessionId, after, limit) =>
+      readSessionEvents(options.db, sessionId, { after, limit }),
+    replayBounds: (sessionId) => ({
+      watermark: sessionWatermark(options.db, sessionId),
+      earliest: sessionEarliest(options.db, sessionId),
+    }),
+  });
+
   const runnerGateway = new RunnerGateway({
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,
@@ -86,9 +106,31 @@ export function createServer(options: ServerOptions): ServerHandle {
     // of what already committed answers `duplicate` and allocates nothing, which
     // is what makes a lost ACK heal itself instead of doubling the journal.
     onEvents: (_runnerId, events) => {
+      const stored: Array<{ event: (typeof events)[number]; sessionSequence: number }> = [];
       for (const event of events) {
-        ingestEvent(options.db, event);
+        const result = ingestEvent(options.db, event);
+        if (result.status === "stored" && result.sessionSequence !== undefined) {
+          stored.push({ event, sessionSequence: result.sessionSequence });
+        }
       }
+
+      // Broadcast only what committed (§12.2): a duplicate's re-broadcast would
+      // be deduplicated by every client anyway, and a conflict is never content.
+      // This runs after each ingest transaction, so a failed broadcast costs a
+      // live frame — never an event, which the journal still holds.
+      for (const { event, sessionSequence } of stored) {
+        browserGateway.publish({
+          sessionId: event.sessionId,
+          sessionSequence,
+          eventId: event.eventId,
+          runId: event.runId,
+          attemptId: event.attemptId,
+          occurredAt: event.occurredAt,
+          type: event.type,
+          payload: event.payload,
+        });
+      }
+
       const attempts = new Set(events.map((event) => event.attemptId));
       return [...attempts].map((attemptId) => ({
         attemptId,
@@ -105,12 +147,6 @@ export function createServer(options: ServerOptions): ServerHandle {
   // means `dispatch()` is a complete operation: decide, persist, deliver.
   const scheduler = new Scheduler(options.db, {
     onDispatched: (runnerId) => dispatcher?.drain(runnerId),
-  });
-
-  const browserGateway = new BrowserGateway({
-    auth: options.auth,
-    allowedOrigins: options.allowedOrigins,
-    cookieName: COOKIE_NAME,
   });
 
   const allowed = new Set(options.allowedOrigins);
@@ -180,7 +216,9 @@ export function createServer(options: ServerOptions): ServerHandle {
       // distinguished by socket data rather than by handler.
       open(socket) {
         if (isBrowserSocket(socket.data)) {
-          // Already authorized during the upgrade; nothing to re-check.
+          // Authorized during the upgrade — but still registered, so publish
+          // (§12.5) and revocation can reach this socket by user.
+          browserGateway.register(socket as never);
           return;
         }
         runnerGateway.attach(socket as never, socket.data as RunnerSocketData);

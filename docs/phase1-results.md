@@ -6,13 +6,15 @@
   reconciliation, runner and browser WebSocket transport, owner authentication,
   the central command outbox, the scheduler, the runner reconnect loop, dispatch
   on the live transport, execution of an accepted command on the runner, run
-  cancel with a bounded shutdown drain, and event ingestion from the runner's
-  outbox into the server's journal.
+  cancel with a bounded shutdown drain, event ingestion from the runner's
+  outbox into the server's journal, and browser replay of that journal.
 - Status: **all four Phase 1 surfaces exist and are tested, the entrypoints are
   wired to real implementations, and a command dispatched by the scheduler now
   reaches a runner over a live socket, is receipted back, runs the SDK under a
-  workspace lock with redacted, ordered events, and those events arrive in the
-  server's journal exactly once per event id however often they are resent.**
+  workspace lock with redacted, ordered events; those events arrive in the
+  server's journal exactly once per event id however often they are resent, and
+  a subscribed browser sees the same session — full replay from an offset, a
+  live tail, no gaps or duplicates across the boundary.**
 
 ## What exists
 
@@ -53,8 +55,11 @@
 | `control-server/runner-gateway` (events) | Events only from a `ready` connection; identity and type validated against the protocol before ingest | unit |
 | `runner/event-pump` | Persist → send → ACK; bounded batches; an ACK self-drives the next batch | unit |
 | runner → server journal | A run's events reach `run_events` in order; a lost ACK replayed after a restart is deduplicated and re-acknowledged | integration (real processes) |
+| `control-db/replay` | Session read model in `session_sequence`: bounded ordered reads, watermark, earliest (retention gap), owner derivation | unit |
+| `control-server/browser-gateway` (replay) | Ownership-checked subscribe (no-oracle refusal), bounded chained replay, registration-before-read so no live event falls between replay and tail, `resync_required` on gaps | unit + integration (real socket) |
+| journal → browser | Replay-from-offset then live tail with no gap or duplicate across the boundary; retention gap answers `resync_required` and resubscribe-from-named-sequence recovers | integration (real processes) |
 
-361 unit tests across 35 files, 6 integration probes.
+379 unit tests across 36 files, 7 integration probes.
 
 ## Integration evidence
 

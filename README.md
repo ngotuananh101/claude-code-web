@@ -72,11 +72,14 @@ for what was proven and what still is not.
 
 Phase 1 primitives, transport, auth, outbox, scheduler, the runner daemon,
 dispatch over a live socket, execution of an accepted command under a
-workspace lock, run cancel with a bounded shutdown drain, and event delivery
+workspace lock, run cancel with a bounded shutdown drain, event delivery
 from the runner's outbox into the server's journal (at-least-once, deduplicated,
-with a contiguous-ACK watermark) are implemented and tested — see
+with a contiguous-ACK watermark), and browser replay of the journal
+(ownership-checked subscribe, bounded replay batches, live tail,
+`resync_required` on retention gaps) are implemented and tested — see
 [`docs/phase1-results.md`](docs/phase1-results.md) for what is proven and what is
-still missing. Replaying the journal to the browser is the next phase.
+still missing. The Vue client that consumes these frames, and approvals (§13),
+are next.
 
 ## Decisions
 

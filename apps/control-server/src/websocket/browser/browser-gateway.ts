@@ -1,5 +1,5 @@
 /**
- * Owner-facing WebSocket gateway (§19.1).
+ * Owner-facing WebSocket gateway (§19.1, §12.5).
  *
  * Two controls guard the upgrade, and both are required:
  *
@@ -10,10 +10,16 @@
  *  2. **Session cookie.** Verified through `AuthService`, which reads
  *     `tokenVersion` on every check, so revocation applies to sockets too.
  *
+ * A third control guards the subscription itself (§12.5): ownership. The
+ * journal only replays to the session's owner, and "not yours" answers exactly
+ * like "never heard of it", so the socket cannot be used to probe which
+ * session ids exist.
+ *
  * Revocation closes live sockets. Refusing the next message would leave an open
  * subscription streaming events to a login that has been revoked.
  */
 
+import type { BrowserReplayEvent } from "@cc-web/protocol";
 import type { AuthService } from "../../auth/auth-service.ts";
 
 export type BrowserSocketData = {
@@ -37,22 +43,33 @@ export type BrowserAuthorizeResult =
   | { ok: true; userId: string }
   | { ok: false; reason: "origin_not_allowed" | "unauthenticated" };
 
-type BrowserGatewayOptions = {
+export type BrowserGatewayOptions = {
   auth: AuthService;
   allowedOrigins: string[];
   cookieName?: string;
+  /** §12.5: whose session is this? Undefined = unknown; both it and "someone
+   * else's" must answer the subscription identically. */
+  resolveOwner: (sessionId: string) => string | undefined;
+  /** Committed history for replay, in session order, bounded by `limit`. */
+  readReplay: (sessionId: string, after: number, limit: number) => BrowserReplayEvent[];
+  /** The highest committed sequence and the lowest surviving one. */
+  replayBounds: (sessionId: string) => { watermark: number; earliest: number };
 };
 
 const CLOSE_POLICY = 1008;
 const CLOSE_REVOKED = 4001;
 
 export class BrowserGateway {
+  static readonly REPLAY_BATCH_LIMIT = 200;
+
+  readonly #options: BrowserGatewayOptions;
   readonly #auth: AuthService;
   readonly #allowedOrigins: Set<string>;
   readonly #cookieName: string;
   readonly #sockets = new Map<string, Set<BrowserSocket>>();
 
   constructor(options: BrowserGatewayOptions) {
+    this.#options = options;
     this.#auth = options.auth;
     this.#allowedOrigins = new Set(options.allowedOrigins);
     this.#cookieName = options.cookieName ?? "cc_session";
@@ -88,12 +105,20 @@ export class BrowserGateway {
 
     socket.data.userId = result.userId;
     socket.data.authenticated = true;
-
-    const sockets = this.#sockets.get(result.userId) ?? new Set();
-    sockets.add(socket);
-    this.#sockets.set(result.userId, sockets);
-
+    this.register(socket);
     return result;
+  }
+
+  /**
+   * Register a socket the upgrade already authorized. The browser route
+   * authorizes before `srv.upgrade` (§19.1), so by `open` the cookie and origin
+   * have been checked — but an unregistered socket would be invisible to
+   * `publish` and `revoke`, which address sockets through this registry.
+   */
+  register(socket: BrowserSocket): void {
+    const sockets = this.#sockets.get(socket.data.userId) ?? new Set();
+    sockets.add(socket);
+    this.#sockets.set(socket.data.userId, sockets);
   }
 
   handleMessage(socket: BrowserSocket, raw: string | Uint8Array): void {
@@ -120,12 +145,69 @@ export class BrowserGateway {
     switch (record["type"]) {
       case "subscribe": {
         const sessionId = record["sessionId"];
-        if (typeof sessionId !== "string" || sessionId === "") {
+        const after = record["afterSessionSequence"];
+        if (
+          typeof sessionId !== "string" ||
+          sessionId === "" ||
+          (after !== undefined &&
+            (typeof after !== "number" || !Number.isInteger(after) || after < 0))
+        ) {
           this.#send(socket, { type: "error", reason: "malformed" });
           return;
         }
+
+        // §12.5: the journal only streams to the session's owner. Unknown and
+        // not-yours answer identically — a difference would turn subscriptions
+        // into an oracle for which session ids exist.
+        const owner = this.#options.resolveOwner(sessionId);
+        if (owner === undefined || owner !== socket.data.userId) {
+          this.#send(socket, { type: "error", reason: "forbidden" });
+          return;
+        }
+
+        // Registered before anything is read: an event committing while this
+        // subscription is being set up either happened before the bounds read
+        // (so it is in the replay) or after registration (so its live push
+        // finds the subscriber). There is no window between the two.
         socket.data.subscriptions.add(sessionId);
         this.#send(socket, { type: "subscribed", sessionId });
+
+        const offset = after ?? 0;
+        const { watermark, earliest } = this.#options.replayBounds(sessionId);
+
+        // §12.5: the offset points into history retention has deleted. Serving
+        // the surviving tail silently would present a session that appears to
+        // begin mid-run, so the client is told to resynchronize instead.
+        if (offset + 1 < earliest) {
+          this.#send(socket, {
+            type: "session.resync_required",
+            sessionId,
+            fromSequence: earliest,
+          });
+          return;
+        }
+
+        // Bounded frames, chained until a short one (§12.6). An empty final
+        // frame is honest about the journal's tail rather than the client's
+        // claim: `through` is what the server can vouch for.
+        let cursor = offset;
+        for (;;) {
+          const batch = this.#options.readReplay(
+            sessionId,
+            cursor,
+            BrowserGateway.REPLAY_BATCH_LIMIT,
+          );
+          const through = batch.length > 0 ? batch[batch.length - 1]!.sessionSequence : watermark;
+          this.#send(socket, {
+            type: "session.events",
+            sessionId,
+            live: false,
+            through,
+            events: batch,
+          });
+          if (batch.length < BrowserGateway.REPLAY_BATCH_LIMIT) break;
+          cursor = through;
+        }
         return;
       }
 
@@ -140,6 +222,39 @@ export class BrowserGateway {
         // Refused rather than ignored: a silently dropped message looks to the
         // client like a subscription that is working.
         this.#send(socket, { type: "error", reason: "unknown_message" });
+    }
+  }
+
+  /**
+   * Push one committed event to every socket subscribed to its session (§12.5).
+   *
+   * Called after the ingest transaction commits, so what arrives here is
+   * already durable: a failed broadcast costs a live frame, never an event —
+   * the browser replays the gap from the journal on its next subscribe.
+   */
+  publish(event: { sessionId: string } & BrowserReplayEvent): void {
+    const frame = {
+      type: "session.events",
+      sessionId: event.sessionId,
+      live: true,
+      through: event.sessionSequence,
+      events: [
+        {
+          sessionSequence: event.sessionSequence,
+          eventId: event.eventId,
+          runId: event.runId,
+          attemptId: event.attemptId,
+          occurredAt: event.occurredAt,
+          type: event.type,
+          payload: event.payload,
+        },
+      ],
+    };
+
+    for (const sockets of this.#sockets.values()) {
+      for (const socket of sockets) {
+        if (socket.data.subscriptions.has(event.sessionId)) this.#send(socket, frame);
+      }
     }
   }
 

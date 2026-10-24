@@ -131,7 +131,46 @@ describe("control server routes", () => {
   });
 
   test("the browser route requires the allowlisted origin and the session cookie", async () => {
-    const { wsUrl, token } = await start();
+    const { wsUrl, token, db } = await start();
+
+    // §12.5: a subscription is ownership-checked, so the route's happy path
+    // needs a session this user can actually see.
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      "user-1",
+      1,
+    );
+    db.query(
+      "INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("run-1", "session-1", "runner-a", "attempt-1", 1);
+
+    const client = await connect(`${wsUrl}/ws/browser`, {
+      Origin: origin,
+      Cookie: `cc_session=${token}`,
+    });
+    client.send({ type: "subscribe", sessionId: "session-1" });
+    await waitFor(() => client.messages.length >= 2);
+
+    expect(client.messages[0]).toMatchObject({ type: "subscribed", sessionId: "session-1" });
+    expect(client.messages[1]).toMatchObject({
+      type: "session.events",
+      sessionId: "session-1",
+      live: false,
+      through: 0,
+    });
+  });
+
+  test("the browser route refuses a subscription to a session the user does not own", async () => {
+    const { wsUrl, token, db } = await start();
+
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      "someone-else",
+      1,
+    );
+    db.query(
+      "INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("run-1", "session-1", "runner-a", "attempt-1", 1);
 
     const client = await connect(`${wsUrl}/ws/browser`, {
       Origin: origin,
@@ -140,7 +179,9 @@ describe("control server routes", () => {
     client.send({ type: "subscribe", sessionId: "session-1" });
     await waitFor(() => client.messages.length >= 1);
 
-    expect(client.messages[0]).toMatchObject({ type: "subscribed", sessionId: "session-1" });
+    // §12.5 + §19.4's no-oracle rule: not-yours and never-heard-of-it are the
+    // same answer over the real route too.
+    expect(client.messages[0]).toEqual({ type: "error", reason: "forbidden" });
   });
 
   test("the browser route refuses a foreign origin during the upgrade", async () => {

@@ -26,6 +26,13 @@ export {
   type JournalEvent,
 } from "./journal.ts";
 export {
+  type ReplayEvent,
+  readSessionEvents,
+  sessionEarliest,
+  sessionOwner,
+  sessionWatermark,
+} from "./replay.ts";
+export {
   issueRunnerCredential,
   revokeRunner,
   type VerifiedRunner,

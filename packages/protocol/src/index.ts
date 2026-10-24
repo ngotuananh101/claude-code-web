@@ -116,6 +116,41 @@ export type EventAckFrame = {
   through: number;
 };
 
+/**
+ * Browser replay (§12.5). One frame type carries both the replay batches and
+ * the live tail: the client deduplicates by `sessionSequence` and detects gaps,
+ * so a frame is a delivery, never a promise about what came before it.
+ */
+export type BrowserReplayEvent = {
+  sessionSequence: number;
+  eventId: string;
+  runId: string;
+  attemptId: string;
+  occurredAt: string;
+  type: EventType;
+  payload: unknown;
+};
+
+export type SessionEventsFrame = {
+  type: "session.events";
+  sessionId: string;
+  /** False while replaying committed history, true once the tail is live. */
+  live: boolean;
+  /** The highest session sequence this frame's stream has reached. */
+  through: number;
+  events: BrowserReplayEvent[];
+};
+
+/**
+ * Retention has deleted the range a subscription's offset points into; the
+ * client resynchronizes from `fromSequence` (or a snapshot, once those exist).
+ */
+export type SessionResyncFrame = {
+  type: "session.resync_required";
+  sessionId: string;
+  fromSequence: number;
+};
+
 export type RunnerHello = {
   protocolVersion: ProtocolVersion;
   runnerId: string;

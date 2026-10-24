@@ -55,6 +55,9 @@
     "packages/control-db": {
       "name": "@cc-web/control-db",
       "version": "0.0.0",
+      "dependencies": {
+        "@cc-web/protocol": "workspace:*",
+      },
     },
     "packages/protocol": {
       "name": "@cc-web/protocol",
