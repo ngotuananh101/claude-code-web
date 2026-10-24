@@ -1,26 +1,7 @@
-/* Base rules only; component rules live with their components. */
-* {
-  box-sizing: border-box;
-}
-
+/* Base layout only. The theme — palette, type, radius — lives entirely in
+ * the generated styles/index.css (shadcn-vue); do not add a custom layer. */
 html,
 body,
 #app {
   height: 100%;
-  margin: 0;
-}
-
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--voice);
-  font-size: 15px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* The machine voice: sequence numbers, event types, payloads, watermarks. */
-.mono {
-  font-family: var(--machine);
-  font-variant-ligatures: none;
 }

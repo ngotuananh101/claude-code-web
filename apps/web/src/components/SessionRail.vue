@@ -6,7 +6,7 @@ import ConnectionChip from "./ConnectionChip.vue";
 
 <template>
   <aside class="rail">
-    <p class="wordmark">cc-web</p>
+    <p class="wordmark font-mono">cc-web</p>
     <h2 class="rail-title">Sessions</h2>
 
     <ul v-if="sessions.sessions.length > 0" class="session-list">
@@ -17,9 +17,9 @@ import ConnectionChip from "./ConnectionChip.vue";
           :class="{ active: s.sessionId === sessions.activeId }"
           @click="openSession(s.sessionId)"
         >
-          <span class="session-id">{{ s.sessionId }}</span>
+          <span class="session-id font-mono">{{ s.sessionId }}</span>
           <span class="session-meta">
-            <span class="mono">{{ s.watermark }}</span>
+            <span class="font-mono">{{ s.watermark }}</span>
             <i v-if="s.live" class="live-dot" title="A run is in flight" />
           </span>
         </Button>
@@ -40,13 +40,12 @@ import ConnectionChip from "./ConnectionChip.vue";
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #f4f5f1;
+  background: var(--sidebar);
 }
 
 .wordmark {
-  font-family: var(--machine);
   font-size: 13px;
-  color: var(--pine);
+  color: var(--primary);
   margin: 0;
   padding: 18px 20px 0;
 }
@@ -54,7 +53,7 @@ import ConnectionChip from "./ConnectionChip.vue";
 .rail-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--mute);
+  color: var(--muted-foreground);
   margin: 22px 0 8px;
   padding: 0 20px;
 }
@@ -74,26 +73,16 @@ import ConnectionChip from "./ConnectionChip.vue";
   gap: 10px;
   width: 100%;
   text-align: left;
-  font: inherit;
-  background: none;
-  border: none;
-  border-radius: 6px;
   padding: 9px 10px;
-  cursor: pointer;
-  color: var(--ink);
-}
-
-.session-row:hover {
-  background: var(--pine-wash);
+  color: var(--foreground);
 }
 
 .session-row.active {
-  background: var(--pine-wash);
-  box-shadow: inset 2px 0 0 var(--pine);
+  background: var(--accent);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .session-id {
-  font-family: var(--machine);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -104,7 +93,7 @@ import ConnectionChip from "./ConnectionChip.vue";
   display: inline-flex;
   align-items: baseline;
   gap: 7px;
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 12px;
   flex-shrink: 0;
 }
@@ -113,7 +102,7 @@ import ConnectionChip from "./ConnectionChip.vue";
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--pine);
+  background: var(--primary);
   display: inline-block;
   align-self: center;
   animation: livepulse 2.4s ease-in-out infinite;
@@ -130,7 +119,7 @@ import ConnectionChip from "./ConnectionChip.vue";
 }
 
 .rail-empty {
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 13px;
   margin: 4px 20px;
 }

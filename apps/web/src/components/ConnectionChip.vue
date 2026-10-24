@@ -27,7 +27,7 @@ const tone = computed(() => {
   <div class="chip">
     <Badge variant="outline" class="chip-status" :class="tone">
       <i class="dot" />
-      <span class="mono">{{ label }}</span>
+      <span class="font-mono">{{ label }}</span>
     </Badge>
   </div>
 </template>
@@ -36,18 +36,14 @@ const tone = computed(() => {
 .chip {
   margin: 14px 20px 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border);
 }
 
 .chip-status {
   gap: 8px;
   font-size: 12px;
-  border-color: var(--line);
-  color: var(--mute);
-}
-
-.chip-status .mono {
-  font-size: 12px;
+  border-color: var(--border);
+  color: var(--muted-foreground);
 }
 
 .dot {
@@ -57,29 +53,29 @@ const tone = computed(() => {
 }
 
 .pine {
-  color: var(--pine);
+  color: var(--primary);
 }
 
 .pine .dot {
-  background: var(--pine);
+  background: var(--primary);
   animation: livepulse 2.4s ease-in-out infinite;
 }
 
 .amber {
-  color: var(--amber);
+  color: var(--destructive);
 }
 
 .amber .dot {
-  background: var(--amber);
+  background: var(--destructive);
   animation: livepulse 1.2s ease-in-out infinite;
 }
 
 .mute {
-  color: var(--mute);
+  color: var(--muted-foreground);
 }
 
 .mute .dot {
-  background: var(--mute);
+  background: var(--muted-foreground);
 }
 
 @keyframes livepulse {

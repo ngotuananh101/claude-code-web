@@ -19,15 +19,14 @@ import { Input } from "@/components/ui/input";
 <style scoped>
 .composer {
   padding: 14px 28px 18px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border);
 }
 
 /* The honest notice stays fully readable: the input's own disabled:opacity-50
    would dim it past legibility, and this unlayered rule outranks it. */
 .composer-box {
   opacity: 1;
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 13px;
-  background: #fff;
 }
 </style>

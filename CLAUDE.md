@@ -17,17 +17,20 @@ reformatted, or lint-fixed — Biome skips them by override in `biome.json`:
 - `apps/web/components.json`
 
 To change what they produce, run the shadcn-vue CLI (`add`/`diff`) or override
-at the call site: extra classes, a wrapper element, or theme variables. The
-cc-web palette is mapped onto shadcn's semantic variables in
-`apps/web/src/styles/tokens.css` — that file is ours to edit; the generated
-`index.css` is not.
+at the call site: extra classes, a wrapper element, or Tailwind utilities. The
+theme is the generated `index.css` and nothing else — the owner removed the
+custom token layer on 2026-10-24 ("lấy nguyên xi từ shadcn-vue"), so there is
+no `tokens.css` and no semantic-variable remap: style call sites with the
+generated theme variables (`var(--primary)`, `var(--muted-foreground)`,
+`var(--border)`, …) or Tailwind utilities, never a custom palette.
 
 After every shadcn-vue CLI run, check `git diff apps/web/src/styles/index.css`:
 while a `font` is configured the CLI injects a Google Fonts `@import` at the
 top of that file. The repo's `components.json` deliberately has no `font`
 (resolving to zero font imports), and the import must not come back — the
-interface's two voices are self-hosted fontsource faces and the control plane
-must not pull UI fonts from the network.
+Inter face is self-hosted via `@fontsource-variable/inter` (imported in
+`apps/web/src/main.ts`) and the control plane must not pull UI fonts from
+the network.
 
 One more invariant lives in `biome.json` (a strict-JSON file, so it cannot
 carry a comment): the generated-file protection override must stay **last**

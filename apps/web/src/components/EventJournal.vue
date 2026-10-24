@@ -45,13 +45,13 @@ const emptyCopy = computed(() =>
 
     <template v-for="row in rows" :key="row.kind === 'event' ? row.event.sessionSequence : row.key">
       <div v-if="row.kind === 'run'" class="run-row">
-        <span class="mono">{{ row.runId }}</span>
+        <span class="font-mono">{{ row.runId }}</span>
       </div>
       <div v-else class="event-row">
-        <span class="seq mono" :title="row.event.occurredAt">{{ row.event.sessionSequence }}</span>
+        <span class="seq font-mono" :title="row.event.occurredAt">{{ row.event.sessionSequence }}</span>
         <div class="event-body">
-          <span class="event-type mono">{{ row.event.type }}</span>
-          <pre class="payload mono">{{ JSON.stringify(row.event.payload, null, 2) }}</pre>
+          <span class="event-type font-mono">{{ row.event.type }}</span>
+          <pre class="payload font-mono">{{ JSON.stringify(row.event.payload, null, 2) }}</pre>
         </div>
       </div>
     </template>
@@ -68,15 +68,15 @@ const emptyCopy = computed(() =>
 .repair {
   margin: 18px 0 0 28px;
   padding: 10px 14px;
-  background: var(--amber-wash);
-  border-left: 2px solid var(--amber);
-  color: var(--amber);
+  background: color-mix(in oklab, var(--destructive) 10%, transparent);
+  border-left: 2px solid var(--destructive);
+  color: var(--destructive);
   font-size: 13px;
 }
 
 .empty {
   margin: 44px 28px;
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 14px;
 }
 
@@ -86,14 +86,14 @@ const emptyCopy = computed(() =>
   gap: 14px;
   margin: 22px 0 6px 28px;
   font-size: 12px;
-  color: var(--mute);
+  color: var(--muted-foreground);
 }
 
 .run-row::after {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--line);
+  background: var(--border);
 }
 
 .event-row {
@@ -103,13 +103,13 @@ const emptyCopy = computed(() =>
 }
 
 .event-row:hover {
-  background: #f4f5f1;
+  background: var(--muted);
 }
 
 .seq {
   text-align: right;
   padding-right: 18px;
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.9;
   user-select: all;
@@ -117,7 +117,7 @@ const emptyCopy = computed(() =>
 
 .event-type {
   font-size: 12px;
-  color: var(--mute);
+  color: var(--muted-foreground);
 }
 
 .payload {
@@ -126,6 +126,6 @@ const emptyCopy = computed(() =>
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--ink);
+  color: var(--foreground);
 }
 </style>

@@ -34,7 +34,7 @@ async function submit(): Promise<void> {
 <template>
   <main class="login">
     <div class="login-body">
-      <p class="wordmark">cc-web</p>
+      <p class="wordmark font-mono">cc-web</p>
       <h1>Watch your coding agents work.</h1>
       <p class="lede">
         Sign in to follow sessions live from the journal — every event, in
@@ -75,13 +75,12 @@ async function submit(): Promise<void> {
 .login-body {
   width: min(340px, calc(100vw - 48px));
   padding-top: 28px;
-  border-top: 2px solid var(--ink);
+  border-top: 2px solid var(--foreground);
 }
 
 .wordmark {
-  font-family: var(--machine);
   font-size: 13px;
-  color: var(--pine);
+  color: var(--primary);
   margin: 0 0 18px;
 }
 
@@ -94,7 +93,7 @@ h1 {
 }
 
 .lede {
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 14px;
   margin: 0 0 28px;
 }
@@ -110,12 +109,12 @@ h1 {
 }
 
 .field-label {
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 13px;
 }
 
 .error {
-  color: var(--amber);
+  color: var(--destructive);
   font-size: 13px;
   margin: 0;
 }

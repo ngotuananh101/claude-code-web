@@ -27,14 +27,14 @@ onUnmounted(() => clearInterval(refresh));
     <SessionRail />
     <section class="stage">
       <header v-if="active" class="stage-head">
-        <span class="session-id">{{ active.sessionId }}</span>
+        <span class="session-id font-mono">{{ active.sessionId }}</span>
         <span class="head-meta">
-          <span class="mono">{{ active.watermark }}</span>
+          <span class="font-mono">{{ active.watermark }}</span>
           <span v-if="activeLive" class="live-flag"><i class="live-dot" /> live</span>
         </span>
       </header>
       <header v-else class="stage-head">
-        <span class="head-meta head-idle">No session selected.</span>
+        <span class="head-meta">No session selected.</span>
       </header>
 
       <EventJournal
@@ -64,7 +64,7 @@ onUnmounted(() => clearInterval(refresh));
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--border);
 }
 
 .stage-head {
@@ -73,11 +73,10 @@ onUnmounted(() => clearInterval(refresh));
   justify-content: space-between;
   gap: 16px;
   padding: 18px 28px 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border);
 }
 
 .session-id {
-  font-family: var(--machine);
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -88,17 +87,13 @@ onUnmounted(() => clearInterval(refresh));
   display: flex;
   align-items: baseline;
   gap: 12px;
-  color: var(--mute);
+  color: var(--muted-foreground);
   font-size: 12px;
   flex-shrink: 0;
 }
 
-.head-idle {
-  font-family: var(--voice);
-}
-
 .live-flag {
-  color: var(--pine);
+  color: var(--primary);
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
@@ -108,7 +103,7 @@ onUnmounted(() => clearInterval(refresh));
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--pine);
+  background: var(--primary);
   display: inline-block;
   align-self: center;
   animation: livepulse 2.4s ease-in-out infinite;
@@ -128,6 +123,6 @@ onUnmounted(() => clearInterval(refresh));
   flex: 1;
   display: grid;
   place-items: center;
-  color: var(--mute);
+  color: var(--muted-foreground);
 }
 </style>
