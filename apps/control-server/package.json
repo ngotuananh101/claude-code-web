@@ -9,6 +9,9 @@
   "dependencies": {
     "@cc-web/control-db": "workspace:*",
     "@cc-web/protocol": "workspace:*",
-    "@cc-web/shared": "workspace:*"
+    "@cc-web/shared": "workspace:*",
+    "better-auth": "^1.7.12",
+    "kysely": "^0.29.7",
+    "kysely-bun-sqlite": "^0.4.0"
   }
 }
