@@ -42,6 +42,16 @@ describe("runner identity store", () => {
     });
   });
 
+  test("creates the identity directory when it does not exist", async () => {
+    // `runner setup` runs before the daemon ever made a home; the first write
+    // must not fail with ENOENT on a fresh host.
+    await withTempDir(async (dir) => {
+      const missing = join(dir, "not-yet", "nested");
+      await saveIdentity(missing, identity);
+      expect(await loadIdentity(missing)).toEqual({ ok: true, identity });
+    });
+  });
+
   test("tightens permissions on an existing file it did not create", async () => {
     await withTempDir(async (dir) => {
       await mkdir(dir, { recursive: true });

@@ -1,4 +1,4 @@
-import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -27,6 +27,10 @@ const TMP = "identity.json.tmp";
 export async function saveIdentity(dir: string, identity: RunnerIdentity): Promise<void> {
   const target = join(dir, FILE);
   const temp = join(dir, TMP);
+
+  // The daemon makes its home before connecting, but `runner setup` runs first
+  // on a fresh host — the directory may not exist yet.
+  await mkdir(dir, { recursive: true });
 
   // `mode` on writeFile only applies when the file is created; an existing file
   // keeps its mode. So the temp file is removed first and created fresh.
