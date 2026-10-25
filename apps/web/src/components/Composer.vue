@@ -3,6 +3,7 @@ import { ArrowUp, Square } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupTextarea } from "@/components/ui/input-group";
 import { cancelRun, startRun } from "../services/runs-api";
 
 /**
@@ -70,16 +71,16 @@ async function stop(): Promise<void> {
 </script>
 
 <template>
-  <div class="rounded-xl border border-border bg-card shadow-sm">
-    <textarea
+  <InputGroup class="bg-card shadow-sm">
+    <InputGroupTextarea
       v-model="prompt"
       rows="3"
-      class="max-h-52 w-full resize-none rounded-t-xl bg-transparent px-4 py-3 text-[13px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+      class="max-h-52 px-4 py-3 text-[13px] leading-relaxed"
       placeholder="Gửi prompt cho runner…"
       aria-label="Ô soạn prompt"
       @keydown.enter.exact.prevent="send"
     />
-    <div class="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
+    <InputGroupAddon align="block-end" class="justify-between border-t border-border pt-2 pb-2">
       <span class="px-1 font-mono text-[11px] text-muted-foreground">
         Enter để gửi — Shift+Enter xuống dòng
       </span>
@@ -99,6 +100,6 @@ async function stop(): Promise<void> {
           Gửi
         </Button>
       </div>
-    </div>
-  </div>
+    </InputGroupAddon>
+  </InputGroup>
 </template>

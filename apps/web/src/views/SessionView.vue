@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
+import { Button } from "@/components/ui/button";
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import {
@@ -154,27 +155,31 @@ async function refreshNow(): Promise<void> {
         <Composer class="w-full max-w-[660px]" :session-id="routeSession" :active-run-id="null" @started="onStarted" />
 
         <div class="flex flex-wrap items-center justify-center gap-2">
-          <RouterLink
-            to="/runners"
-            class="rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          <Button
+            variant="outline"
+            size="xs"
+            class="rounded-full bg-card px-3.5 hover:border-primary/40 hover:text-foreground"
+            as-child
           >
-            runners
-          </RouterLink>
-          <button
-            type="button"
-            class="cursor-pointer rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            <RouterLink to="/runners">runners</RouterLink>
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            class="rounded-full bg-card px-3.5 hover:border-primary/40 hover:text-foreground"
             @click="refreshNow"
           >
             làm mới
-          </button>
-          <button
+          </Button>
+          <Button
             v-if="sessions.sessions.length > 0"
-            type="button"
-            class="cursor-pointer rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            variant="outline"
+            size="xs"
+            class="rounded-full bg-card px-3.5 hover:border-primary/40 hover:text-foreground"
             @click="router.push(`/sessions/${sessions.sessions[0]!.sessionId}`)"
           >
             mở journal mới nhất
-          </button>
+          </Button>
         </div>
       </div>
     </template>

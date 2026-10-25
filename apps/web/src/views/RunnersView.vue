@@ -122,13 +122,14 @@ onMounted(() => void load());
           </p>
           <div class="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5">
             <span class="min-w-0 flex-1 break-all font-mono text-[13px] select-all">{{ minted.token }}</span>
-            <button
-              class="shrink-0 cursor-pointer rounded-sm border border-border bg-transparent px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
+              class="shrink-0"
               @click="copyToken"
             >
               copy
-            </button>
+            </Button>
           </div>
           <div class="grid gap-1">
             <span class="font-mono text-xs tracking-wider text-muted-foreground uppercase">runner id</span>

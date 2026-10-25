@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { Badge } from "@/components/ui/badge";
 import { sessions } from "../stores/sessions.ts";
 
 const repairing = computed(() => sessions.stream?.needsResync ?? false);
@@ -23,8 +24,8 @@ const dot = computed(() => {
 </script>
 
 <template>
-  <div class="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+  <Badge variant="outline" class="h-auto gap-1.5 py-1 font-mono text-[11px] font-normal text-muted-foreground">
     <span class="size-[7px] rounded-full" :class="dot" />
-    <span>{{ label }}</span>
-  </div>
+    {{ label }}
+  </Badge>
 </template>

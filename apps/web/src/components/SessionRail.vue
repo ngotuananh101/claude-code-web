@@ -8,17 +8,23 @@ import {
   Server,
   SquarePen,
 } from "@lucide/vue";
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { relativeTime } from "../lib/relative-time.ts";
 import { closeSession, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 
 const route = useRoute();
 const router = useRouter();
-const query = ref("");
 
 // vue-router writes {back, current, forward} into history.state; reading it
 // on every route change is what keeps the arrows honest.
@@ -41,11 +47,23 @@ const ticker = setInterval(() => {
 }, 30_000);
 onUnmounted(() => clearInterval(ticker));
 
-const filtered = computed(() => {
-  const needle = query.value.trim().toLowerCase();
-  if (needle === "") return sessions.sessions;
-  return sessions.sessions.filter((s) => s.sessionId.toLowerCase().includes(needle));
-});
+const searchOpen = ref(false);
+
+// Selecting a hit closes the palette and holds that session's journal.
+function goToSession(sessionId: string): void {
+  searchOpen.value = false;
+  void router.push(`/sessions/${sessionId}`);
+}
+
+// Ctrl/Cmd+K opens the palette from anywhere in the app.
+function onKeydown(event: KeyboardEvent): void {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    searchOpen.value = true;
+  }
+}
+onMounted(() => window.addEventListener("keydown", onKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 
 // "New session" leaves the held journal for the composer page: §11's dispatch
 // API is what will let a prompt create a session from there.
@@ -75,24 +93,24 @@ async function signOut(): Promise<void> {
       </RouterLink>
       <RouterLink to="/" class="truncate text-sm font-medium hover:opacity-80">cc-web</RouterLink>
       <span class="ml-auto flex items-center gap-0.5">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           aria-label="Quay lại"
           :disabled="!canGoBack"
-          class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           @click="router.back()"
         >
           <ChevronLeft :size="15" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
           aria-label="Tiến"
           :disabled="!canGoForward"
-          class="grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           @click="router.forward()"
         >
           <ChevronRight :size="15" />
-        </button>
+        </Button>
       </span>
     </div>
 
@@ -137,27 +155,23 @@ async function signOut(): Promise<void> {
       </RouterLink>
     </nav>
 
-    <div class="px-3 pt-4 pb-2">
-      <div class="relative">
-        <Search
-          aria-hidden="true"
-          class="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          v-model="query"
-          class="h-8 rounded-lg pl-8 text-xs"
-          placeholder="Tìm phiên"
-          type="search"
-        />
-      </div>
-    </div>
-
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-      <p class="px-2.5 pt-2 pb-1.5 text-xs font-medium text-muted-foreground">Phiên</p>
+      <div class="flex h-9 items-center justify-between px-2.5">
+        <p class="text-sm font-medium text-foreground">Phiên</p>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Tìm phiên"
+          title="Tìm phiên (Ctrl+K)"
+          @click="searchOpen = true"
+        >
+          <Search :size="15" />
+        </Button>
+      </div>
       <!-- grid-cols-1 = minmax(0,1fr): without it the implicit auto column
            sizes to the rows' nowrap min-content and overflows the rail. -->
-      <ul v-if="filtered.length > 0" class="grid grid-cols-1 content-start gap-0.5">
-        <li v-for="s in filtered" :key="s.sessionId">
+      <ul v-if="sessions.sessions.length > 0" class="grid grid-cols-1 content-start gap-0.5">
+        <li v-for="s in sessions.sessions" :key="s.sessionId">
           <Button
             variant="ghost"
             class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-2 font-normal"
@@ -182,12 +196,6 @@ async function signOut(): Promise<void> {
         </li>
       </ul>
       <p
-        v-else-if="sessions.loaded && sessions.sessions.length > 0"
-        class="px-2.5 py-2 text-xs text-muted-foreground"
-      >
-        Không có phiên nào khớp.
-      </p>
-      <p
         v-else-if="sessions.loaded"
         class="px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
       >
@@ -206,15 +214,40 @@ async function signOut(): Promise<void> {
           {{ accountInitial }}
         </span>
         <span class="flex-1 truncate text-[13px]">{{ sessions.account ?? "—" }}</span>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           aria-label="Đăng xuất"
-          class="grid size-7 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-destructive"
+          class="text-muted-foreground hover:text-destructive"
           @click="signOut"
         >
           <LogOut :size="14" />
-        </button>
+        </Button>
       </div>
     </footer>
+
+    <CommandDialog
+      v-model:open="searchOpen"
+      title="Tìm phiên"
+      description="Chọn một phiên để mở journal của nó."
+    >
+      <CommandInput placeholder="Tìm phiên theo id…" />
+      <CommandList>
+        <CommandEmpty>Không có phiên nào khớp.</CommandEmpty>
+        <CommandGroup heading="Phiên">
+          <CommandItem
+            v-for="s in sessions.sessions"
+            :key="s.sessionId"
+            :value="s.sessionId"
+            @select="goToSession(s.sessionId)"
+          >
+            <span class="min-w-0 flex-1 truncate font-mono text-xs">{{ s.sessionId }}</span>
+            <span class="shrink-0 text-[11px] text-muted-foreground">
+              {{ relativeTime(s.lastIngestedAt, now) }}
+            </span>
+          </CommandItem>
+        </CommandGroup>
+      </CommandList>
+    </CommandDialog>
   </aside>
 </template>
