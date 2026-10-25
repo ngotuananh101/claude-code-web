@@ -3,9 +3,10 @@
  *
  * The SDK delivers the raw Anthropic streaming frames behind every complete
  * message when `includePartialMessages` is on. The durable transcript stays
- * complete-message based — these frames become exactly two event types, keyed
- * by the SDK message id so the browser can accumulate them into the message
- * `message.completed` will finalize:
+ * complete-message based — these frames become exactly three event types:
+ * message events keyed by the SDK message id so the browser can accumulate
+ * them into the message `message.completed` will finalize, and a tool event
+ * keyed by the tool call id:
  *
  *   message.started { messageId }        — from `message_start`
  *   message.delta   { messageId, text }  — from each `text_delta` fragment

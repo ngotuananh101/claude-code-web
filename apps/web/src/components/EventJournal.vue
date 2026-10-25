@@ -12,10 +12,12 @@ const props = defineProps<{
   sessionLive: boolean;
 }>();
 
-// Run-grouped rows with the streaming messages coalesced in (§12.3): deltas
-// never render as rows — each open message is one growing row at the position
-// of its last delta, closed by the message.completed that carries its id. The
-// derivation is pure and tested in features/journal/streaming-messages.ts.
+// Run-grouped rows with the streaming messages and tool calls coalesced in
+// (§12.3): deltas never render as rows — each open message is one growing row
+// at the position of its last delta, closed by the message.completed that
+// carries its id — and a tool's started/completed pair collapses into one row
+// per call that settles when the tool returns. The derivation is pure and
+// tested in features/journal/streaming-messages.ts.
 const rows = computed(() => deriveJournalRows(props.events));
 
 // The journal is the authority on an approval's outcome (§13.2): a card is

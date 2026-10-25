@@ -336,4 +336,29 @@ describe("deriveJournalRows", () => {
     ]);
     expect(rows.map((row) => row.kind)).toEqual(["run", "event", "tool", "event"]);
   });
+
+  test("entries of a later run place after that run's header, never above it", () => {
+    // Pins the header-sequence restructure: a run header used to carry
+    // MAX_SAFE_INTEGER as its scan boundary, so an open entry of the run the
+    // header belongs to flushed ABOVE its own header. Two runs make the
+    // regression shape explicit — run B's header, then run B's live tail.
+    reset();
+    const rows = deriveJournalRows([
+      event("run.started", {}, "run-1"),
+      event("run.finished", {}, "run-1"),
+      event("run.started", {}, "run-2"),
+      event("tool.started", { toolCallId: "toolu-9", toolName: "Bash" }, "run-2"),
+      event("message.started", { messageId: "msg_9" }, "run-2"),
+      event("message.delta", { messageId: "msg_9", text: "hi" }, "run-2"),
+    ]);
+    expect(rows.map((row) => row.kind)).toEqual([
+      "run",
+      "event",
+      "event",
+      "run",
+      "event",
+      "streaming",
+      "tool",
+    ]);
+  });
 });

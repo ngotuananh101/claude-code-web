@@ -93,6 +93,21 @@ describe("toolCompletionsOf", () => {
     ).toEqual([]);
   });
 
+  test("the output summary is masked and capped through the whole mapping", () => {
+    // §19.4 seam: only the summarizeToolInput helper is unit-tested on its
+    // own — this pins that the wiring cannot ship raw tool output past it.
+    // A credential-bearing header inside the text is masked, and an oversized
+    // output is truncated to the hard cap.
+    const leaking = toolResult("toolu-1", "Authorization: Bearer sk-ant-1234567890abcdef");
+    const [masked] = toolCompletionsOf(userFrame([leaking]));
+    expect(masked?.outputSummary).toContain("[REDACTED]");
+    expect(masked?.outputSummary).not.toContain("sk-ant-1234567890abcdef");
+
+    const huge = toolResult("toolu-2", "x".repeat(5000));
+    const [capped] = toolCompletionsOf(userFrame([huge]));
+    expect(capped?.outputSummary?.length).toBeLessThanOrEqual(2000);
+  });
+
   test("non-tool-result frames yield no completions without throwing", () => {
     expect(toolCompletionsOf(userFrame("echo"))).toEqual([]);
     expect(toolCompletionsOf({ type: "assistant", message: { content: [] } })).toEqual([]);

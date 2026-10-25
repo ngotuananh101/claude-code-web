@@ -317,6 +317,48 @@ describe("a clean run", () => {
     expect(completion.isError).toBe(false);
     expect(completion.outputSummary).toBe("hi");
   });
+
+  test("a mixed user frame (text + tool_result) still lands as run.status", async () => {
+    // The short-circuit on isToolResultFrame is what stops a future "map any
+    // user frame" refactor from silently half-mapping mixed frames: an
+    // unexpected shape stays visible as the generic event, never loses its
+    // content and never fires partial tool.completed rows.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        yield {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "odd frame" },
+              { type: "tool_result", tool_use_id: "toolu-1", content: "x" },
+            ],
+          },
+        };
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "session.updated",
+      "run.status",
+      "run.finished",
+    ]);
+    const frame = JSON.parse(list[2]!.payload) as { type?: string };
+    expect(frame.type).toBe("user");
+  });
 });
 
 describe("a failing run", () => {
