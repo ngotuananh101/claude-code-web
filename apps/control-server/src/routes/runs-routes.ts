@@ -1,4 +1,5 @@
 import { type Scheduler, sessionPin } from "@cc-web/control-db";
+import { MODEL_IDS } from "@cc-web/protocol";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
@@ -81,10 +82,11 @@ export async function handleDispatchRun(
     permissionMode = record.permissionMode;
   }
 
-  // §5.2: the model is a per-run choice over the names §8.1 fixes. Same rule as
-  // the permission mode — a typo must be refused, not silently run on a model
+  // §5.2: the model is a per-run choice over the names §8.1 fixes (the one
+  // MODEL_IDS list — the composer labels the same names). Same rule as the
+  // permission mode — a typo must be refused, not silently run on a model
   // the operator did not ask for.
-  const MODELS: ReadonlySet<string> = new Set(["sonnet", "opus", "haiku"]);
+  const MODELS: ReadonlySet<string> = new Set(MODEL_IDS);
   let model: string | undefined;
   if (record.model !== undefined) {
     if (typeof record.model !== "string" || !MODELS.has(record.model)) {

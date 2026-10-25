@@ -7,6 +7,7 @@ import {
   upsertRunnerWorkspaces,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
+import { MODEL_IDS } from "@cc-web/protocol";
 import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
 import type { Link } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
@@ -352,6 +353,30 @@ describe("the model on POST /api/sessions/:id/runs", () => {
           (JSON.parse(row.payload) as { model?: string }).model === "opus",
       ),
     );
+  });
+
+  test("every MODEL_IDS member is accepted, not just the tested one", async () => {
+    // Drift pin: the route's validation set is built from the protocol's
+    // MODEL_IDS, so a member added there must be dispatchable here without a
+    // second edit that someone forgets.
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    for (const model of MODEL_IDS) {
+      // One fresh session per model (a dispatched run pins its session), and
+      // the slot is released between dispatches the same way the terminal
+      // events do it — the §11.3 MVP capacity is one run at a time.
+      const response = await fetch(`${url}/api/sessions/session-model-${model}/runs`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: `hello ${model}`, model }),
+      });
+      expect(response.status).toBe(202);
+      const { runId } = (await response.json()) as { runId: string };
+      handle!.scheduler.release(runId);
+    }
   });
 
   test("an unknown model is a bad request, not a silent default", async () => {

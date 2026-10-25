@@ -212,7 +212,7 @@ export {
   negotiateHello,
   type ServerPolicy,
 } from "./handshake.ts";
-
+export { MODEL_IDS, type ModelId } from "./models.ts";
 export {
   type DeclaredWorkspace,
   parseDeclaredWorkspaces,
@@ -223,7 +223,6 @@ export {
   reconcile,
   type ServerRunState,
 } from "./reconcile.ts";
-
 export {
   type DesiredState,
   type ObservedState,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ModelId } from "@cc-web/protocol";
 import { ArrowUp, FolderOpen, GitBranch, Paperclip, Server, Shield, Square, X } from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
@@ -52,11 +53,17 @@ const permissionLabels: Record<string, string> = {
   plan: "Chỉ lập kế hoạch",
   bypassPermissions: "Toàn quyền",
 };
-const modelLabels: Record<string, string> = {
-  default: "Mặc định",
+// Keyed by ModelId: a name added to the protocol's MODEL_IDS list without a
+// label here is a type error, so the dropdown can never drift from the route's
+// validation set.
+const modelIdLabels: Record<ModelId, string> = {
   sonnet: "Sonnet",
   opus: "Opus",
   haiku: "Haiku",
+};
+const modelLabels: Record<string, string> = {
+  default: "Mặc định",
+  ...modelIdLabels,
 };
 
 /** The runner list is advisory until a specific one is picked. */
