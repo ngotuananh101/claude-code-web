@@ -1004,6 +1004,34 @@ describe("the model", () => {
     // model choice is what "not specified" means, so the option is omitted.
     expect(captured?.model).toBeUndefined();
   });
+
+  test("an empty model is as absent", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", model: "" } },
+      { workspacePath: WORKSPACES.get("workspace-1")!, sdk },
+    );
+
+    // Unreachable through the route (its strict set refuses ""), but the
+    // runner-side parse still honors the plan's non-empty contract.
+    expect(captured?.model).toBeUndefined();
+  });
 });
 
 describe("the approval gate", () => {

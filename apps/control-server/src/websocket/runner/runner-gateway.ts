@@ -463,6 +463,9 @@ export class RunnerGateway {
     }
     this.#onWorkspaces?.(runnerId, workspaces);
 
+    // Stored even when reconciliation then blocks (contradictory_inventory):
+    // a blocked runner is never `ready`, so placement cannot act on it.
+
     const result = reconcile({
       server: this.#serverInventory(connection),
       runner,

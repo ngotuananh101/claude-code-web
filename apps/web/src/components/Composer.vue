@@ -111,9 +111,11 @@ const selectedProject = computed(
   () => projectOptions.value.find((o) => o.value === project.value) ?? projectOptions.value[0]!,
 );
 
-// A specific runner narrows the project options; a project that fell out of
-// the list resets to the first one that survived the narrowing.
-watch(runnerId, () => {
+// A project that falls out of the option list resets to the first survivor.
+// The list changes two ways — a specific runner narrows it, and the fetched
+// declarations arrive after mount — and both must leave the model pointing at
+// an option the select actually holds.
+watch(projectOptions, () => {
   if (!projectOptions.value.some((o) => o.value === project.value)) {
     project.value = projectOptions.value[0]!.value;
   }

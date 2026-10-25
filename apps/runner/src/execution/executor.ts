@@ -97,8 +97,10 @@ export async function executeRun(
   const permissionMode =
     typeof record?.["permissionMode"] === "string" ? record["permissionMode"] : "default";
   // Unlike permissionMode there is no runner-side default: an unnamed model
-  // means the SDK's own choice, so the option is omitted downstream.
-  const model = typeof record?.["model"] === "string" ? record["model"] : undefined;
+  // means the SDK's own choice, so the option is omitted downstream. Empty is
+  // as absent — defense in depth behind the route's strict set.
+  const model =
+    typeof record?.["model"] === "string" && record["model"] !== "" ? record["model"] : undefined;
 
   const now = () => new Date().toISOString();
   let sequence = 0;
