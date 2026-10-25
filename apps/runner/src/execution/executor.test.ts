@@ -266,7 +266,12 @@ describe("a clean run", () => {
       workspacePath: "/home/runner/project",
     });
 
-    const toolUse = { type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "echo hi" } };
+    const toolUse = {
+      type: "tool_use",
+      id: "toolu-1",
+      name: "Bash",
+      input: { command: "echo hi" },
+    };
     const sdk: SdkStream = () =>
       (async function* () {
         yield { type: "system", subtype: "init", session_id: "sdk-1" };
@@ -280,7 +285,9 @@ describe("a clean run", () => {
           type: "user",
           message: {
             role: "user",
-            content: [{ type: "tool_result", tool_use_id: "toolu-1", content: "hi", is_error: false }],
+            content: [
+              { type: "tool_result", tool_use_id: "toolu-1", content: "hi", is_error: false },
+            ],
           },
         };
         yield { type: "result", subtype: "success", result: "hi" };

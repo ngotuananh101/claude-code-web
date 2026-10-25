@@ -227,7 +227,9 @@ describe("deriveJournalRows", () => {
 
   test("an in-flight tool renders one running row in the live tail", () => {
     reset();
-    const rows = deriveJournalRows([event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" })]);
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+    ]);
     expect(toolRows(rows)).toEqual([
       {
         kind: "tool",

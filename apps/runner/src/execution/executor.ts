@@ -266,7 +266,8 @@ export async function executeRun(
       // run.status blob the whole frame used to land as. Mixed or echo frames
       // keep that path so an unexpected shape stays visible.
       if (type === "user" && isToolResultFrame(sdkMessage)) {
-        for (const completion of toolCompletionsOf(sdkMessage)) append("tool.completed", completion);
+        for (const completion of toolCompletionsOf(sdkMessage))
+          append("tool.completed", completion);
         continue;
       }
 

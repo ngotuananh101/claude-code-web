@@ -135,7 +135,8 @@ try {
             attemptId: "attempt-1",
             workspaceId: "default",
             ownerId: "user-1",
-            prompt: "Reply with exactly the word OK and nothing else.",
+            prompt:
+              "Use the Bash tool to run the command 'echo hi', then reply with exactly the word OK and nothing else.",
           },
           {
             runnerId: "runner-a",
@@ -337,6 +338,38 @@ try {
     "a finished run streams well-formed message.delta fragments",
     !finished || deltasWellFormed,
     `message.delta rows: ${deltaRows.length}`,
+  );
+
+  // --- 5b. tool events: block starts announce the call, tool_result closes it ---
+  const toolStartedRows = events.filter((e) => e.type === "tool.started");
+  const toolCompletedRows = events.filter((e) => e.type === "tool.completed");
+  const toolStartedIds = new Set(
+    toolStartedRows
+      .map((e) => (JSON.parse(e.payload) as { toolCallId?: unknown }).toolCallId)
+      .filter((id): id is string => typeof id === "string" && id !== ""),
+  );
+  const toolStartedWellFormed = toolStartedRows.every((e) => {
+    const payload = JSON.parse(e.payload) as { toolCallId?: unknown; toolName?: unknown };
+    return (
+      typeof payload.toolCallId === "string" &&
+      payload.toolCallId !== "" &&
+      typeof payload.toolName === "string" &&
+      payload.toolName !== ""
+    );
+  });
+  const toolCorrelated = toolCompletedRows.every((e) => {
+    const payload = JSON.parse(e.payload) as { toolCallId?: unknown };
+    return typeof payload.toolCallId === "string" && toolStartedIds.has(payload.toolCallId);
+  });
+  check(
+    "a finished run announces tool calls with ids and names",
+    !finished || (toolStartedRows.length > 0 && toolStartedWellFormed),
+    `tool.started rows: ${toolStartedRows.length}`,
+  );
+  check(
+    "every tool.completed correlates with an announced tool call",
+    !finished || (toolCompletedRows.length > 0 && toolCorrelated),
+    `tool.completed rows: ${toolCompletedRows.length}`,
   );
 
   // --- 6. the attempt settles and the workspace lock is released ---

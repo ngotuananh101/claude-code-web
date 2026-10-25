@@ -19,9 +19,9 @@ function toolResult(toolUseId: string, content: unknown, isError = false): Recor
 
 describe("isToolResultFrame", () => {
   test("a frame of only tool_result blocks is a tool-result frame", () => {
-    expect(isToolResultFrame(userFrame([toolResult("toolu-1", "ok"), toolResult("toolu-2", "err")]))).toBe(
-      true,
-    );
+    expect(
+      isToolResultFrame(userFrame([toolResult("toolu-1", "ok"), toolResult("toolu-2", "err")])),
+    ).toBe(true);
   });
 
   test("a mixed frame (text + tool_result) is not", () => {
@@ -41,13 +41,17 @@ describe("isToolResultFrame", () => {
   });
 
   test("non-user frames are not", () => {
-    expect(isToolResultFrame({ type: "assistant", message: { content: [toolResult("t", "x")] } })).toBe(false);
+    expect(
+      isToolResultFrame({ type: "assistant", message: { content: [toolResult("t", "x")] } }),
+    ).toBe(false);
   });
 });
 
 describe("toolCompletionsOf", () => {
   test("one completion per block, in content order, with the call id", () => {
-    const completions = toolCompletionsOf(userFrame([toolResult("toolu-1", "ok"), toolResult("toolu-2", "bad", true)]));
+    const completions = toolCompletionsOf(
+      userFrame([toolResult("toolu-1", "ok"), toolResult("toolu-2", "bad", true)]),
+    );
     expect(completions.map((c) => c.toolCallId)).toEqual(["toolu-1", "toolu-2"]);
     expect(completions.map((c) => c.isError)).toEqual([false, true]);
   });
@@ -80,9 +84,13 @@ describe("toolCompletionsOf", () => {
 
   test("blocks without a usable tool_use_id are skipped", () => {
     expect(
-      toolCompletionsOf(userFrame([{ type: "tool_result", content: "x" }, toolResult("toolu-2", "y")])),
+      toolCompletionsOf(
+        userFrame([{ type: "tool_result", content: "x" }, toolResult("toolu-2", "y")]),
+      ),
     ).toEqual([{ toolCallId: "toolu-2", isError: false, outputSummary: "y" }]);
-    expect(toolCompletionsOf(userFrame([{ type: "tool_result", tool_use_id: 7, content: "x" }]))).toEqual([]);
+    expect(
+      toolCompletionsOf(userFrame([{ type: "tool_result", tool_use_id: 7, content: "x" }])),
+    ).toEqual([]);
   });
 
   test("non-tool-result frames yield no completions without throwing", () => {
