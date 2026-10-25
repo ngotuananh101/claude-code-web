@@ -11,6 +11,10 @@
  * make every runner test load the bundled binary just by importing this module.
  */
 
+import { claudeCliPath } from "./claude-asset.ts";
+
+export { claudeCliPath } from "./claude-asset.ts";
+
 /** The subset of the SDK's `query` this adapter uses. */
 export type QueryFn = (params: {
   prompt: string;
@@ -37,6 +41,12 @@ export type SdkStreamInput = {
   ) => Promise<
     { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string }
   >;
+  /**
+   * Where the SDK's CLI subprocess lives (§20.3). Production resolves the
+   * embedded platform binary via `claudeCliPath()`; the field exists so tests
+   * and exotic hosts can name another one.
+   */
+  pathToClaudeCodeExecutable?: string;
 };
 
 /**
@@ -78,6 +88,10 @@ export function createSdkStream(
   if (input.permissionMode !== undefined) options["permissionMode"] = input.permissionMode;
   if (input.model !== undefined) options["model"] = input.model;
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
+  // §20.3: unlike the options above there is no "inherit" to preserve — the
+  // SDK's own resolution cannot find the CLI inside a compiled binary — so the
+  // resolved path is always set: the caller's override, else the asset.
+  options["pathToClaudeCodeExecutable"] = input.pathToClaudeCodeExecutable ?? claudeCliPath();
 
   // Loaded inside the generator body, so importing this module costs nothing.
   return (async function* () {

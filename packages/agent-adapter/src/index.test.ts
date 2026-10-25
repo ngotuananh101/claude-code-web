@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { claudeCliPath } from "./claude-asset.ts";
 import { createSdkStream, type QueryFn } from "./index.ts";
 
 /**
@@ -115,6 +116,25 @@ describe("mapping a run to SDK options", () => {
     const params = captureOptions({ prompt: "hi", cwd: "/w", canUseTool });
 
     expect(params.options?.["canUseTool"]).toBe(canUseTool);
+  });
+
+  test("defaults the CLI path to the resolved asset", () => {
+    // A compiled binary cannot resolve the SDK's CLI on its own (§20.3): the
+    // default is the embedded-and-extracted binary, which from source is the
+    // node_modules path. Either way the option must always be set.
+    expect(
+      captureOptions({ prompt: "hi", cwd: "/w" }).options?.["pathToClaudeCodeExecutable"],
+    ).toBe(claudeCliPath());
+  });
+
+  test("an explicit pathToClaudeCodeExecutable wins verbatim", () => {
+    const params = captureOptions({
+      prompt: "hi",
+      cwd: "/w",
+      pathToClaudeCodeExecutable: "/opt/claude/claude",
+    });
+
+    expect(params.options?.["pathToClaudeCodeExecutable"]).toBe("/opt/claude/claude");
   });
 });
 
