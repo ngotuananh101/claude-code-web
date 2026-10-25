@@ -1,0 +1,108 @@
+name: Runner build
+
+# The runner-binary pipeline, separate from CI on purpose: CI proves the
+# code (its probes compile and smoke the binary on the host), this workflow
+# produces binaries to hand to hosts — cross-compiled for linux and windows
+# and uploaded as artifacts.
+#
+# The optional server-url input is baked in at compile time (--define
+# CC_WEB_DEFAULT_SERVER), so a distributed binary runs
+# `cc-web-runner setup --runner-id <id>` against its control plane without a
+# --server flag; an explicit --server still wins at runtime. PRs don't build
+# here — CI's runner-binary probe already fails any change that breaks the
+# compile, and landings on main are what get distributed.
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "http(s) origin baked in as setup's default server (empty = --server required at setup time)"
+        required: false
+        default: ""
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "apps/runner/**"
+      - "packages/**"
+      - ".github/workflows/runner-build.yml"
+
+concurrency:
+  group: runner-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The binary name is the artifact name; windows targets must end in .exe
+    # or `bun build --compile` refuses the target.
+    name: ${{ matrix.binary }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            binary: cc-web-runner-linux-x64
+          - target: bun-linux-arm64
+            binary: cc-web-runner-linux-arm64
+          - target: bun-windows-x64
+            binary: cc-web-runner-windows-x64.exe
+          - target: bun-windows-arm64
+            binary: cc-web-runner-windows-arm64.exe
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The URL travels into the --define flag below, so it must be a plain
+      # http(s) origin: no quotes or backslashes to smuggle shell past. The
+      # value rides in env, never interpolated into the script.
+      - name: Check the server-url input
+        if: inputs.server_url != ''
+        env:
+          SERVER_URL: ${{ inputs.server_url }}
+        run: |
+          printf '%s' "$SERVER_URL" | grep -Eq '^https?://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$' || {
+            echo "server_url must be an http(s) origin, e.g. https://cc.example.com" >&2
+            exit 1
+          }
+
+      - name: Cross-compile
+        env:
+          SERVER_URL: ${{ inputs.server_url }}
+        run: |
+          args=(--compile --target="${{ matrix.target }}" --outfile "dist/${{ matrix.binary }}")
+          if [ -n "$SERVER_URL" ]; then
+            args+=(--define "CC_WEB_DEFAULT_SERVER:\"$SERVER_URL\"")
+          fi
+          bun build apps/runner/src/bootstrap/main.ts "${args[@]}"
+          file "dist/${{ matrix.binary }}"
+
+      # Only the x64 linux build executes on this runner; the deeper
+      # behaviors (service unit, setup identity) are CI's probes' job.
+      - name: Smoke the linux-x64 binary
+        if: matrix.target == 'bun-linux-x64'
+        run: |
+          set +e
+          dist/cc-web-runner-linux-x64 frobnicate
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "unknown command exited 0 — the usage gate is gone" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error

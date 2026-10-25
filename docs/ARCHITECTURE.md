@@ -295,6 +295,8 @@ Runner là connector kiểu cloudflared: một file thực thi, dials ra Server,
 5. Credential trong identity là credential dài hạn; mint token chỉ là cơ chế cấp credential đầu tiên. Không reconnect bằng credential đã revoke.
 6. Rotate = mint token mới cho runner đang có và chạy lại `setup` (ghi đè identity, revoke credential cũ trong cùng transaction).
 
+Workflow `.github/workflows/runner-build.yml` (riêng, tách khỏi CI) cross-compile binary cho linux (x64/arm64) và windows (x64/arm64), upload artifact cho mỗi platform. Input `server_url` khi dispatch được bake vào binary lúc compile (`--define CC_WEB_DEFAULT_SERVER`) làm default của `--server`: binary dạng này chạy `setup --runner-id <id>` không cần flag; `--server` runtime vẫn thắng; binary không bake (build thường, probe CI) giữ nguyên yêu cầu flag. URL không phải secret nên được phép nằm trong binary/argv.
+
 ### 6.2. Handshake
 
 ```ts

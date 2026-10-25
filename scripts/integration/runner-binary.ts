@@ -117,6 +117,50 @@ if (build.exitCode === 0) {
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+
+  // The release workflow bakes a server origin in at compile time; a binary
+  // built that way must accept setup without --server. Bun's --define only
+  // matches this bare identifier, so this also guards the define wiring.
+  const bakedBinary = join(repoRoot, "dist", "cc-web-runner-baked");
+  const bakedBuild = Bun.spawnSync(
+    [
+      "bun",
+      "build",
+      "--compile",
+      "--define",
+      'CC_WEB_DEFAULT_SERVER:"https://cc-baked.example.com"',
+      "apps/runner/src/bootstrap/main.ts",
+      "--outfile",
+      bakedBinary,
+    ],
+    { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+  );
+  if (bakedBuild.exitCode === 0) {
+    const bakedHome = await mkdtemp(join(tmpdir(), "cc-web-baked-"));
+    try {
+      const setup = Bun.spawnSync([bakedBinary, "setup", "--runner-id", "baked-runner"], {
+        env: {
+          ...process.env,
+          CC_WEB_RUNNER_HOME: bakedHome,
+          CC_WEB_RUNNER_TOKEN: "baked-smoke-token",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const raw = await readFile(join(bakedHome, "identity.json"), "utf8");
+      const identity = JSON.parse(raw) as Record<string, string>;
+      check(
+        "a binary with a baked default accepts setup without --server",
+        setup.exitCode === 0 && identity["controlUrl"] === "wss://cc-baked.example.com/ws/runner",
+        `exit=${setup.exitCode} controlUrl=${identity["controlUrl"] ?? "(none)"}`,
+      );
+    } finally {
+      await rm(bakedHome, { recursive: true, force: true });
+      await rm(bakedBinary, { force: true });
+    }
+  } else {
+    check("the baked-default binary compiles", false, "bun build --define failed");
+  }
 }
 
 const failed = results.filter((r) => !r.pass);

@@ -22,7 +22,18 @@ import {
   UNIT_NAME,
   writeUnitAndEnable,
 } from "../service/systemd.ts";
-import { runSetup } from "../setup/setup.ts";
+import { resolveServerUrl, runSetup } from "../setup/setup.ts";
+
+/**
+ * The server origin baked in at compile time by the release workflow
+ * (--define CC_WEB_DEFAULT_SERVER:"https://…"). Undefined in dev and in
+ * plain `bun run build:runner`, where setup asks for --server as usual —
+ * the typeof guard keeps the unbuilt reference from throwing.
+ */
+declare const CC_WEB_DEFAULT_SERVER: string | undefined;
+
+const bakedServerUrl =
+  typeof CC_WEB_DEFAULT_SERVER === "string" ? CC_WEB_DEFAULT_SERVER : undefined;
 
 const USAGE = `${runnerInfo.name}
 
@@ -132,7 +143,7 @@ switch (command) {
 
     const result = await runSetup(
       {
-        serverUrl: options["server"] ?? "",
+        serverUrl: resolveServerUrl(options["server"], bakedServerUrl),
         runnerId: options["runner-id"] ?? "",
         token,
         identityDir: identityDir(),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { controlUrlFromServer, runSetup } from "./setup.ts";
+import { controlUrlFromServer, resolveServerUrl, runSetup } from "./setup.ts";
 
 /**
  * Connector setup (§6.1): the operator mints a token on the web and hands it
@@ -18,6 +18,26 @@ describe("controlUrlFromServer", () => {
   test("refuses a URL that is not an http(s) origin", () => {
     expect(controlUrlFromServer("ftp://nope")).toBeUndefined();
     expect(controlUrlFromServer("not a url")).toBeUndefined();
+  });
+});
+
+describe("resolveServerUrl", () => {
+  test("an explicit --server flag wins over the compile-time default", () => {
+    expect(resolveServerUrl("http://flag:8787", "https://baked.example.com")).toBe(
+      "http://flag:8787",
+    );
+  });
+
+  test("the baked default answers when no flag arrived", () => {
+    expect(resolveServerUrl(undefined, "https://baked.example.com")).toBe(
+      "https://baked.example.com",
+    );
+  });
+
+  test("neither side offers anything — setup must refuse, not guess", () => {
+    expect(resolveServerUrl(undefined, undefined)).toBe("");
+    // Whitespace is nothing wearing a URL's clothes.
+    expect(resolveServerUrl("   ", "  ")).toBe("");
   });
 });
 

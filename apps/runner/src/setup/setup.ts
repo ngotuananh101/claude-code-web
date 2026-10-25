@@ -27,6 +27,23 @@ export function controlUrlFromServer(serverUrl: string): string | undefined {
   return `${ws}//${url.host}/ws/runner`;
 }
 
+/**
+ * setup's --server resolution: an explicit flag wins, then the origin baked
+ * in at compile time (--define CC_WEB_DEFAULT_SERVER — the release workflow's
+ * server-url input), then nothing. An empty answer makes setup refuse rather
+ * than guess what was meant.
+ */
+export function resolveServerUrl(
+  cliServer: string | undefined,
+  compileDefault: string | undefined,
+): string {
+  const fromCli = cliServer?.trim();
+  if (fromCli) return fromCli;
+  const fromBuild = compileDefault?.trim();
+  if (fromBuild) return fromBuild;
+  return "";
+}
+
 export type SetupInput = {
   serverUrl: string;
   runnerId: string;
