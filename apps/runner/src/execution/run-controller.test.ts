@@ -934,7 +934,7 @@ describe("workspace preparation (M4)", () => {
         })(),
       prepareWorkspace: async (workspacePath, branch) => {
         seen.push({ workspacePath, branch });
-        return { kind: "ready", checkedOut: true, branch };
+        return { kind: "ready", checkedOut: true, ...(branch === undefined ? {} : { branch }) };
       },
     });
 
@@ -958,7 +958,10 @@ describe("workspace preparation (M4)", () => {
       prepareWorkspace: async () => ({ kind: "refused", reason: "dirty_tree", branch: "dev" }),
     });
 
-    const receipt = await controller.handle({ ...command, payload: { prompt: "hello", branch: "dev" } });
+    const receipt = await controller.handle({
+      ...command,
+      payload: { prompt: "hello", branch: "dev" },
+    });
     await controller.settle();
 
     expect(receipt.accepted).toBe(true);

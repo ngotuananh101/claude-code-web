@@ -1355,9 +1355,9 @@ describe("workspace preparation (M4 branch gate)", () => {
       { ...COMMAND, payload: { prompt: "hello", branch: "dev" } },
       {
         workspacePath: "/home/runner/project",
-        sdk: () => {
+        sdk: (options) => {
           sdkCalled = true;
-          return finishingSdk();
+          return finishingSdk(options);
         },
         prepareWorkspace: async () => ({
           kind: "refused",
@@ -1398,7 +1398,7 @@ describe("workspace preparation (M4 branch gate)", () => {
         sdk: finishingSdk,
         prepareWorkspace: async (workspacePath, branch) => {
           seen.push({ workspacePath, branch });
-          return { kind: "ready", checkedOut: true, branch };
+          return { kind: "ready", checkedOut: true, ...(branch === undefined ? {} : { branch }) };
         },
       },
     );
@@ -1450,11 +1450,15 @@ describe("workspace preparation (M4 branch gate)", () => {
       workspacePath: "/home/runner/project",
     });
 
-    await executeRun(db, { ...COMMAND, payload: { prompt: "hello", branch: "" } }, {
-      workspacePath: "/home/runner/project",
-      sdk: finishingSdk,
-      prepareWorkspace: prepare,
-    });
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", branch: "" } },
+      {
+        workspacePath: "/home/runner/project",
+        sdk: finishingSdk,
+        prepareWorkspace: prepare,
+      },
+    );
     await executeRun(
       db,
       { ...COMMAND, attemptId: "attempt-2", payload: { prompt: "hello", branch: 42 } },

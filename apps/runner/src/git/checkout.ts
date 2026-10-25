@@ -42,14 +42,15 @@ export async function prepareBranch(
   if (status.exitCode !== 0) {
     return { kind: "refused", reason: "checkout_failed", branch };
   }
-  const dirty = status.stdout
-    .split("\n")
-    .some((line) => line !== "" && !line.startsWith("?? "));
+  const dirty = status.stdout.split("\n").some((line) => line !== "" && !line.startsWith("?? "));
   if (dirty) return { kind: "refused", reason: "dirty_tree", branch };
 
   // Fully qualified on purpose: only a ref under refs/heads/ is a branch
   // this gate will check out (see the module comment).
-  const verify = await spawn(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd);
+  const verify = await spawn(
+    ["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+    cwd,
+  );
   if (verify.exitCode !== 0) {
     return { kind: "refused", reason: "unknown_branch", branch };
   }

@@ -68,7 +68,9 @@ describe("GET /api/workspaces", () => {
     seedRunner(db, "runner-a");
     seedRunner(db, "runner-b", { createdAt: 2 });
     upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
-    upsertRunnerWorkspaces(db, "runner-b", [{ workspaceId: "w-2", path: "/srv/other" }]);
+    upsertRunnerWorkspaces(db, "runner-b", [
+      { workspaceId: "w-2", path: "/srv/other", branches: ["dev"] },
+    ]);
 
     const response = await fetch(`${url}/api/workspaces`, {
       headers: { origin, cookie },
@@ -77,11 +79,29 @@ describe("GET /api/workspaces", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     const body = (await response.json()) as {
-      workspaces: Array<{ workspaceId: string; runnerId: string; path: string; createdAt: number }>;
+      workspaces: Array<{
+        workspaceId: string;
+        runnerId: string;
+        path: string;
+        branches: string[];
+        createdAt: number;
+      }>;
     };
     expect(body.workspaces).toEqual([
-      { workspaceId: "default", runnerId: "runner-a", path: "/srv/proj", createdAt: 1 },
-      { workspaceId: "w-2", runnerId: "runner-b", path: "/srv/other", createdAt: 2 },
+      {
+        workspaceId: "default",
+        runnerId: "runner-a",
+        path: "/srv/proj",
+        branches: [],
+        createdAt: 1,
+      },
+      {
+        workspaceId: "w-2",
+        runnerId: "runner-b",
+        path: "/srv/other",
+        branches: ["dev"],
+        createdAt: 2,
+      },
     ]);
   });
 

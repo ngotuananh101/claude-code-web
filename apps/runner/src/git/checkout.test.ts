@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PrepareWorkspaceResult } from "../execution/executor.ts";
 import { prepareBranch } from "./checkout.ts";
-import { gitSpawn, type GitSpawn } from "./spawn.ts";
+import { type GitSpawn, gitSpawn } from "./spawn.ts";
 
 /**
  * The checkout gate (M4): the one place the runner moves a workspace's HEAD,

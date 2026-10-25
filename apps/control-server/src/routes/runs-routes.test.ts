@@ -74,7 +74,10 @@ async function connectRunner(
   url: string,
   credential: string,
   inbox: Database,
-  options: { runnerId?: string; workspaces?: Array<{ workspaceId: string; path: string }> } = {},
+  options: {
+    runnerId?: string;
+    workspaces?: Array<{ workspaceId: string; path: string; branches?: string[] }>;
+  } = {},
 ) {
   const runnerId = options.runnerId ?? "runner-a";
   const received: Array<Record<string, unknown>> = [];
@@ -162,11 +165,17 @@ function runnerInbox() {
   return db;
 }
 
-async function dispatch(url: string, cookie: string, prompt: string, sessionId = "session-1") {
+async function dispatch(
+  url: string,
+  cookie: string,
+  prompt: string,
+  sessionId = "session-1",
+  extra: Record<string, unknown> = {},
+) {
   return fetch(`${url}/api/sessions/${sessionId}/runs`, {
     method: "POST",
     headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, ...extra }),
   });
 }
 
@@ -984,5 +993,186 @@ describe("POST /api/runs/:id/cancel", () => {
     });
 
     expect(response.status).toBe(401);
+  });
+});
+
+describe("POST /api/sessions/:id/runs branch (M4)", () => {
+  test("a malformed branch name is a bad request, whatever else is true", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // "..evil" — starts outside the alphabet and hides a path fragment.
+    const dots = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "default",
+      branch: "..evil",
+    });
+    expect(dots.status).toBe(400);
+
+    const slashdot = await dispatch(url, cookie, "hello", "session-2", {
+      workspaceId: "default",
+      branch: "a..b",
+    });
+    expect(slashdot.status).toBe(400);
+
+    const tooLong = await dispatch(url, cookie, "hello", "session-3", {
+      workspaceId: "default",
+      branch: "a".repeat(300),
+    });
+    expect(tooLong.status).toBe(400);
+
+    const nonString = await dispatch(url, cookie, "hello", "session-4", {
+      workspaceId: "default",
+      branch: 42,
+    });
+    expect(nonString.status).toBe(400);
+  });
+
+  test("a branch without a named workspace is a bad request", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", { branch: "dev" });
+
+    expect(response.status).toBe(400);
+  });
+
+  test("placement narrows to the runner declaring both workspace and branch", async () => {
+    const { db, url, cookie, credential } = await start();
+    const { credential: credentialB } = issueRunnerCredential(db, {
+      id: "runner-b",
+      ownerId: "user-1",
+    });
+    const inboxA = runnerInbox();
+    const inboxB = runnerInbox();
+    await connectRunner(url, credential, inboxA, {
+      workspaces: [{ workspaceId: "default", path: "/srv/a" }],
+    });
+    await connectRunner(url, credentialB, inboxB, {
+      runnerId: "runner-b",
+      workspaces: [{ workspaceId: "default", path: "/srv/b", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-b") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "default",
+      branch: "dev",
+    });
+
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { runnerId: string };
+    // runner-a is first in creation order but declares no branches: the
+    // branch narrows past it to the declarer.
+    expect(body.runnerId).toBe("runner-b");
+
+    // The delivered run.start carries the branch on its payload.
+    await waitFor(() => {
+      const rows = inboxB.query("SELECT payload FROM command_inbox").all() as {
+        payload: string;
+      }[];
+      return rows.some((row) => (JSON.parse(row.payload) as { branch?: string }).branch === "dev");
+    });
+  });
+
+  test("a branch nobody declares is unknown_branch, not a wider placement", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "default", path: "/srv/proj" }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "default",
+      branch: "dev",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_branch");
+  });
+
+  test("an unknown workspace is reported before the branch", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "nope",
+      branch: "dev",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_workspace");
+  });
+
+  test("an explicit runner that does not declare the branch is unknown_branch", async () => {
+    const { db, url, cookie, credential } = await start();
+    const { credential: credentialB } = issueRunnerCredential(db, {
+      id: "runner-b",
+      ownerId: "user-1",
+    });
+    const inboxA = runnerInbox();
+    const inboxB = runnerInbox();
+    await connectRunner(url, credential, inboxA, {
+      workspaces: [{ workspaceId: "default", path: "/srv/a" }],
+    });
+    await connectRunner(url, credentialB, inboxB, {
+      runnerId: "runner-b",
+      workspaces: [{ workspaceId: "default", path: "/srv/b", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-b") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "default",
+      branch: "dev",
+      runnerId: "runner-a",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_branch");
+  });
+
+  test("a pinned session validates the branch against the pinned runner's declaration", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["dev"] }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = await dispatch(url, cookie, "hello", "session-1", {
+      workspaceId: "default",
+    });
+    expect(first.status).toBe(202);
+    const pinned = (await first.json()) as { runId: string };
+    handle!.scheduler.release(pinned.runId);
+
+    const declared = await dispatch(url, cookie, "more", "session-1", {
+      workspaceId: "default",
+      branch: "dev",
+    });
+    expect(declared.status).toBe(202);
+
+    const second = (await declared.json()) as { runId: string };
+    handle!.scheduler.release(second.runId);
+
+    const undeclared = await dispatch(url, cookie, "more", "session-1", {
+      workspaceId: "default",
+      branch: "feature-x",
+    });
+    expect(undeclared.status).toBe(400);
+    expect(await undeclared.text()).toBe("unknown_branch");
   });
 });

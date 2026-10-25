@@ -23,10 +23,10 @@ import { migrateRunnerDb } from "@cc-web/runner-db";
 import { EventPump } from "./connection/event-pump.ts";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
 import { dialWebSocket } from "./connection/websocket-link.ts";
-import { prepareBranch } from "./git/checkout.ts";
-import { gitSpawn } from "./git/spawn.ts";
 import type { ExecuteOptions, SdkStream } from "./execution/executor.ts";
 import { RunController } from "./execution/run-controller.ts";
+import { prepareBranch } from "./git/checkout.ts";
+import { gitSpawn } from "./git/spawn.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
 
 /**
@@ -170,20 +170,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         url: identity.controlUrl,
         credential: identity.credential,
       }),
-    hello: () =>
-      helloFrame({
+    hello: () => {
+      // Resolved inside the thunk: a declaredWorkspaces function must
+      // re-evaluate on every dial, or a branch list would freeze at boot.
+      const declared = resolveDeclaredWorkspaces(options.declaredWorkspaces);
+      return helloFrame({
         runnerId: identity.runnerId,
         runnerVersion: options.runnerVersion,
         sdkVersion: options.sdkVersion,
         bootId: bootId(),
-        ...(resolveDeclaredWorkspaces(options.declaredWorkspaces) === undefined
-          ? {}
-          : { declaredWorkspaces: resolveDeclaredWorkspaces(options.declaredWorkspaces) }),
-      }),
+        ...(declared === undefined ? {} : { declaredWorkspaces: declared }),
+      });
+    },
     inventory: options.inventory ?? (() => runs.inventory()),
-    ...(resolveDeclaredWorkspaces(options.declaredWorkspaces) === undefined
-      ? {}
-      : { workspaces: options.declaredWorkspaces }),
+    ...(options.declaredWorkspaces === undefined ? {} : { workspaces: options.declaredWorkspaces }),
     sleep: (ms) => Bun.sleep(ms),
     onEvent: (event) => {
       // §12.2: on `ready` the backlog moves. Rows pending from before the

@@ -22,10 +22,12 @@ export { parseBranchLines } from "./parse.ts";
  * dial.
  */
 export function listBranches(path: string): string[] {
-  const proc = Bun.spawnSync(
-    ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
-    { cwd: path, stdout: "pipe", stderr: "pipe", timeout: 10_000 },
-  );
+  const proc = Bun.spawnSync(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"], {
+    cwd: path,
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 10_000,
+  });
   if (proc.exitCode !== 0) return [];
   return parseBranchLines(proc.stdout.toString().split("\n"));
 }

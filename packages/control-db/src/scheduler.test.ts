@@ -115,6 +115,37 @@ describe("scheduler", () => {
     expect(rows[0]).toMatchObject({ kind: "run.start", runner_id: "runner-a" });
   });
 
+  test("a dispatch with a branch carries it on the run.start payload", async () => {
+    const { db, scheduler } = setup();
+
+    const decision = await scheduler.dispatch({ ...request, branch: "dev" }, capacity());
+    expect(decision.ok).toBe(true);
+
+    const row = db.query("SELECT payload FROM command_outbox").get() as {
+      payload: string;
+    };
+    expect(JSON.parse(row.payload)).toEqual({
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+      prompt: "hello",
+      branch: "dev",
+    });
+  });
+
+  test("a dispatch without a branch omits the key, never a stand-in value", async () => {
+    const { db, scheduler } = setup();
+
+    await scheduler.dispatch(request, capacity());
+
+    const row = db.query("SELECT payload FROM command_outbox").get() as {
+      payload: string;
+    };
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    expect("branch" in payload).toBe(false);
+  });
+
   test("a refused dispatch writes nothing to the outbox", async () => {
     const { db, scheduler } = setup();
 

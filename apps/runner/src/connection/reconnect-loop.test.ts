@@ -51,7 +51,9 @@ function harness(
   options: {
     maxAttempts?: number;
     onEventsAcked?: (ack: { attemptId: string; through: number }) => void;
-    workspaces?: Array<{ workspaceId: string; path: string }>;
+    workspaces?:
+      | Array<{ workspaceId: string; path: string; branches?: string[] }>
+      | (() => Array<{ workspaceId: string; path: string; branches?: string[] }>);
   } = {},
 ) {
   const links: FakeLink[] = [];
@@ -562,9 +564,7 @@ describe("declared workspaces on the wire (M4 refresh)", () => {
     let call = 0;
     const declaration = () => {
       call += 1;
-      return [
-        { workspaceId: "default", path: "/srv/proj", branches: [`b-${call}`] },
-      ];
+      return [{ workspaceId: "default", path: "/srv/proj", branches: [`b-${call}`] }];
     };
     const h = harness({ workspaces: declaration });
 

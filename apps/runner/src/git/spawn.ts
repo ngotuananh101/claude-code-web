@@ -26,7 +26,9 @@ export async function gitSpawn(
   timeoutMs: number = GIT_TIMEOUT_MS,
 ): Promise<GitResult> {
   try {
-    const proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+    // The copy is for Bun.spawn's mutable-argv typing; the array is never
+    // mutated, and callers keep the readonly contract.
+    const proc = Bun.spawn([...argv], { cwd, stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => proc.kill(), timeoutMs);
     try {
       const stdout = await new Response(proc.stdout).text();

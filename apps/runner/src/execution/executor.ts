@@ -136,7 +136,9 @@ export async function executeRun(
   const model =
     typeof record?.["model"] === "string" && record["model"] !== "" ? record["model"] : undefined;
   const branch =
-    typeof record?.["branch"] === "string" && record["branch"] !== "" ? record["branch"] : undefined;
+    typeof record?.["branch"] === "string" && record["branch"] !== ""
+      ? record["branch"]
+      : undefined;
 
   const now = () => new Date().toISOString();
   let sequence = 0;

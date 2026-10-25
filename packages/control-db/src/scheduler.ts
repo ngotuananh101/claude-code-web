@@ -54,6 +54,13 @@ export type DispatchRequest = {
    * stand-in value.
    */
   model?: string;
+  /**
+   * The git branch the operator picked for this run (M4). Validated by the
+   * route against the runner's declaration; absent means no checkout — the
+   * workspace stays on whatever HEAD it is on. Rides the payload next to
+   * `model`, never as an envelope field.
+   */
+  branch?: string;
 };
 
 export type DispatchDecision =
@@ -131,6 +138,7 @@ export class Scheduler {
         prompt: request.prompt,
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
         ...(request.model === undefined ? {} : { model: request.model }),
+        ...(request.branch === undefined ? {} : { branch: request.branch }),
       },
     });
 

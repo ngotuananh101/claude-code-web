@@ -24,7 +24,7 @@ import {
 import type { RunnerInventoryItem } from "../connection/reconnect-loop.ts";
 import { ApprovalRouter } from "./approvals.ts";
 import { asCommandEnvelope, commandIdOf } from "./envelope.ts";
-import { executeRun, type ExecuteOptions, type SdkStream } from "./executor.ts";
+import { type ExecuteOptions, executeRun, type SdkStream } from "./executor.ts";
 
 export type CommandReceipt = {
   commandId: string;

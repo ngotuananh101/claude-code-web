@@ -252,7 +252,9 @@ describe("the hello frame (M4 branches)", () => {
       runnerVersion: "0.0.0",
       sdkVersion: "0.3.309",
       bootId: "boot-1",
-      declaredWorkspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }],
+      declaredWorkspaces: [
+        { workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] },
+      ],
     });
     expect(frame).toMatchObject({
       workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }],

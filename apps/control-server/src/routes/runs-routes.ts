@@ -1,4 +1,4 @@
-import { type Scheduler, sessionPin } from "@cc-web/control-db";
+import { type Scheduler, sessionPin, workspacesForOwner } from "@cc-web/control-db";
 import { MODEL_IDS } from "@cc-web/protocol";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
@@ -55,6 +55,7 @@ export async function handleDispatchRun(
     permissionMode?: unknown;
     model?: unknown;
     runnerId?: unknown;
+    branch?: unknown;
   };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
@@ -95,6 +96,28 @@ export async function handleDispatchRun(
     model = record.model;
   }
 
+  // M4: the branch is a per-run choice over the workspace's local heads. The
+  // shape is defense in depth — the runner's checkout gate enforces the same
+  // rules before any argv reaches git — but a typo is refused here, not run.
+  // A branch is a property of a workspace: it only travels alongside a
+  // workspaceId in the same body.
+  const BRANCH_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+  let branch: string | undefined;
+  if (record.branch !== undefined) {
+    if (
+      typeof record.branch !== "string" ||
+      record.branch.length > 256 ||
+      !BRANCH_NAME.test(record.branch) ||
+      record.branch.includes("..")
+    ) {
+      return new Response("bad request", { status: 400 });
+    }
+    if (typeof record.workspaceId !== "string" || record.workspaceId.trim() === "") {
+      return new Response("bad request", { status: 400 });
+    }
+    branch = record.branch;
+  }
+
   // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
   // (workspace, runner) pair, and every later run rides that pin. The pin is
   // the placement decision — made once, made durably.
@@ -119,6 +142,18 @@ export async function handleDispatchRun(
       record.workspaceId !== pin.workspaceId
     ) {
       return new Response("session_pinned", { status: 409 });
+    }
+    // M4: the pin decides where the session lives; the branch stays a per-run
+    // choice, validated against the pinned runner's current declaration — the
+    // same authority the fresh path narrows by. A stale declaration is the
+    // honest refusal: the branch no longer exists where the session runs.
+    if (branch !== undefined) {
+      const pinned = workspacesForOwner(options.db, authorized.userId).find(
+        (w) => w.runnerId === pin.runnerId && w.workspaceId === pin.workspaceId,
+      );
+      if (pinned === undefined || !pinned.branches.includes(branch)) {
+        return new Response("unknown_branch", { status: 400 });
+      }
     }
   }
 
@@ -169,20 +204,29 @@ export async function handleDispatchRun(
   let candidates: Array<{ id: string }> = [];
   if (pin === undefined) {
     if (typeof record.workspaceId === "string" && record.workspaceId.trim() !== "") {
-      candidates = options.db
-        .query(
-          `SELECT r.id FROM runners r
-           JOIN workspaces w ON w.runner_id = r.id
-           WHERE r.owner_id = ? AND r.revoked_at IS NULL AND w.workspace_id = ?
-           ORDER BY r.created_at`,
-        )
-        .all(authorized.userId, workspaceId) as Array<{ id: string }>;
-      if (candidates.length === 0) {
+      // The named-workspace path reads the declaration rows through
+      // workspacesForOwner: the branch filter needs `branches`, which lives on
+      // those rows, and the function preserves runner creation order, so
+      // first-wins placement survives the move off the raw JOIN.
+      const declared = workspacesForOwner(options.db, authorized.userId).filter(
+        (w) => w.workspaceId === workspaceId,
+      );
+      if (declared.length === 0) {
         return new Response("unknown_workspace", { status: 400 });
       }
-      if (runnerId !== undefined && !candidates.some((row) => row.id === runnerId)) {
+      if (runnerId !== undefined && !declared.some((w) => w.runnerId === runnerId)) {
         return new Response("unknown_workspace", { status: 400 });
       }
+      const selected: string | undefined = branch;
+      const narrowed =
+        selected === undefined ? declared : declared.filter((w) => w.branches.includes(selected));
+      if (selected !== undefined && narrowed.length === 0) {
+        return new Response("unknown_branch", { status: 400 });
+      }
+      if (runnerId !== undefined && !narrowed.some((w) => w.runnerId === runnerId)) {
+        return new Response("unknown_branch", { status: 400 });
+      }
+      candidates = narrowed.map((w) => ({ id: w.runnerId }));
     } else {
       candidates = options.db
         .query(
@@ -230,6 +274,7 @@ export async function handleDispatchRun(
       ownerId: authorized.userId,
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(model === undefined ? {} : { model }),
+      ...(branch === undefined ? {} : { branch }),
     },
     scheduler.capacityFor(ready, {
       runnerId: ready,
