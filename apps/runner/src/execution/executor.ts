@@ -25,6 +25,7 @@ import {
 } from "@cc-web/runner-db";
 import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
+import { createStreamNormalizer } from "./stream-normalizer.ts";
 
 /** The SDK seam: given options, returns the message stream (§10.2). */
 export type SdkStream = (options: SdkOptions) => AsyncIterable<Record<string, unknown>>;
@@ -219,6 +220,9 @@ export async function executeRun(
         });
     }
 
+    // One normalizer per run: its closure is the stream's correlation state.
+    const normalize = createStreamNormalizer();
+
     // Building the stream is inside the guard for the same reason: loading the
     // SDK or resolving an option can fail before there is anything to iterate.
     const stream = options.sdk({
@@ -247,13 +251,14 @@ export async function executeRun(
       }
 
       // §12.3: partial `stream_event` frames are the raw deltas behind a message
-      // the SDK also sends complete. Persisting them would put one outbox row —
-      // and one journal row, and one browser frame — behind every few bytes of
-      // text, and make the durable transcript something a reader has to
-      // reassemble. The normalizer that accumulates them into
-      // `message.delta` is not built yet; until then the durable transcript is
-      // complete-message based and live streaming is not yet wired.
-      if (type === "stream_event") continue;
+      // the SDK also sends complete. The normalizer boils them down to
+      // message.started / message.delta keyed by the SDK message id — the
+      // durable transcript stays complete-message based, the browser gets the
+      // text as it arrives.
+      if (type === "stream_event") {
+        for (const normalized of normalize(sdkMessage)) append(normalized.type, normalized.payload);
+        continue;
+      }
 
       const eventType = eventTypeOf(sdkMessage);
       append(eventType, redactSdkMessage(sdkMessage));
