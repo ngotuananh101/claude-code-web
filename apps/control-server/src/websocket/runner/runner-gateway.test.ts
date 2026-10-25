@@ -170,6 +170,46 @@ describe("runner gateway", () => {
     expect(gateway.stateOf("runner-a")).toBe("ready");
   });
 
+  test("reconciliation's abandon_approval reaches the approval projection", () => {
+    const runs = new RunRegistry();
+    runs.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+    runs.markWaitingForApproval("run-1", "attempt-1");
+
+    // The runner reports the gate dead while the server still says waiting:
+    // reconcile() abandons the approval and interrupts the run. The abandoned
+    // approvals are the projection's to close — the gateway hands them over.
+    const abandoned: Array<{ runId: string; attemptId: string }> = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      runs,
+      onAbandonApproval: (_runnerId, action) => {
+        abandoned.push(action);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "reconcile",
+        runner: [
+          { runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true, approvalsAlive: false },
+        ],
+      }),
+    );
+
+    expect(abandoned).toEqual([{ runId: "run-1", attemptId: "attempt-1" }]);
+    expect(runs.get("run-1")?.observedState).toBe("interrupted");
+  });
+
   test("one runner reconnecting never touches another runner's run", () => {
     const runs = new RunRegistry();
     runs.createRun({

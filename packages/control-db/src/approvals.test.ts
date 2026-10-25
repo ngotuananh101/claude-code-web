@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   approvalForSession,
   closeApproval,
+  expirePendingApprovalsForAttempt,
   recordApprovalDecision,
   upsertApprovalRequested,
 } from "./approvals.ts";
@@ -189,6 +190,37 @@ describe("recordApprovalDecision", () => {
 
     expect(typeof fp).toBe("string");
     expect(fp.length).toBeGreaterThan(0);
+  });
+});
+
+describe("expirePendingApprovalsForAttempt", () => {
+  test("closes only the pending rows of the named attempt", () => {
+    const db = setup();
+    upsertApprovalRequested(db, { ...requested, now: 900 });
+    upsertApprovalRequested(db, {
+      ...requested,
+      approvalId: "apr-2",
+      sessionId: "session-2",
+      runId: "run-2",
+      attemptId: "attempt-2",
+      now: 900,
+    });
+    // A row already closed by the runner's terminal: reconciliation must not
+    // rewrite it back to expired — the CAS only ever touches 'pending'.
+    upsertApprovalRequested(db, { ...requested, approvalId: "apr-3", now: 900 });
+    closeApproval(db, { approvalId: "apr-3", state: "resolved" });
+
+    const closed = expirePendingApprovalsForAttempt(db, "attempt-1");
+
+    expect(closed).toBe(1);
+    expect(approvalForSession(db, "apr-1")?.state).toBe("expired");
+    expect(approvalForSession(db, "apr-2")?.state).toBe("pending");
+    expect(approvalForSession(db, "apr-3")?.state).toBe("resolved");
+  });
+
+  test("answers zero for an attempt with no pending rows", () => {
+    const db = setup();
+    expect(expirePendingApprovalsForAttempt(db, "attempt-missing")).toBe(0);
   });
 });
 

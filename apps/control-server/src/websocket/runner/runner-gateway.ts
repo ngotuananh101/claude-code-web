@@ -116,6 +116,13 @@ type GatewayOptions = {
     runnerId: string,
     events: RunnerEvent[],
   ) => Array<{ attemptId: string; through: number }>;
+  /**
+   * Called when reconciliation decides a run's approval gate is gone while the
+   * projection still says pending (`abandon_approval`, §14.3). The projection
+   * owns the rows, so — like every other hook here — this class deliberately
+   * knows nothing about a database.
+   */
+  onAbandonApproval?: (runnerId: string, action: { runId: string; attemptId: string }) => void;
 };
 
 /** What a successful authorization hands to the socket that carries it. */
@@ -142,6 +149,9 @@ export class RunnerGateway {
   readonly #onEvents:
     | ((runnerId: string, events: RunnerEvent[]) => Array<{ attemptId: string; through: number }>)
     | undefined;
+  readonly #onAbandonApproval:
+    | ((runnerId: string, action: { runId: string; attemptId: string }) => void)
+    | undefined;
   readonly #live = new Map<string, Connection>();
 
   constructor(options: GatewayOptions) {
@@ -152,6 +162,7 @@ export class RunnerGateway {
     this.#onReady = options.onReady;
     this.#onReceipt = options.onReceipt;
     this.#onEvents = options.onEvents;
+    this.#onAbandonApproval = options.onAbandonApproval;
   }
 
   /**
@@ -442,6 +453,11 @@ export class RunnerGateway {
 
     for (const action of result.actions) {
       this.#runs.apply(action);
+      // The registry's apply covers run state; an abandoned approval is the
+      // projection's to close, and it reaches the projection through the hook.
+      if (action.kind === "abandon_approval") {
+        this.#onAbandonApproval?.(runnerId, { runId: action.runId, attemptId: action.attemptId });
+      }
     }
 
     connection.state = "ready";

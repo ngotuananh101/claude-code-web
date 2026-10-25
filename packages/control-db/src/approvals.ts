@@ -222,3 +222,17 @@ export function closeApproval(
     .run(input.state, input.approvalId);
   return result.changes > 0;
 }
+
+/**
+ * Reconciliation's `abandon_approval` (§14.3): the runner reports its gate
+ * dead while the projection still says pending. Those cards would sit in
+ * "đang chờ" forever — no `approval.resolved` will ever arrive for them. The
+ * sweep closes them CAS-only (`pending → expired`); rows the operator already
+ * decided on are history and stay untouched. Returns the number closed.
+ */
+export function expirePendingApprovalsForAttempt(db: Database, attemptId: string): number {
+  const result = db
+    .prepare("UPDATE approvals SET state = 'expired' WHERE attempt_id = ? AND state = 'pending'")
+    .run(attemptId);
+  return result.changes;
+}

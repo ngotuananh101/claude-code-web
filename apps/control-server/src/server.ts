@@ -19,6 +19,7 @@ import type { Database } from "bun:sqlite";
 import {
   attemptWatermark,
   type CommandOutbox,
+  expirePendingApprovalsForAttempt,
   ingestEvent,
   readSessionEvents,
   Scheduler,
@@ -141,6 +142,12 @@ export function createServer(options: ServerOptions): ServerHandle {
     verifyCredential: options.verifyRunnerCredential,
     onReady: (runnerId) => dispatcher?.drain(runnerId),
     onReceipt: (runnerId, receipt) => dispatcher?.handleReceipt(runnerId, receipt),
+    // §14.3: an abandoned approval's cards must not sit pending forever — the
+    // projection closes them here, CAS-only, when reconciliation proves the
+    // runner's gate is gone.
+    onAbandonApproval: (_runnerId, action) => {
+      expirePendingApprovalsForAttempt(options.db, action.attemptId);
+    },
     // §12.1, §12.2: journal every event before any ACK is written, and let the
     // ACK carry only the contiguous watermark the journal can vouch for. A resend
     // of what already committed answers `duplicate` and allocates nothing, which

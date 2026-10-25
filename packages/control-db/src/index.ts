@@ -11,6 +11,7 @@ export {
   approvalForSession,
   closeApproval,
   type DecisionOutcome,
+  expirePendingApprovalsForAttempt,
   recordApprovalDecision,
   type UpsertApprovalRequestedInput,
   upsertApprovalRequested,
