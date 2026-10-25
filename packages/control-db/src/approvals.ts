@@ -27,6 +27,7 @@ export type UpsertApprovalRequestedInput = {
   approvalId: string;
   sessionId: string;
   runId: string;
+  attemptId: string;
   runnerId: string;
   kind: ApprovalKind;
   toolName: string;
@@ -71,13 +72,14 @@ type ApprovalRow = {
 export function upsertApprovalRequested(db: Database, input: UpsertApprovalRequestedInput): void {
   db.prepare(
     `INSERT OR IGNORE INTO approvals
-       (approval_id, session_id, run_id, runner_id, kind, tool_name,
+       (approval_id, session_id, run_id, attempt_id, runner_id, kind, tool_name,
         input_hash, input_summary, expires_at, state, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
   ).run(
     input.approvalId,
     input.sessionId,
     input.runId,
+    input.attemptId,
     input.runnerId,
     input.kind,
     input.toolName,
@@ -137,11 +139,12 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
 
     const row = db
       .prepare(
-        "SELECT session_id, run_id, runner_id, input_hash FROM approvals WHERE approval_id = ?",
+        "SELECT session_id, run_id, attempt_id, runner_id, input_hash FROM approvals WHERE approval_id = ?",
       )
       .get(input.approvalId) as {
       session_id: string;
       run_id: string;
+      attempt_id: string;
       runner_id: string;
       input_hash: string;
     };
@@ -164,7 +167,7 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
          (command_id, runner_id, kind, payload, fingerprint, issued_at, expires_at,
           session_id, run_id, attempt_id, workspace_id,
           delivery_state, attempt_count, created_at)
-       VALUES (?, ?, 'approval.respond', ?, ?, ?, NULL, ?, ?, NULL, NULL, 'pending', 0, ?)`,
+       VALUES (?, ?, 'approval.respond', ?, ?, ?, NULL, ?, ?, ?, NULL, 'pending', 0, ?)`,
     ).run(
       input.outbox.commandId,
       row.runner_id,
@@ -173,6 +176,7 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
       new Date(now).toISOString(),
       row.session_id,
       row.run_id,
+      row.attempt_id,
       now,
     );
 

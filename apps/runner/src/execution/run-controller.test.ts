@@ -1,6 +1,12 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { attemptState, lockHolder, migrateRunnerDb } from "@cc-web/runner-db";
+import {
+  attemptState,
+  insertPendingApproval,
+  lockHolder,
+  migrateRunnerDb,
+  pendingApproval,
+} from "@cc-web/runner-db";
 import type { SdkStream } from "./executor.ts";
 import { RunController } from "./run-controller.ts";
 
@@ -624,5 +630,244 @@ describe("notifying the event pump", () => {
     await controller.settle();
 
     expect(settled).toEqual(["attempt-1"]);
+  });
+});
+
+describe("approvals", () => {
+  /**
+   * A stream shaped like the real SDK around `canUseTool` (§13): it parks the
+   * run on the callback and dies on abort — the abort is the only way the run
+   * observes a cancel while suspended, because the callback's promise does not
+   * reject on its own.
+   */
+  function approvalStream(): { sdk: SdkStream; release(): void } {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sdk: SdkStream = (options) =>
+      (async function* () {
+        const canUseTool = options.canUseTool;
+        if (canUseTool === undefined) throw new Error("canUseTool missing");
+        const signal = options.abort ?? new AbortController().signal;
+        await Promise.race([
+          canUseTool("Bash", { command: "ls" }, { signal }),
+          new Promise<never>((_, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+              once: true,
+            });
+          }),
+        ]);
+        await gate;
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    return { sdk, release };
+  }
+
+  function respondCommand(payload: Record<string, unknown>): unknown {
+    return {
+      protocolVersion: 1,
+      commandId: "cmd-respond",
+      runnerId: "runner-a",
+      kind: "approval.respond",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      payload,
+    };
+  }
+
+  test("a suspended run announces approval.requested, flushes the pump, and reports waiting", async () => {
+    const { db } = setup();
+    const { sdk, release } = approvalStream();
+    let flushes = 0;
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+      onApprovalEvent: () => {
+        flushes += 1;
+      },
+    });
+
+    const receipt = await controller.handle(command);
+    expect(receipt.accepted).toBe(true);
+    await Bun.sleep(10);
+
+    // The card exists only if the event ships — a suspended run never settles,
+    // so the flush trigger fires on every approval append (§13).
+    const requested = db
+      .prepare("SELECT payload FROM event_outbox WHERE type = 'approval.requested'")
+      .all() as Array<{ payload: string }>;
+    expect(requested).toHaveLength(1);
+    const payload = JSON.parse(requested[0]!.payload) as Record<string, unknown>;
+    expect(payload.attemptId).toBe("attempt-1");
+    expect(payload.runId).toBe("run-1");
+    expect(payload.toolName).toBe("Bash");
+    expect(flushes).toBeGreaterThanOrEqual(1);
+
+    expect(controller.inventory()).toEqual([
+      {
+        runId: "run-1",
+        attemptId: "attempt-1",
+        state: "waiting_for_approval",
+        processAlive: true,
+        approvalsAlive: true,
+      },
+    ]);
+
+    // Let the run finish so the test leaves nothing parked.
+    await controller.handle(
+      respondCommand({
+        approvalId: payload.approvalId,
+        decision: "allow",
+        inputHash: payload.inputHash,
+      }),
+    );
+    release();
+    await controller.settle();
+  });
+
+  test("an approval.respond command resolves the callback and the run finishes", async () => {
+    const { db } = setup();
+    const { sdk, release } = approvalStream();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+    });
+
+    await controller.handle(command);
+    await Bun.sleep(10);
+    const requested = db
+      .prepare("SELECT payload FROM event_outbox WHERE type = 'approval.requested'")
+      .get() as { payload: string };
+    const payload = JSON.parse(requested.payload) as Record<string, unknown>;
+
+    const receipt = await controller.handle(
+      respondCommand({
+        approvalId: payload.approvalId,
+        decision: "allow",
+        inputHash: payload.inputHash,
+      }),
+    );
+    expect(receipt.accepted).toBe(true);
+
+    // Waiting has flipped off, but the run is still in flight.
+    expect(controller.inventory()).toEqual([
+      {
+        runId: "run-1",
+        attemptId: "attempt-1",
+        state: "running",
+        processAlive: true,
+        approvalsAlive: false,
+      },
+    ]);
+
+    release();
+    await controller.settle();
+
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+    const types = db
+      .prepare("SELECT type FROM event_outbox WHERE type LIKE 'approval.%'")
+      .all() as Array<{ type: string }>;
+    expect(types.map((t) => t.type)).toContain("approval.resolved");
+  });
+
+  test("a cancel while suspended records interrupted and expires the approval", async () => {
+    const { db } = setup();
+    const { sdk } = approvalStream();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+    });
+
+    await controller.handle(command);
+    await Bun.sleep(10);
+
+    await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      payload: null,
+    });
+    await controller.settle();
+
+    expect(attemptState(db, "attempt-1")).toBe("interrupted");
+    const expired = db
+      .prepare("SELECT payload FROM event_outbox WHERE type = 'approval.expired'")
+      .all() as Array<{ payload: string }>;
+    expect(expired).toHaveLength(1);
+    const payload = JSON.parse(expired[0]!.payload) as Record<string, unknown>;
+    expect(payload.reason).toBe("aborted");
+  });
+
+  test("a respond naming an unknown approval is receipted with its refusal and resolves nothing", async () => {
+    const { db } = setup();
+    const { sdk, release } = approvalStream();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+    });
+
+    const receipt = await controller.handle(
+      respondCommand({ approvalId: "apr-missing", decision: "allow", inputHash: "h" }),
+    );
+
+    // Accepted — the command was delivered and persisted; the refusal is the
+    // decision's, carried as the reason (§9.4).
+    expect(receipt).toEqual({
+      commandId: "cmd-respond",
+      attemptId: "attempt-1",
+      accepted: true,
+      reason: "unknown",
+    });
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM event_outbox WHERE type LIKE 'approval.%'").get(),
+    ).toEqual({ n: 0 });
+
+    release();
+    await controller.settle();
+  });
+
+  test("boot sweep expires approvals of dead attempts in place, without events", () => {
+    const { db } = setup();
+    insertPendingApproval(db, {
+      approvalId: "apr-dead",
+      attemptId: "attempt-dead",
+      toolCallId: "tc-dead",
+      inputHash: "hash-dead",
+      callbackGeneration: 0,
+      kind: "tool_permission",
+      expiresAt: 9_999,
+      now: 1_000,
+    });
+
+    new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    // §9.7: nothing is in flight at construction, so every pending approval
+    // belongs to an attempt this process already interrupted. §18.3: the dead
+    // attempt's stream is complete — no fabricated approval.expired event.
+    expect(pendingApproval(db, "apr-dead")?.state).toBe("expired");
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM event_outbox WHERE type LIKE 'approval.%'").get(),
+    ).toEqual({ n: 0 });
   });
 });

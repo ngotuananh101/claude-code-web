@@ -8,6 +8,7 @@ import {
   migrateRunnerDb,
 } from "@cc-web/runner-db";
 import { executeRun, type SdkOptions, type SdkStream } from "./executor.ts";
+import { ApprovalRouter } from "./approvals.ts";
 
 /**
  * Running one attempt (§10.1, §12.2).
@@ -894,5 +895,161 @@ describe("an aborted run", () => {
     // existed. Classification must not drift for runs that were never aborted.
     expect(outcome.state).toBe("failed");
     expect(attemptState(db, "attempt-1")).toBe("failed");
+  });
+});
+
+describe("the permission mode", () => {
+  test("forwards the run's permissionMode into the SDK options", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, { ...COMMAND, payload: { prompt: "hello", permissionMode: "bypassPermissions" } }, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+    });
+
+    expect(captured?.permissionMode).toBe("bypassPermissions");
+  });
+
+  test("a payload without one runs under 'default'", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    expect(captured?.permissionMode).toBe("default");
+  });
+});
+
+describe("the approval gate", () => {
+  test("a canUseTool call suspends the run as approval.requested and resolves from the router", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let router: ApprovalRouter | undefined;
+    const flushed: number[] = [];
+    const sdk: SdkStream = (options) =>
+      (async function* () {
+        await options.canUseTool!("Bash", { command: "ls" }, {
+          signal: new AbortController().signal,
+        });
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      router: (append, attemptId) => {
+        router = new ApprovalRouter({ db, append });
+        return router;
+      },
+      onApprovalEvent: () => flushed.push(1),
+    });
+
+    await Bun.sleep(10);
+
+    // The gate parked the SDK callback and announced it through the same
+    // sequenced append as every other event — with the flush trigger, because
+    // a suspended run never settles on its own (§13).
+    const requested = events(db).filter((e) => e.type === "approval.requested");
+    expect(requested).toHaveLength(1);
+    const payload = JSON.parse(requested[0]!.payload) as Record<string, unknown>;
+    expect(payload.attemptId).toBe("attempt-1");
+    expect(payload.runId).toBe("run-1");
+    expect(payload.kind).toBe("tool_permission");
+    expect(payload.toolName).toBe("Bash");
+    expect(payload.callbackGeneration).toBe(0);
+    expect(flushed.length).toBeGreaterThanOrEqual(1);
+
+    router!.respond(
+      {
+        approvalId: String(payload.approvalId),
+        decision: "allow",
+        inputHash: payload.inputHash,
+      },
+      { attemptId: "attempt-1", runId: "run-1" },
+    );
+
+    const outcome = await run;
+    expect(outcome.state).toBe("finished");
+    expect(events(db).map((e) => e.type)).toContain("approval.resolved");
+  });
+
+  test("an AskUserQuestion tool call is announced as user_question kind", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let router: ApprovalRouter | undefined;
+    const sdk: SdkStream = (options) =>
+      (async function* () {
+        await options.canUseTool!("AskUserQuestion", { questions: [{ question: "Q?" }] }, {
+          signal: new AbortController().signal,
+        });
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      router: (append) => {
+        router = new ApprovalRouter({ db, append });
+        return router;
+      },
+    });
+
+    await Bun.sleep(10);
+
+    const requested = events(db).filter((e) => e.type === "approval.requested");
+    const payload = JSON.parse(requested[0]!.payload) as Record<string, unknown>;
+    expect(payload.kind).toBe("user_question");
+    expect(payload.questions).toEqual([{ question: "Q?" }]);
+
+    router!.respond(
+      {
+        approvalId: String(payload.approvalId),
+        decision: "allow",
+        answers: { "Q?": "A" },
+        inputHash: payload.inputHash,
+      },
+      { attemptId: "attempt-1", runId: "run-1" },
+    );
+
+    expect((await run).state).toBe("finished");
   });
 });

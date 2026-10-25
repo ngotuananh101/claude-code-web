@@ -161,18 +161,19 @@ export class ApprovalRouter {
     now?: number,
   ): { ok: true } | { ok: false; reason: "unknown" | "attempt_mismatch" | "hash_mismatch" | "expired" | "already_finished" } {
     void context.runId;
+    const nowMs = now ?? this.#now();
     const row = pendingApproval(this.#db, payload.approvalId);
     if (row === undefined) return { ok: false, reason: "unknown" };
     if (row.attemptId !== context.attemptId) return { ok: false, reason: "attempt_mismatch" };
     if (row.state === "expired") return { ok: false, reason: "expired" };
     if (row.state !== "pending") return { ok: false, reason: "already_finished" };
-    if ((now ?? this.#now()) > row.expiresAt) return { ok: false, reason: "expired" };
+    if (nowMs > row.expiresAt) return { ok: false, reason: "expired" };
     if (payload.inputHash !== row.inputHash) return { ok: false, reason: "hash_mismatch" };
 
     // Strict parse: only the exact string "allow" is an allow. Anything else —
     // "true", a missing field, an object — takes the deny path.
     const allow = payload.decision === "allow";
-    if (!finishApproval(this.#db, { approvalId: payload.approvalId, state: "resolved", now })) {
+    if (!finishApproval(this.#db, { approvalId: payload.approvalId, state: "resolved", now: nowMs })) {
       return { ok: false, reason: "already_finished" };
     }
 

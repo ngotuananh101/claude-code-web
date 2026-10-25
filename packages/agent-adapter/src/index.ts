@@ -22,6 +22,17 @@ export type SdkStreamInput = {
   cwd: string;
   resume?: string;
   abort?: AbortSignal;
+  /** The run's permission mode; the executor always supplies one. */
+  permissionMode?: string;
+  /**
+   * The approval gate (§13). Present means the runner wants to be asked;
+   * absent leaves the SDK's own permission flow untouched.
+   */
+  canUseTool?: (
+    toolName: string,
+    input: unknown,
+    options: { signal: AbortSignal },
+  ) => Promise<{ behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string }>;
 };
 
 /**
@@ -57,6 +68,11 @@ export function createSdkStream(
   // §10.4: resume a specific session by id. `continue: true` is never used — it
   // chooses whichever conversation happened to be newest.
   if (input.resume !== undefined) options["resume"] = input.resume;
+
+  // §13: the permission mode rides the run payload and the approval gate is
+  // the runner's own closure — both pass through verbatim.
+  if (input.permissionMode !== undefined) options["permissionMode"] = input.permissionMode;
+  if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
 
   // Loaded inside the generator body, so importing this module costs nothing.
   return (async function* () {

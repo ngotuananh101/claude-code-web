@@ -100,6 +100,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     workspacePathFor: options.workspacePathFor ?? (() => undefined),
     sdk: options.sdk ?? ((input) => createSdkStream(input)),
     onSettled: () => pump.flush(),
+    // §13: a suspended run never settles, so the gate triggers the flush
+    // itself — the approval request must ship the moment it is appended.
+    onApprovalEvent: () => pump.flush(),
   });
 
   const loop = new ReconnectLoop({
@@ -122,7 +125,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       activeRuns: [],
       eventOffsets: [],
     }),
-    inventory: options.inventory ?? (() => []),
+    inventory: options.inventory ?? (() => runs.inventory()),
     sleep: (ms) => Bun.sleep(ms),
     onEvent: (event) => {
       // §12.2: on `ready` the backlog moves. Rows pending from before the

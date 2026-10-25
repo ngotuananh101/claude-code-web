@@ -193,6 +193,7 @@ export function migrate(db: Database): void {
       approval_id   TEXT PRIMARY KEY,
       session_id    TEXT NOT NULL,
       run_id        TEXT NOT NULL,
+      attempt_id    TEXT NOT NULL,
       runner_id     TEXT NOT NULL,
       kind          TEXT NOT NULL,
       tool_name     TEXT NOT NULL,

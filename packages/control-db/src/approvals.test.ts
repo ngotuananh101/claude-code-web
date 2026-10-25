@@ -30,6 +30,7 @@ const requested = {
   approvalId: "apr-1",
   sessionId: "session-1",
   runId: "run-1",
+  attemptId: "attempt-1",
   runnerId: "runner-a",
   kind: "tool_permission" as const,
   toolName: "Bash",
@@ -120,15 +121,16 @@ describe("recordApprovalDecision", () => {
 
     const commands = new CommandOutbox(db).pendingFor("runner-a");
     expect(commands).toHaveLength(1);
-    expect(commands[0].kind).toBe("approval.respond");
-    expect(commands[0].commandId).toBe("cmd-1");
-    expect(commands[0].sessionId).toBe("session-1");
-    expect(commands[0].runId).toBe("run-1");
+    expect(commands[0]!.kind).toBe("approval.respond");
+    expect(commands[0]!.commandId).toBe("cmd-1");
+    expect(commands[0]!.sessionId).toBe("session-1");
+    expect(commands[0]!.runId).toBe("run-1");
+    expect(commands[0]!.attemptId).toBe("attempt-1");
     const outboxRow = db
       .prepare("SELECT fingerprint FROM command_outbox WHERE command_id = ?")
       .get("cmd-1") as { fingerprint: string };
     expect(outboxRow.fingerprint).toBe("fp-1");
-    expect(commands[0].payload).toEqual({
+    expect(commands[0]!.payload).toEqual({
       approvalId: "apr-1",
       decision: "deny",
       answers: [{ question: "why", answer: "no" }],
@@ -155,7 +157,7 @@ describe("recordApprovalDecision", () => {
 
     const commands = new CommandOutbox(db).pendingFor("runner-a");
     expect(commands).toHaveLength(1);
-    expect(commands[0].commandId).toBe("cmd-1");
+    expect(commands[0]!.commandId).toBe("cmd-1");
   });
 
   test("fingerprintOf is exported and hashes the envelope identity", async () => {

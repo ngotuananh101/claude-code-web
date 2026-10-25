@@ -88,7 +88,7 @@ describe("open", () => {
     const parked = h.router.open(TOOL_OPEN);
 
     expect(h.events).toHaveLength(1);
-    const event = h.events[0];
+    const event = h.events[0]!;
     expect(event.type).toBe("approval.requested");
     expect(event.payload.kind).toBe("tool_permission");
     expect(event.payload.toolName).toBe("Bash");
@@ -101,13 +101,13 @@ describe("open", () => {
     expect(String(event.payload.toolCallId)).toMatch(/^tc_/);
     expect(event.payload.inputSummary).toContain("ls -la");
 
-    const row = pendingApproval(h.db, String(event.payload.approvalId));
+    const row = pendingApproval(h.db, String(event.payload.approvalId))!;
     expect(row?.state).toBe("pending");
     expect(row?.attemptId).toBe("attempt-1");
-    expect(row?.inputHash).toBe(event.payload.inputHash);
+    expect(row?.inputHash).toBe(String(event.payload.inputHash));
 
     expect(h.scheduled).toHaveLength(1);
-    expect(h.scheduled[0].ms).toBe(5_000);
+    expect(h.scheduled[0]!.ms).toBe(5_000);
 
     const outcome = await Promise.race([parked, Promise.resolve("still-parked")]);
     expect(outcome).toBe("still-parked");
@@ -133,16 +133,16 @@ describe("open", () => {
       input: { questions },
     });
 
-    const payload = h.events[0].payload;
+    const payload = h.events[0]!.payload;
     expect(payload.kind).toBe("user_question");
     const projected = payload.questions as Array<{
       question: string;
       options: Array<{ label: string; description: string }>;
     }>;
-    expect(projected[0].question).toBe("Chạy migration lên production?");
-    expect(projected[0].options[0].label).toBe("Có, chạy ngay");
-    expect(projected[0].options[0].description).toHaveLength(500);
-    expect(projected[0].options[1].description).toBe("Không làm gì");
+    expect(projected[0]!.question).toBe("Chạy migration lên production?");
+    expect(projected[0]!.options[0]!.label).toBe("Có, chạy ngay");
+    expect(projected[0]!.options[0]!.description).toHaveLength(500);
+    expect(projected[0]!.options[1]!.description).toBe("Không làm gì");
     expect(payload.inputSummary).toBeUndefined();
   });
 });
@@ -151,10 +151,10 @@ describe("respond — allow", () => {
   test("resolves the parked callback with the original input and emits approval.resolved", async () => {
     const h = harness();
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
+    const approvalId = String(h.events[0]!.payload.approvalId);
 
     const accepted = h.router.respond(
-      { approvalId, decision: "allow", inputHash: String(h.events[0].payload.inputHash) },
+      { approvalId, decision: "allow", inputHash: String(h.events[0]!.payload.inputHash) },
       { attemptId: "attempt-1", runId: "run-1" },
     );
     expect(accepted).toEqual({ ok: true });
@@ -162,8 +162,8 @@ describe("respond — allow", () => {
     const outcome = (await parked) as ApprovalOutcome;
     expect(outcome).toEqual({ behavior: "allow", updatedInput: { command: "ls -la" } });
 
-    const resolved = h.events.find((e) => e.type === "approval.resolved");
-    expect(resolved?.payload).toEqual({ approvalId, decision: "allow", source: "user" });
+    const resolved = h.events.find((e) => e.type === "approval.resolved")!;
+    expect(resolved.payload).toEqual({ approvalId, decision: "allow", source: "user" });
     expect(pendingApproval(h.db, approvalId)?.state).toBe("resolved");
   });
 
@@ -175,8 +175,8 @@ describe("respond — allow", () => {
       toolName: "AskUserQuestion",
       input: { questions: [{ question: "Q?", options: [{ label: "A" }, { label: "B" }] }] },
     });
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
       h.router.respond({ approvalId, decision: "allow", answers: { "Q?": "A" }, inputHash }, {
@@ -198,8 +198,8 @@ describe("respond — strict parse and refusals", () => {
   test("a corrupted decision string lands on the deny path", async () => {
     const h = harness();
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
       h.router.respond({ approvalId, decision: "true" as unknown as "allow", inputHash }, {
@@ -210,14 +210,14 @@ describe("respond — strict parse and refusals", () => {
 
     const outcome = (await parked) as ApprovalOutcome;
     expect(outcome).toEqual({ behavior: "deny", message: "User denied permission for Bash" });
-    expect(h.events.find((e) => e.type === "approval.resolved")?.payload.decision).toBe("deny");
+    expect(h.events.find((e) => e.type === "approval.resolved")!.payload.decision).toBe("deny");
   });
 
   test("a missing decision field denies", async () => {
     const h = harness();
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     h.router.respond({ approvalId, inputHash } as Parameters<typeof h.router.respond>[0], {
       attemptId: "attempt-1",
@@ -231,8 +231,8 @@ describe("respond — strict parse and refusals", () => {
   test("a deny resolves with the deny message for each kind", async () => {
     const h = harness();
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     h.router.respond({ approvalId, decision: "deny", inputHash }, {
       attemptId: "attempt-1",
@@ -251,8 +251,8 @@ describe("respond — strict parse and refusals", () => {
       toolName: "AskUserQuestion",
       input: { questions: [{ question: "Q?", options: [] }] },
     });
-    const qId = String(h2.events[0].payload.approvalId);
-    const qHash = String(h2.events[0].payload.inputHash);
+    const qId = String(h2.events[0]!.payload.approvalId);
+    const qHash = String(h2.events[0]!.payload.inputHash);
     h2.router.respond({ approvalId: qId, decision: "deny", inputHash: qHash }, {
       attemptId: "attempt-1",
       runId: "run-1",
@@ -266,8 +266,8 @@ describe("respond — strict parse and refusals", () => {
   test("wrong hash, wrong attempt, unknown id, and double respond refuse without touching the callback", async () => {
     const h = harness();
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
       h.router.respond({ approvalId, decision: "allow", inputHash: "wrong" }, {
@@ -309,8 +309,8 @@ describe("respond — strict parse and refusals", () => {
   test("a decision after expiry refuses and leaves the row for the sweep", () => {
     const h = harness(1_000);
     void h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     const late = new ApprovalRouter({
       db: h.db,
@@ -332,7 +332,7 @@ describe("timeout", () => {
   test("sweepExpired denies past-expiry callbacks and emits approval.expired", async () => {
     const h = harness(1_000);
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
+    const approvalId = String(h.events[0]!.payload.approvalId);
 
     h.router.sweepExpired(7_000);
 
@@ -340,8 +340,8 @@ describe("timeout", () => {
       behavior: "deny",
       message: "approval timed out",
     });
-    const expired = h.events.find((e) => e.type === "approval.expired");
-    expect(expired?.payload).toEqual({ approvalId, reason: "timeout" });
+    const expired = h.events.find((e) => e.type === "approval.expired")!;
+    expect(expired.payload).toEqual({ approvalId, reason: "timeout" });
     expect(pendingApproval(h.db, approvalId)?.state).toBe("expired");
   });
 
@@ -359,7 +359,7 @@ describe("abandonAttempt", () => {
   test("denies every live callback of the attempt and emits expired with the reason", async () => {
     const h = harness(1_000);
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
+    const approvalId = String(h.events[0]!.payload.approvalId);
 
     h.router.abandonAttempt("attempt-1", "aborted");
 
@@ -367,8 +367,8 @@ describe("abandonAttempt", () => {
       behavior: "deny",
       message: "run interrupted",
     });
-    const expired = h.events.find((e) => e.type === "approval.expired");
-    expect(expired?.payload).toEqual({ approvalId, reason: "aborted" });
+    const expired = h.events.find((e) => e.type === "approval.expired")!;
+    expect(expired.payload).toEqual({ approvalId, reason: "aborted" });
     expect(pendingApproval(h.db, approvalId)?.state).toBe("expired");
   });
 
@@ -387,7 +387,7 @@ describe("abandonAttempt", () => {
   test("finishes pending rows even without a live callback", () => {
     const h = harness(1_000);
     void h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
+    const approvalId = String(h.events[0]!.payload.approvalId);
 
     // Simulate a lost callback: the row stays pending while the router's map
     // forgets it (a fresh router instance sees only the DB row).
@@ -401,7 +401,7 @@ describe("abandonAttempt", () => {
 
     expect(pendingApproval(h.db, approvalId)?.state).toBe("expired");
     expect(
-      h.events.find((e) => e.type === "approval.expired")?.payload,
+      h.events.find((e) => e.type === "approval.expired")!.payload,
     ).toEqual({ approvalId, reason: "crashed" });
   });
 });
@@ -410,8 +410,8 @@ describe("once-guard under races", () => {
   test("a sweep finishing the row makes a racing respond answer already_finished", async () => {
     const h = harness(1_000);
     const parked = h.router.open(TOOL_OPEN);
-    const approvalId = String(h.events[0].payload.approvalId);
-    const inputHash = String(h.events[0].payload.inputHash);
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
 
     finishApproval(h.db, { approvalId, state: "expired", now: 7_000 });
     expect(

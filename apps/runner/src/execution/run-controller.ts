@@ -17,11 +17,14 @@ import {
   beginAttempt,
   type CommandEnvelope,
   finishAttempt,
+  pendingApproval,
   recoverStaleAttempts,
   releaseAttempt,
 } from "@cc-web/runner-db";
+import { ApprovalRouter } from "./approvals.ts";
 import { asCommandEnvelope, commandIdOf } from "./envelope.ts";
 import { executeRun, type SdkStream } from "./executor.ts";
+import type { RunnerInventoryItem } from "../connection/reconnect-loop.ts";
 
 export type CommandReceipt = {
   commandId: string;
@@ -44,6 +47,12 @@ export type ControllerOptions = {
    * the controller itself knows nothing about a socket.
    */
   onSettled?: (attemptId: string) => void;
+  /**
+   * Called after every `approval.*` append (§13). A suspended run never
+   * settles, so the pump cannot wait for `onSettled` to learn that a decision
+   * is being waited on — the gate triggers the flush itself.
+   */
+  onApprovalEvent?: () => void;
 };
 
 /** One tracked run: what shutdown or cancel needs to reach it. */
@@ -61,9 +70,13 @@ export class RunController {
   readonly #sdk: SdkStream;
   readonly #now: () => number;
   readonly #onSettled: ((attemptId: string) => void) | undefined;
+  readonly #onApprovalEvent: (() => void) | undefined;
 
   /** Every run in flight, keyed by attempt id, so shutdown can wait or cancel. */
   readonly #inFlight = new Map<string, InFlightRun>();
+
+  /** The attempt's approval gate (§13), registered while its run is in flight. */
+  readonly #routers = new Map<string, ApprovalRouter>();
 
   /** Set the moment draining begins; a draining runner accepts no new work. */
   #draining = false;
@@ -75,11 +88,21 @@ export class RunController {
     this.#sdk = options.sdk;
     this.#now = options.now ?? Date.now;
     this.#onSettled = options.onSettled;
+    this.#onApprovalEvent = options.onApprovalEvent;
 
     // §9.7: whatever was in flight when the previous process died is
     // interrupted, not resumed. Doing it here means it happens before the first
     // command can be accepted, not some time later.
     recoverStaleAttempts(this.#db);
+
+    // §13: nothing is in flight yet, so every pending approval belongs to an
+    // attempt this process just interrupted. Finished expired IN PLACE, with no
+    // fabricated event — the dead attempt's stream is complete (§18.3) and
+    // reconciliation marks those runs interrupted server-side. The per-attempt
+    // timers and sweeps cover timeout from here on; no interval is needed.
+    this.#db
+      .prepare("UPDATE pending_approvals SET state = 'expired' WHERE state = 'pending'")
+      .run();
   }
 
   async handle(command: unknown): Promise<CommandReceipt> {
@@ -133,6 +156,35 @@ export class RunController {
       return receipt(parsed, true);
     }
 
+    // §13: a decision is not a run either. It routes to the gate of the attempt
+    // that asked — found through the approval's own row, since the command's
+    // envelope names the session, not the gate — and its refusal, if any, is
+    // carried as the receipt's reason while the receipt itself stays accepted:
+    // the command was delivered and persisted; what failed is the decision.
+    if (parsed.kind === "approval.respond") {
+      const payload = (parsed.payload ?? {}) as Record<string, unknown>;
+      const approvalId =
+        typeof payload["approvalId"] === "string" ? payload["approvalId"] : "";
+      const row = pendingApproval(this.#db, approvalId);
+      const attemptId =
+        typeof parsed.attemptId === "string" && parsed.attemptId !== ""
+          ? parsed.attemptId
+          : (row?.attemptId ?? "");
+      const router =
+        this.#routers.get(attemptId) ??
+        new ApprovalRouter({ db: this.#db, append: () => {} });
+      const result = router.respond(
+        {
+          approvalId,
+          decision: payload["decision"],
+          answers: payload["answers"],
+          inputHash: payload["inputHash"],
+        },
+        { attemptId, runId: parsed.runId ?? "" },
+      );
+      return result.ok ? receipt(parsed, true) : { ...receipt(parsed, true), reason: result.reason };
+    }
+
     const attemptId = parsed.attemptId ?? parsed.commandId;
     const workspacePath =
       parsed.workspaceId === undefined ? undefined : this.#workspacePathFor(parsed.workspaceId);
@@ -173,11 +225,18 @@ export class RunController {
         workspacePath,
         sdk: this.#sdk,
         signal: controller.signal,
+        router: (append, attempt) => {
+          const router = new ApprovalRouter({ db: this.#db, append, now: this.#now });
+          this.#routers.set(attempt, router);
+          return router;
+        },
+        onApprovalEvent: () => this.#onApprovalEvent?.(),
       })
         .then(() => undefined)
         .catch(() => undefined)
         .finally(() => {
           this.#inFlight.delete(attemptId);
+          this.#routers.delete(attemptId);
           // Fired after the delete so a synchronous trigger observes a
           // controller that no longer counts this attempt. Advisory: a
           // throwing trigger must not reject the tracked promise, which
@@ -192,6 +251,33 @@ export class RunController {
     this.#inFlight.set(attemptId, run);
 
     return receipt(parsed, true);
+  }
+
+  /**
+   * What reconciliation and the server's registry should believe is running
+   * (§14.3): one row per in-flight attempt, `waiting_for_approval` while its
+   * gate holds a pending row. The pending rows ARE the waiting truth — the
+   * gate wrote them durably, so the report cannot drift from the gate.
+   */
+  inventory(): RunnerInventoryItem[] {
+    return [...this.#inFlight.values()].map((run) => {
+      // bun:sqlite answers null for "no row" — compared explicitly, because an
+      // `!== undefined` check is always true and would report every run as
+      // waiting forever.
+      const waiting =
+        this.#db
+          .prepare(
+            "SELECT 1 FROM pending_approvals WHERE attempt_id = ? AND state = 'pending' LIMIT 1",
+          )
+          .get(run.attemptId) !== null;
+      return {
+        runId: run.runId,
+        attemptId: run.attemptId,
+        state: waiting ? "waiting_for_approval" : "running",
+        processAlive: true,
+        approvalsAlive: waiting,
+      };
+    });
   }
 
   /** Resolves when no run is in flight. Used before closing the database. */

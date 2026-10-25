@@ -23,6 +23,7 @@ import {
   releaseAttempt,
   sdkSessionIdForSession,
 } from "@cc-web/runner-db";
+import { ApprovalRouter, type ApprovalOutcome } from "./approvals.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 
 /** The SDK seam: given options, returns the message stream (§10.2). */
@@ -33,6 +34,12 @@ export type SdkOptions = {
   cwd: string;
   resume?: string;
   abort?: AbortSignal;
+  permissionMode: string;
+  canUseTool?: (
+    toolName: string,
+    input: unknown,
+    options: { signal: AbortSignal },
+  ) => Promise<ApprovalOutcome>;
 };
 
 export type RunInput = {
@@ -57,7 +64,26 @@ export type ExecuteOptions = {
   workspacePath: string;
   sdk: SdkStream;
   signal?: AbortSignal;
+  /**
+   * Builds the attempt's approval gate from the executor's own append closure
+   * (§13) — the gate's events must share the attempt's sequence. Optional:
+   * tests of non-approval paths omit it, and the production controller always
+   * provides one.
+   */
+  router?: (
+    append: (type: string, payload: unknown) => void,
+    attemptId: string,
+  ) => ApprovalRouter;
+  /** Called after every `approval.*` append: a suspended run never settles,
+   * so the pump must be flushed by the gate itself, not by onSettled. */
+  onApprovalEvent?: () => void;
 };
+
+/** How long a parked callback stays answerable: 5 minutes unless overridden. */
+function approvalTimeoutMs(): number {
+  const raw = Number(Bun.env["CC_WEB_APPROVAL_TIMEOUT_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
+}
 
 export async function executeRun(
   db: Database,
@@ -69,6 +95,8 @@ export async function executeRun(
   const runId = command.runId ?? "";
   const record = command.payload as Record<string, unknown> | undefined;
   const prompt = typeof record?.["prompt"] === "string" ? record["prompt"] : "";
+  const permissionMode =
+    typeof record?.["permissionMode"] === "string" ? record["permissionMode"] : "default";
 
   const now = () => new Date().toISOString();
   let sequence = 0;
@@ -135,6 +163,10 @@ export async function executeRun(
   // add a second one — and must not overwrite the state that event recorded.
   let state: "finished" | "failed" | "interrupted" = "finished";
   let terminalWritten = false;
+  // The attempt's gate, created inside the guard once the append closure
+  // exists. The `finally` tears down whatever approvals it still holds parked.
+  let router: ApprovalRouter | undefined;
+  let canUseTool: NonNullable<SdkOptions["canUseTool"]> | undefined;
 
   // Why the abort is recognized by the signal and not by the thrown error: the
   // SDK's abort error is an `Error` subclass that sets no `name` (verified in
@@ -162,6 +194,27 @@ export async function executeRun(
     // no owner.
     append("run.started", { commandId: command.commandId });
 
+    // §13: the gate's events ride this attempt's sequenced append, and every
+    // one of them triggers the pump flush — a suspended run never settles, so
+    // onSettled alone would leave the request unseen until its timeout.
+    if (options.router !== undefined) {
+      const gatedAppend = (type: string, payload: unknown): void => {
+        append(type, payload);
+        if (type.startsWith("approval.")) options.onApprovalEvent?.();
+      };
+      const gate = options.router(gatedAppend, attemptId);
+      router = gate;
+      canUseTool = (toolName: string, input: unknown, _toolOptions: { signal: AbortSignal }) =>
+        gate.open({
+          attemptId,
+          runId,
+          kind: toolName === "AskUserQuestion" ? "user_question" : "tool_permission",
+          toolName,
+          input,
+          timeoutMs: approvalTimeoutMs(),
+        });
+    }
+
     // Building the stream is inside the guard for the same reason: loading the
     // SDK or resolving an option can fail before there is anything to iterate.
     const stream = options.sdk({
@@ -169,6 +222,8 @@ export async function executeRun(
       cwd: options.workspacePath,
       ...(resume === undefined ? {} : { resume }),
       ...(options.signal ? { abort: options.signal } : {}),
+      permissionMode,
+      ...(canUseTool === undefined ? {} : { canUseTool }),
     });
 
     for await (const message of stream) {
@@ -225,6 +280,9 @@ export async function executeRun(
       }
     }
   } finally {
+    // §13: whatever the gate still holds parked dies with the attempt — a
+    // cancel or an abort never approves anything implicitly. Aborted covers
+    // the deliberate cancel too: both arrive as the run's own signal firing.
     // Released even if recording the outcome fails. The two are separate
     // statements because the terminal write can throw — a busy timeout, a full
     // disk — and it is the last thing between here and the end of the run. A
@@ -232,6 +290,7 @@ export async function executeRun(
     // life of the process, since boot recovery is the only other thing that
     // frees a lock and it only runs at startup.
     try {
+      router?.abandonAttempt(attemptId, aborted() ? "aborted" : "abandoned");
       finishAttempt(db, { attemptId, state });
     } finally {
       releaseAttempt(db, attemptId);

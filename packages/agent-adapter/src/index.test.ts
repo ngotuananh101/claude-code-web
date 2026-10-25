@@ -89,6 +89,19 @@ describe("mapping a run to SDK options", () => {
   test("requests partial messages so the UI can stream", () => {
     expect(captureOptions({ prompt: "hi", cwd: "/w" }).options?.includePartialMessages).toBe(true);
   });
+
+  test("forwards permissionMode when the run carries one", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w", permissionMode: "acceptEdits" });
+
+    expect(params.options?.["permissionMode"]).toBe("acceptEdits");
+  });
+
+  test("forwards the approval gate as canUseTool when one is given", () => {
+    const canUseTool = async () => ({ behavior: "deny", message: "no" }) as const;
+    const params = captureOptions({ prompt: "hi", cwd: "/w", canUseTool });
+
+    expect(params.options?.["canUseTool"]).toBe(canUseTool);
+  });
 });
 
 describe("the lazy import", () => {
