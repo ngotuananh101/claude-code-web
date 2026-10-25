@@ -47,6 +47,12 @@ export {
   verifyRunnerCredential,
 } from "./runner-credentials.ts";
 export {
+  ensureSessionPin,
+  type EnsureSessionPinInput,
+  type SessionPin,
+  sessionPin,
+} from "./sessions.ts";
+export {
   createRunnerToken,
   type ListedRunner,
   listRunners,

@@ -234,6 +234,21 @@ export function migrate(db: Database): void {
       PRIMARY KEY (runner_id, workspace_id)
     );
   `);
+
+  // Where each session lives (§2.3, ADR-006): the (workspace, runner) pin an
+  // accepted dispatch records, so every later run of the session rides it
+  // instead of re-running placement. First pin wins — written INSERT OR
+  // IGNORE, never updated. Like active_runs, dispatch plumbing whose ids the
+  // route validated upstream; no foreign keys.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id           TEXT PRIMARY KEY,
+      owner_id     TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      runner_id    TEXT NOT NULL,
+      created_at   INTEGER NOT NULL
+    );
+  `);
 }
 
 /**
