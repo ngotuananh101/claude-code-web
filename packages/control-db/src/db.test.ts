@@ -40,3 +40,36 @@ describe("migrate", () => {
     expect(() => migrate(db)).not.toThrow();
   });
 });
+
+describe("workspaces.branches migration (M4)", () => {
+  test("a database created before the column gains it on migrate", () => {
+    const db = new Database(":memory:");
+    // The previous schema: create the table without `branches`, as an
+    // older release would have.
+    db.exec(`
+      CREATE TABLE workspaces (
+        runner_id     TEXT NOT NULL,
+        workspace_id  TEXT NOT NULL,
+        path          TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
+        PRIMARY KEY (runner_id, workspace_id)
+      );
+    `);
+
+    migrate(db);
+
+    const columns = (
+      db.query("PRAGMA table_info(workspaces)").all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    expect(columns).toContain("branches");
+  });
+
+  test("a fresh database has the column from the start", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const columns = (
+      db.query("PRAGMA table_info(workspaces)").all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    expect(columns).toContain("branches");
+  });
+});

@@ -13,12 +13,15 @@ import type { Database } from "bun:sqlite";
 export type DeclaredWorkspaceRow = {
   workspaceId: string;
   path: string;
+  /** The workspace's local heads at declaration time (M4); absent = none known. */
+  branches?: string[];
 };
 
 export type OwnerWorkspace = {
   workspaceId: string;
   runnerId: string;
   path: string;
+  branches: string[];
   createdAt: number;
 };
 
@@ -36,15 +39,36 @@ export function upsertRunnerWorkspaces(
   const replace = db.transaction(() => {
     db.prepare("DELETE FROM workspaces WHERE runner_id = ?").run(runnerId);
     const insert = db.prepare(
-      `INSERT INTO workspaces (runner_id, workspace_id, path, registered_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at)
+       VALUES (?, ?, ?, ?, ?)`,
     );
     const now = Date.now();
     for (const workspace of workspaces) {
-      insert.run(runnerId, workspace.workspaceId, workspace.path, now);
+      insert.run(
+        runnerId,
+        workspace.workspaceId,
+        workspace.path,
+        JSON.stringify(workspace.branches ?? []),
+        now,
+      );
     }
   });
   replace();
+}
+
+/**
+ * The `branches` column as a typed list. The writer is ours, but reads never
+ * throw: a hand-migrated or corrupted row reads as "no branches known" —
+ * placement and the composer degrade, the control plane does not.
+ */
+function branchesOf(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -54,7 +78,7 @@ export function upsertRunnerWorkspaces(
 export function workspacesForOwner(db: Database, ownerId: string): OwnerWorkspace[] {
   const rows = db
     .prepare(
-      `SELECT w.workspace_id, w.runner_id, w.path, r.created_at
+      `SELECT w.workspace_id, w.runner_id, w.path, w.branches, r.created_at
        FROM workspaces w
        JOIN runners r ON r.id = w.runner_id
        WHERE r.owner_id = ? AND r.revoked_at IS NULL
@@ -64,12 +88,14 @@ export function workspacesForOwner(db: Database, ownerId: string): OwnerWorkspac
     workspace_id: string;
     runner_id: string;
     path: string;
+    branches: string;
     created_at: number;
   }>;
   return rows.map((row) => ({
     workspaceId: row.workspace_id,
     runnerId: row.runner_id,
     path: row.path,
+    branches: branchesOf(row.branches),
     createdAt: row.created_at,
   }));
 }

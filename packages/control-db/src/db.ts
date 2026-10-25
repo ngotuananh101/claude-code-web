@@ -225,15 +225,19 @@ export function migrate(db: Database): void {
   // authority: rows are a declarative replace per runner on every hello and
   // reconcile, so a boot that stops declaring a workspace loses its row —
   // placement can never pick a workspace the current boot does not vouch for.
+  // `branches` (M4) is a JSON array of the workspace's local heads at the
+  // last declaration; the JSON column keeps the declarative replace whole.
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
       runner_id     TEXT NOT NULL REFERENCES runners (id),
       workspace_id  TEXT NOT NULL,
       path          TEXT NOT NULL,
+      branches      TEXT NOT NULL DEFAULT '[]',
       registered_at INTEGER NOT NULL,
       PRIMARY KEY (runner_id, workspace_id)
     );
   `);
+  addColumnIfMissing(db, "workspaces", "branches", "TEXT NOT NULL DEFAULT '[]'");
 
   // Where each session lives (§2.3, ADR-006): the (workspace, runner) pin an
   // accepted dispatch records, so every later run of the session rides it

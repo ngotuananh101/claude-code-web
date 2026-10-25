@@ -106,12 +106,14 @@ describe("workspacesForOwner", () => {
         workspaceId: "default",
         runnerId: "runner-a",
         path: "/srv/proj",
+        branches: [],
         createdAt: expect.any(Number),
       },
       {
         workspaceId: "w-2",
         runnerId: "runner-b",
         path: "/srv/other",
+        branches: [],
         createdAt: expect.any(Number),
       },
     ]);
@@ -130,5 +132,51 @@ describe("workspacesForOwner", () => {
     upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
 
     expect(workspacesForOwner(db, "owner-1")).toEqual([]);
+  });
+});
+
+describe("declared branches (M4)", () => {
+  test("a declaration's branches round-trip to the owner's list", () => {
+    seedRunner(db, "runner-a");
+    upsertRunnerWorkspaces(db, "runner-a", [
+      { workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] },
+    ]);
+
+    expect(workspacesForOwner(db, "owner-1")).toEqual([
+      {
+        workspaceId: "default",
+        runnerId: "runner-a",
+        path: "/srv/proj",
+        branches: ["main", "dev"],
+        createdAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  test("a declaration without branches reads as an empty list", () => {
+    seedRunner(db, "runner-a");
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
+
+    expect(workspacesForOwner(db, "owner-1")[0]!.branches).toEqual([]);
+  });
+
+  test("a re-declaration replaces branches wholesale, never accumulates", () => {
+    seedRunner(db, "runner-a");
+    upsertRunnerWorkspaces(db, "runner-a", [
+      { workspaceId: "default", path: "/srv/proj", branches: ["main", "dev", "wip"] },
+    ]);
+    upsertRunnerWorkspaces(db, "runner-a", [
+      { workspaceId: "default", path: "/srv/proj", branches: ["main"] },
+    ]);
+
+    expect(workspacesForOwner(db, "owner-1")[0]!.branches).toEqual(["main"]);
+  });
+
+  test("garbage stored in the column reads as an empty list, never throws", () => {
+    seedRunner(db, "runner-a");
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
+    db.prepare("UPDATE workspaces SET branches = 'not json' WHERE runner_id = 'runner-a'").run();
+
+    expect(workspacesForOwner(db, "owner-1")[0]!.branches).toEqual([]);
   });
 });
