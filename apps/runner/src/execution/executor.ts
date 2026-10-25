@@ -64,6 +64,27 @@ export type TerminalOutcome = {
   sdkSessionId?: string;
 };
 
+/**
+ * Why the runner's checkout gate refused to move a workspace (M4). Each is
+ * an operator-actionable fact, not an errno: `dirty_tree` means the operator
+ * decides what happens to their edits — the runner never cleans or stashes.
+ */
+export type BranchRefusal =
+  | "invalid_branch_name"
+  | "dirty_tree"
+  | "unknown_branch"
+  | "checkout_failed";
+
+/**
+ * The workspace-preparation contract (M4): what the gate tells the executor
+ * between `run.started` and the SDK stream. `checkedOut: false` with
+ * `kind: "ready"` is the no-branch case — no git ran, the run proceeds on
+ * whatever the workspace already has checked out.
+ */
+export type PrepareWorkspaceResult =
+  | { kind: "ready"; checkedOut: boolean; branch?: string }
+  | { kind: "refused"; reason: BranchRefusal; branch?: string };
+
 export type ExecuteOptions = {
   workspacePath: string;
   sdk: SdkStream;
