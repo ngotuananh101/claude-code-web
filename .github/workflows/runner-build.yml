@@ -48,16 +48,10 @@ jobs:
             binary: cc-web-runner-linux-x64
           - target: bun-linux-arm64
             binary: cc-web-runner-linux-arm64
-            install_os: linux
-            install_cpu: arm64
           - target: bun-windows-x64
             binary: cc-web-runner-windows-x64.exe
-            install_os: win32
-            install_cpu: x64
           - target: bun-windows-arm64
             binary: cc-web-runner-windows-arm64.exe
-            install_os: win32
-            install_cpu: arm64
 
     steps:
       - uses: actions/checkout@v7
@@ -70,12 +64,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       # The SDK's native CLI rides as a per-platform package, and bun skips
-      # platform-mismatched optionals — a cross-compiled binary would otherwise
-      # embed nothing (§20.3). Overriding the platform for this job's install
-      # fetches the target's package; the shim + compile pick it up below.
+      # platform-mismatched optionals. bun install --os/--cpu does not relink
+      # what the lockfile already resolves (bun 1.4.3 no-ops either way — the
+      # first CI run proved it), so the target's package is placed directly
+      # where the asset shim resolves it (§20.3). Idempotent: the host row
+      # finds its package already installed and moves on.
       - name: Install the target platform's SDK CLI
-        if: matrix.install_os != ''
-        run: bun install --frozen-lockfile --os=${{ matrix.install_os }} --cpu=${{ matrix.install_cpu }}
+        run: bun run scripts/claude-target-asset.ts --target=${{ matrix.target }}
 
       # The URL travels into the --define flag below, so it must be a plain
       # http(s) origin: no quotes or backslashes to smuggle shell past. The
