@@ -12,6 +12,15 @@ export {
   type EnqueueInput,
   type OutboxCommand,
 } from "./command-outbox.ts";
+export {
+  approvalForSession,
+  type ApprovalKind,
+  type ApprovalRecord,
+  closeApproval,
+  type DecisionOutcome,
+  recordApprovalDecision,
+  type UpsertApprovalRequestedInput,
+} from "./approvals.ts";
 export { migrate } from "./db.ts";
 export {
   attemptWatermark,

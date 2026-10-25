@@ -102,6 +102,18 @@ export class CommandOutbox {
       return;
     }
 
+    this.insertPendingSync(input, fp);
+  }
+
+  /**
+   * The enqueue INSERT without the async fingerprint step, for callers that
+   * computed the fingerprint BEFORE opening a transaction (§13.1): the
+   * decision route hashes first, then commits decision + command in one
+   * atomic write. A duplicate command id still fails on the primary key —
+   * the CAS guarding the caller's transaction is what prevents reaching here
+   * twice.
+   */
+  insertPendingSync(input: EnqueueInput, fingerprint: string): void {
     this.#db
       .query(
         `INSERT INTO command_outbox
@@ -115,7 +127,7 @@ export class CommandOutbox {
         input.runnerId,
         input.kind,
         JSON.stringify(input.payload ?? null),
-        fp,
+        fingerprint,
         input.issuedAt,
         input.expiresAt ?? null,
         input.sessionId ?? null,
@@ -243,7 +255,7 @@ export class CommandOutbox {
   }
 }
 
-async function fingerprintOf(input: EnqueueInput): Promise<string> {
+export async function fingerprintOf(input: EnqueueInput): Promise<string> {
   // Canonicalised so key order and `undefined` do not change the hash; without
   // that, an identical retry would look like a different command.
   return fingerprint({

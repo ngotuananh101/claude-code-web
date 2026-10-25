@@ -181,6 +181,44 @@ export function migrate(db: Database): void {
       detected_at INTEGER NOT NULL
     );
   `);
+
+  // Approvals projection (§13). The runner's `approval.requested` events are
+  // flattened here so the decision route can validate and close an approval
+  // without scanning the journal. `state` follows the projection's own
+  // lifecycle: pending → decided (a user decision is recorded) → resolved
+  // (the runner confirmed the outcome). The event payload only ever carries a
+  // redacted summary; the full tool input never leaves the runner.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approvals (
+      approval_id   TEXT PRIMARY KEY,
+      session_id    TEXT NOT NULL,
+      run_id        TEXT NOT NULL,
+      runner_id     TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      tool_name     TEXT NOT NULL,
+      input_hash    TEXT NOT NULL,
+      input_summary TEXT NOT NULL,
+      expires_at    INTEGER NOT NULL,
+      state         TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+  `);
+
+  // One row per accepted decision, written in the same transaction as the
+  // `approval.respond` outbox command — the atomicity §13.1 requires.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_decisions (
+      approval_id  TEXT NOT NULL REFERENCES approvals (approval_id),
+      decision     TEXT NOT NULL,
+      answers_json TEXT,
+      decided_at   INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS approvals_session
+      ON approvals (session_id);
+  `);
 }
 
 /**
