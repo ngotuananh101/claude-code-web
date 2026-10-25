@@ -44,7 +44,12 @@ export async function handleDispatchRun(
     return new Response("bad request", { status: 400 });
   }
 
-  const record = body as { prompt?: unknown; workspaceId?: unknown; permissionMode?: unknown };
+  const record = body as {
+    prompt?: unknown;
+    workspaceId?: unknown;
+    permissionMode?: unknown;
+    model?: unknown;
+  };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
     return new Response("bad request", { status: 400 });
@@ -69,6 +74,18 @@ export async function handleDispatchRun(
       return new Response("bad request", { status: 400 });
     }
     permissionMode = record.permissionMode;
+  }
+
+  // §5.2: the model is a per-run choice over the names §8.1 fixes. Same rule as
+  // the permission mode — a typo must be refused, not silently run on a model
+  // the operator did not ask for.
+  const MODELS: ReadonlySet<string> = new Set(["sonnet", "opus", "haiku"]);
+  let model: string | undefined;
+  if (record.model !== undefined) {
+    if (typeof record.model !== "string" || !MODELS.has(record.model)) {
+      return new Response("bad request", { status: 400 });
+    }
+    model = record.model;
   }
 
   // Checked before runner selection so a double-submit answers with its own
@@ -108,6 +125,7 @@ export async function handleDispatchRun(
       workspaceId,
       prompt,
       ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(model === undefined ? {} : { model }),
     },
     scheduler.capacityFor(ready, {
       runnerId: ready,

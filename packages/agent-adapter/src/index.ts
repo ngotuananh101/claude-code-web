@@ -24,6 +24,8 @@ export type SdkStreamInput = {
   abort?: AbortSignal;
   /** The run's permission mode; the executor always supplies one. */
   permissionMode?: string;
+  /** The model the run named (§5.2); absent leaves the SDK's own default. */
+  model?: string;
   /**
    * The approval gate (§13). Present means the runner wants to be asked;
    * absent leaves the SDK's own permission flow untouched.
@@ -74,6 +76,7 @@ export function createSdkStream(
   // §13: the permission mode rides the run payload and the approval gate is
   // the runner's own closure — both pass through verbatim.
   if (input.permissionMode !== undefined) options["permissionMode"] = input.permissionMode;
+  if (input.model !== undefined) options["model"] = input.model;
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
 
   // Loaded inside the generator body, so importing this module costs nothing.

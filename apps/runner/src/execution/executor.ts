@@ -35,6 +35,8 @@ export type SdkOptions = {
   resume?: string;
   abort?: AbortSignal;
   permissionMode: string;
+  /** The model the run named (§5.2); absent means the SDK's own default. */
+  model?: string;
   canUseTool?: (
     toolName: string,
     input: unknown,
@@ -94,6 +96,9 @@ export async function executeRun(
   const prompt = typeof record?.["prompt"] === "string" ? record["prompt"] : "";
   const permissionMode =
     typeof record?.["permissionMode"] === "string" ? record["permissionMode"] : "default";
+  // Unlike permissionMode there is no runner-side default: an unnamed model
+  // means the SDK's own choice, so the option is omitted downstream.
+  const model = typeof record?.["model"] === "string" ? record["model"] : undefined;
 
   const now = () => new Date().toISOString();
   let sequence = 0;
@@ -220,6 +225,7 @@ export async function executeRun(
       ...(resume === undefined ? {} : { resume }),
       ...(options.signal ? { abort: options.signal } : {}),
       permissionMode,
+      ...(model === undefined ? {} : { model }),
       ...(canUseTool === undefined ? {} : { canUseTool }),
     });
 

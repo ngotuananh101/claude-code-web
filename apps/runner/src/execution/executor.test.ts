@@ -951,6 +951,61 @@ describe("the permission mode", () => {
   });
 });
 
+describe("the model", () => {
+  test("forwards the run's model into the SDK options", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", model: "opus" } },
+      {
+        workspacePath: WORKSPACES.get("workspace-1")!,
+        sdk,
+      },
+    );
+
+    expect(captured?.model).toBe("opus");
+  });
+
+  test("a payload without one leaves the SDK option unset", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    // Unlike permissionMode there is no runner-side default: the SDK's own
+    // model choice is what "not specified" means, so the option is omitted.
+    expect(captured?.model).toBeUndefined();
+  });
+});
+
 describe("the approval gate", () => {
   test("a canUseTool call suspends the run as approval.requested and resolves from the router", async () => {
     const { db } = setup();

@@ -308,6 +308,75 @@ describe("the permission mode on POST /api/sessions/:id/runs", () => {
   });
 });
 
+describe("the model on POST /api/sessions/:id/runs", () => {
+  test("a chosen model travels in the run.start payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", model: "opus" }),
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) =>
+          (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello" &&
+          (JSON.parse(row.payload) as { model?: string }).model === "opus",
+      ),
+    );
+  });
+
+  test("an unknown model is a bad request, not a silent default", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", model: "gpt-5" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("an absent model is omitted from the payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+      ),
+    );
+
+    const payloads = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    expect(
+      payloads.some((row) => "model" in (JSON.parse(row.payload) as Record<string, unknown>)),
+    ).toBe(false);
+  });
+});
+
 describe("POST /api/runs/:id/cancel", () => {
   test("cancelling a dispatched run sends run.cancel to the holding runner", async () => {
     const { db, url, cookie, credential } = await start();

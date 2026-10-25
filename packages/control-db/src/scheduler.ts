@@ -41,6 +41,12 @@ export type DispatchRequest = {
    * the runner's executor can pass it to the SDK stream.
    */
   permissionMode?: string;
+  /**
+   * The model the operator picked for this run (§5.2). Validated by the route;
+   * absent means the SDK's own default — the option is omitted, never set to a
+   * stand-in value.
+   */
+  model?: string;
 };
 
 export type DispatchDecision =
@@ -117,6 +123,7 @@ export class Scheduler {
         workspaceId: request.workspaceId,
         prompt: request.prompt,
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
+        ...(request.model === undefined ? {} : { model: request.model }),
       },
     });
 

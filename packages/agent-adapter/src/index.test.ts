@@ -96,6 +96,20 @@ describe("mapping a run to SDK options", () => {
     expect(params.options?.["permissionMode"]).toBe("acceptEdits");
   });
 
+  test("forwards model when the run names one", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w", model: "opus" });
+
+    expect(params.options?.["model"]).toBe("opus");
+  });
+
+  test("omits model entirely when the run does not name one", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w" });
+
+    // §8.1: the SDK's own default model is what "inherit" means — setting
+    // undefined here would shadow it with a lie.
+    expect(params.options !== undefined && "model" in params.options).toBe(false);
+  });
+
   test("forwards the approval gate as canUseTool when one is given", () => {
     const canUseTool = async () => ({ behavior: "deny", message: "no" }) as const;
     const params = captureOptions({ prompt: "hi", cwd: "/w", canUseTool });
