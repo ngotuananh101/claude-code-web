@@ -25,7 +25,13 @@ describe("fetchWorkspaces", () => {
       return new Response(
         JSON.stringify({
           workspaces: [
-            { workspaceId: "default", runnerId: "runner-a", path: "/srv/proj", createdAt: 1 },
+            {
+              workspaceId: "default",
+              runnerId: "runner-a",
+              path: "/srv/proj",
+              branches: ["main", "dev"],
+              createdAt: 1,
+            },
           ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -39,7 +45,13 @@ describe("fetchWorkspaces", () => {
     expect(result).toEqual({
       ok: true,
       workspaces: [
-        { workspaceId: "default", runnerId: "runner-a", path: "/srv/proj", createdAt: 1 },
+        {
+          workspaceId: "default",
+          runnerId: "runner-a",
+          path: "/srv/proj",
+          branches: ["main", "dev"],
+          createdAt: 1,
+        },
       ],
     });
   });

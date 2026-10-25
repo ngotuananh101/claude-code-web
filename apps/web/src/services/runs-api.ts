@@ -25,6 +25,8 @@ export type StartRunRequest = {
   runnerId?: string;
   permissionMode?: string;
   model?: string;
+  /** The declared local head to check out before the run (M4). */
+  branch?: string;
 };
 
 export async function startRun(sessionId: string, run: StartRunRequest): Promise<StartRunResult> {
@@ -35,6 +37,7 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.runnerId !== undefined) body["runnerId"] = run.runnerId;
     if (run.permissionMode !== undefined) body["permissionMode"] = run.permissionMode;
     if (run.model !== undefined) body["model"] = run.model;
+    if (run.branch !== undefined) body["branch"] = run.branch;
     response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

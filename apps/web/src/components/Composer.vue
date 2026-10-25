@@ -26,7 +26,9 @@ import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api
  * runner/project/branch when it was created. The project select offers the
  * workspaces the runners declared (§15.1); picking one pins the dispatch
  * through it, and a specific runner narrows the choices to that runner's
- * workspaces. The branch select stays local until the branch surface exists.
+ * workspaces. The branch select offers the local heads the project's runner
+ * declared (M4); "Hiện tại" sends no branch, and the workspace runs on
+ * whatever HEAD it already holds.
  */
 
 const props = defineProps<{
@@ -43,7 +45,7 @@ const sending = ref(false);
 
 const runnerId = ref("auto");
 const project = ref("default");
-const branch = ref("main");
+const branch = ref("current");
 const permission = ref("default");
 const model = ref("default");
 
@@ -96,6 +98,7 @@ type ProjectOption = {
   workspaceId: string;
   runnerId: string | undefined;
   path: string;
+  branches: string[];
 };
 
 const projectOptions = computed<ProjectOption[]>(() => {
@@ -104,13 +107,22 @@ const projectOptions = computed<ProjectOption[]>(() => {
       ? workspaces.value
       : workspaces.value.filter((w) => w.runnerId === runnerId.value);
   if (declared.length === 0) {
-    return [{ value: "default", workspaceId: "default", runnerId: undefined, path: "default" }];
+    return [
+      {
+        value: "default",
+        workspaceId: "default",
+        runnerId: undefined,
+        path: "default",
+        branches: [],
+      },
+    ];
   }
   return declared.map((w) => ({
     value: `${w.runnerId}/${w.workspaceId}`,
     workspaceId: w.workspaceId,
     runnerId: w.runnerId,
     path: w.path,
+    branches: w.branches,
   }));
 });
 
@@ -139,6 +151,15 @@ watch(project, () => {
     runnerId.value !== option.runnerId
   ) {
     runnerId.value = option.runnerId;
+  }
+});
+
+// A branch is a property of the project: switching projects (or the
+// declarations arriving late) drops a picked branch the new project does not
+// declare, back to the honest "current HEAD" default rather than a guess.
+watch(selectedProject, (option) => {
+  if (branch.value !== "current" && !option.branches.includes(branch.value)) {
+    branch.value = "current";
   }
 });
 
@@ -192,6 +213,11 @@ async function send(): Promise<void> {
     }
     if (runnerId.value !== "auto") {
       body.runnerId = runnerId.value;
+    }
+    // A branch rides only where a workspace does — the route refuses a
+    // branch without one, and "Hiện tại" means no checkout at all.
+    if (branch.value !== "current" && selectedProject.value.runnerId !== undefined) {
+      body.branch = branch.value;
     }
   }
   const result = await startRun(sessionId, body);
@@ -302,7 +328,15 @@ async function stop(): Promise<void> {
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper">
-          <SelectItem value="main" class="font-mono text-xs">main</SelectItem>
+          <SelectItem value="current">Hiện tại</SelectItem>
+          <SelectItem
+            v-for="name in selectedProject.branches"
+            :key="name"
+            :value="name"
+            class="font-mono text-xs"
+          >
+            {{ name }}
+          </SelectItem>
         </SelectContent>
       </Select>
     </InputGroupAddon>

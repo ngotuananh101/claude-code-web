@@ -9,6 +9,8 @@ export type OwnerWorkspace = {
   workspaceId: string;
   runnerId: string;
   path: string;
+  /** The local heads the runner declared for this workspace (M4). */
+  branches: string[];
   createdAt: number;
 };
 
