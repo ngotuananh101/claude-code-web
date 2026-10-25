@@ -9,6 +9,7 @@
  *
  *   message.started { messageId }        — from `message_start`
  *   message.delta   { messageId, text }  — from each `text_delta` fragment
+ *   tool.started    { toolCallId, toolName } — from a `tool_use` block start
  *
  * Everything else the raw stream carries stays here: thinking deltas (internal
  * reasoning, §12.3), tool-input fragments (parsed only when complete), block
@@ -18,7 +19,7 @@
  */
 
 export type NormalizedStreamEvent = {
-  type: "message.started" | "message.delta";
+  type: "message.started" | "message.delta" | "tool.started";
   payload: Record<string, unknown>;
 };
 
@@ -43,6 +44,23 @@ export function createStreamNormalizer(): (
       if (typeof id !== "string" || id === "") return [];
       currentId.set(parentKey, id);
       return [{ type: "message.started", payload: { messageId: id } }];
+    }
+
+    if (raw["type"] === "content_block_start") {
+      // A tool_use block start is the SDK's evidence a tool call is being
+      // made — id and name are final, the input streams later as fragments
+      // and is never echoed (§12.3: input is parsed only when complete, and
+      // this event is not where it would live). Tool ids are globally unique
+      // across chains, so no currentId correlation is needed.
+      const block = raw["content_block"];
+      if (typeof block !== "object" || block === null) return [];
+      const toolUse = block as Record<string, unknown>;
+      if (toolUse["type"] !== "tool_use") return [];
+      const toolCallId = toolUse["id"];
+      const toolName = toolUse["name"];
+      if (typeof toolCallId !== "string" || toolCallId === "") return [];
+      if (typeof toolName !== "string" || toolName === "") return [];
+      return [{ type: "tool.started", payload: { toolCallId, toolName } }];
     }
 
     if (raw["type"] === "content_block_delta") {

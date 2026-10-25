@@ -126,4 +126,95 @@ describe("createStreamNormalizer", () => {
     expect(normalize({ type: "stream_event" })).toEqual([]);
     expect(normalize(streamEvent(textDelta("x")))).toEqual([]);
   });
+
+  test("a tool_use block start emits tool.started with the call id and name", () => {
+    const normalize = createStreamNormalizer();
+    expect(
+      normalize(
+        streamEvent({
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "toolu-1", name: "Bash" },
+        }),
+      ),
+    ).toEqual([{ type: "tool.started", payload: { toolCallId: "toolu-1", toolName: "Bash" } }]);
+  });
+
+  test("a sidechain tool_use block start still emits its own tool.started", () => {
+    // Tool ids are globally unique across chains, so unlike text deltas the
+    // event needs no chain correlation — a subagent's tool call is real tool
+    // activity in the session.
+    const normalize = createStreamNormalizer();
+    normalize(streamEvent(messageStart("msg_sub"), "tool-1"));
+    expect(
+      normalize(
+        streamEvent(
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu-2", name: "Read" },
+          },
+          "tool-1",
+        ),
+      ),
+    ).toEqual([{ type: "tool.started", payload: { toolCallId: "toolu-2", toolName: "Read" } }]);
+  });
+
+  test("a tool_use block missing id or name emits nothing", () => {
+    const normalize = createStreamNormalizer();
+    expect(
+      normalize(
+        streamEvent({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", name: "Bash" },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      normalize(
+        streamEvent({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu-1" },
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      normalize(
+        streamEvent({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: 42, name: "Bash" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a content_block_stop for a tool block emits nothing", () => {
+    // §12.3: the model finishing the input is not the tool finishing —
+    // completion evidence is the tool_result frame, never this.
+    const normalize = createStreamNormalizer();
+    normalize(
+      streamEvent({
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "toolu-1", name: "Bash" },
+      }),
+    );
+    expect(normalize(streamEvent({ type: "content_block_stop", index: 1 }))).toEqual([]);
+  });
+
+  test("tool.started payloads carry exactly toolCallId and toolName", () => {
+    const normalize = createStreamNormalizer();
+    const [event] = normalize(
+      streamEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu-1", name: "Bash", input: {} },
+      }),
+    );
+    expect(event).toBeDefined();
+    expect(Object.keys(event!.payload).sort()).toEqual(["toolCallId", "toolName"]);
+  });
 });
