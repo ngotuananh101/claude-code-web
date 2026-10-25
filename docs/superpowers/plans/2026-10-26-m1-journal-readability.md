@@ -39,11 +39,11 @@
   - `renderMarkdown(text: string): string` — safe HTML fragment; `""` for `""`/whitespace-only input.
   - `assistantTextOf(payload: unknown): string` — for the executor's redacted `SDKAssistantMessage` shape `{ type: "assistant", message: { content: Array<{ type: "text"; text: string } | …> } }`, the `text` blocks joined with `"\n\n"`; `""` when the shape does not match or no text blocks exist.
 
-- [ ] **Step 1: Write the failing tests** — `markdown.test.ts` covering: bold/italic render; a fenced code block renders `<pre><code>`; a paragraph with `\n\n` splits; `<script>alert(1)</script>` arrives with `&lt;script&gt;` (and no live tag); `<img src=x onerror=alert(1)>` likewise escaped; `[x](javascript:alert(1))` produces no `javascript:` href (rendered as text or stripped); `[x](data:text/html,…)` same; a normal `[x](https://a.b)` link keeps its href; empty string and `"   \n"` → `""`; `assistantTextOf`: two text blocks joined `\n\n`; `tool_use` blocks skipped; missing `message`/non-array content/`null` payload → `""`; `renderMarkdown` output of the extracted text contains the joined prose.
-- [ ] **Step 2: Run to verify RED** — module missing.
-- [ ] **Step 3: Implement** — one module-level `MarkdownIt` instance with the frozen options; `renderMarkdown` trims and returns `""` for blank input; `assistantTextOf` walks `payload.message.content` defensively (typeof checks at every hop).
-- [ ] **Step 4: Run to GREEN** — `bun test apps/web/src/features/journal/markdown.test.ts`, then `bun test apps/web`.
-- [ ] **Step 5: Commit** — `git commit -m "feat: render assistant text as sanitized markdown"`.
+- [x] **Step 1: Write the failing tests** — `markdown.test.ts` covering: bold/italic render; a fenced code block renders `<pre><code>`; a paragraph with `\n\n` splits; `<script>alert(1)</script>` arrives with `&lt;script&gt;` (and no live tag); `<img src=x onerror=alert(1)>` likewise escaped; `[x](javascript:alert(1))` produces no `javascript:` href (rendered as text or stripped); `[x](data:text/html,…)` same; a normal `[x](https://a.b)` link keeps its href; empty string and `"   \n"` → `""`; `assistantTextOf`: two text blocks joined `\n\n`; `tool_use` blocks skipped; missing `message`/non-array content/`null` payload → `""`; `renderMarkdown` output of the extracted text contains the joined prose.
+- [x] **Step 2: Run to verify RED** — module missing.
+- [x] **Step 3: Implement** — one module-level `MarkdownIt` instance with the frozen options; `renderMarkdown` trims and returns `""` for blank input; `assistantTextOf` walks `payload.message.content` defensively (typeof checks at every hop).
+- [x] **Step 4: Run to GREEN** — `bun test apps/web/src/features/journal/markdown.test.ts`, then `bun test apps/web`.
+- [x] **Step 5: Commit** — `git commit -m "feat: render assistant text as sanitized markdown"`.
 
 ### Task 2: EventJournal prose (web UI)
 
@@ -55,14 +55,14 @@
 
 Changes: the streaming bubble's `<pre>{{ row.text }}</pre>` becomes `<div :class="proseClasses" v-html="renderMarkdown(row.text)">` (interrupted styling stays via the wrapper's text color). The `message.completed` event row gets a branch before the generic JSON `pre`: when `assistantTextOf(row.event.payload)` is non-empty, render it through `renderMarkdown` in the same prose wrapper; otherwise the existing JSON `pre` unchanged. Export a `proseClasses` constant from the markdown module (single source for both call sites) with arbitrary variants for `p/pre/code/pre code/a/ul/ol/h1-h4/blockquote/table` — inline code gets a muted chip, fenced code resets it (`[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-inherit`), fenced blocks scroll horizontally.
 
-- [ ] **Step 1: Implement** the two template branches + import; keep every other row kind untouched.
-- [ ] **Step 2: Verify** — `cd apps/web && bun run build` and `bunx biome check .` at the repo root; `bun test apps/web` still green.
-- [ ] **Step 3: Commit** — `git commit -m "feat: render journal messages as prose"`.
+- [x] **Step 1: Implement** the two template branches + import; keep every other row kind untouched.
+- [x] **Step 2: Verify** — `cd apps/web && bun run build` and `bunx biome check .` at the repo root; `bun test apps/web` still green.
+- [x] **Step 3: Commit** — `git commit -m "feat: render journal messages as prose"`.
 
 ### Task 3: Full gates + push
 
-- [ ] **Step 1: Gates** — `bun test`, `bun run typecheck`, `bunx biome check .`, web build (runner untouched; the integration chain is unaffected — note that in the ledger).
-- [ ] **Step 2: Push** to `main`, then whole-branch review per the standing protocol (this is milestone M1 of the master roadmap — review ranges from the roadmap commit to the last M1 commit).
+- [x] **Step 1: Gates** — `bun test`, `bun run typecheck`, `bunx biome check .`, web build (runner untouched; the integration chain is unaffected — note that in the ledger).
+- [x] **Step 2: Push** to `main`, then whole-branch review per the standing protocol (this is milestone M1 of the master roadmap — review ranges from the roadmap commit to the last M1 commit).
 
 ## Non-goals
 

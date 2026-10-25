@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { redactSdkMessage } from "../../../../runner/src/execution/redact.ts";
 import { assistantTextOf, renderMarkdown } from "./markdown.ts";
 
 /**
@@ -53,6 +54,25 @@ describe("renderMarkdown", () => {
     expect(html).toContain('href="https://example.com/a"');
   });
 
+  test("a tab smuggled into the scheme cannot reassemble javascript:", () => {
+    // mdurl percent-encodes the control character, and browsers only strip
+    // literal tab/newline from URLs — %09 is inert.
+    const html = renderMarkdown("[x](<java\tscript:alert(1)>)");
+    expect(html).not.toMatch(/href="javascript:/i);
+  });
+
+  test("a newline smuggled into the scheme produces no link at all", () => {
+    const html = renderMarkdown("[x](<java\nscript:alert(1)>)");
+    expect(html).not.toContain("<a ");
+  });
+
+  test("uppercase scheme is still rejected (inline, autolink, reference)", () => {
+    expect(renderMarkdown("[x](JAVASCRIPT:alert(1))")).not.toContain("<a ");
+    expect(renderMarkdown("<javascript:alert(1)>")).not.toMatch(/href="[^"]*javascript:/i);
+    const html = renderMarkdown("[x][a]\n\n[a]: javascript:alert(1)");
+    expect(html).not.toMatch(/href="[^"]*javascript:/i);
+  });
+
   test("empty and whitespace-only input render an empty string", () => {
     expect(renderMarkdown("")).toBe("");
     expect(renderMarkdown("   \n\t ")).toBe("");
@@ -99,5 +119,26 @@ describe("assistantTextOf", () => {
   test("the extracted text renders through the markdown renderer", () => {
     const text = assistantTextOf(assistantPayload([{ type: "text", text: "**done**" }]));
     expect(renderMarkdown(text)).toContain("<strong>done</strong>");
+  });
+
+  test("the redaction seam: real redactSdkMessage output still carries the text", () => {
+    // The walker lives in apps/web, the redactor in apps/runner — this is the
+    // one test that joins them. If redaction ever strips a key the walker
+    // needs (message/content/type/text), every completed message in the
+    // journal silently blanks; this is the tripwire.
+    const frame = {
+      type: "assistant",
+      apiKey: "sk-ant-should-vanish",
+      message: {
+        id: "msg_1",
+        cwd: "/home/runner/project",
+        content: [
+          { type: "text", text: "the answer is **42**" },
+          { type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    };
+    const text = assistantTextOf(redactSdkMessage(frame));
+    expect(text).toBe("the answer is **42**");
   });
 });

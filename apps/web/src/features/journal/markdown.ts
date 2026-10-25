@@ -20,9 +20,22 @@ import MarkdownIt from "markdown-it";
  */
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false, typographer: false });
 
+// The journal re-renders on every streamed batch, and each render calls this
+// for every prose row — without a cache that is a full markdown re-parse of
+// the whole transcript per update (review #4). Keyed by the exact input, so
+// the output is the same either way; the size cap keeps a long session's
+// cumulative streaming strings from growing the map without bound.
+const renderCache = new Map<string, string>();
+const RENDER_CACHE_MAX = 400;
+
 export function renderMarkdown(text: string): string {
   if (text.trim() === "") return "";
-  return md.render(text);
+  const cached = renderCache.get(text);
+  if (cached !== undefined) return cached;
+  const html = md.render(text);
+  if (renderCache.size >= RENDER_CACHE_MAX) renderCache.clear();
+  renderCache.set(text, html);
+  return html;
 }
 
 /**
