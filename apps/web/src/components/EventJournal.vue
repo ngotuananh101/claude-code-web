@@ -3,6 +3,7 @@ import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { computed } from "vue";
 import ApprovalCard from "@/components/ApprovalCard.vue";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -32,26 +33,11 @@ const rows = computed<Row[]>(() => {
 
 // The journal is the authority on an approval's outcome (§13.2): a card is
 // read-only once a later `approval.resolved`/`approval.expired` with the same
-// id is in the transcript.
-const approvalTerminals = computed(() => {
-  const terminals = new Map<string, { decision?: "allow" | "deny"; reason?: string }>();
-  for (const event of props.events) {
-    if (event.type !== "approval.resolved" && event.type !== "approval.expired") continue;
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const approvalId = payload["approvalId"];
-    if (typeof approvalId !== "string") continue;
-    if (event.type === "approval.resolved") {
-      terminals.set(approvalId, {
-        decision: payload["decision"] === "deny" ? "deny" : "allow",
-      });
-    } else {
-      terminals.set(approvalId, {
-        reason: typeof payload["reason"] === "string" ? payload["reason"] : undefined,
-      });
-    }
-  }
-  return terminals;
-});
+// id is in the transcript. Parsing lives in features/approvals/terminal.ts
+// where it is unit-testable (F4).
+const approvalTerminals = computed(() =>
+  mapApprovalTerminals(props.events.map((event) => ({ type: event.type, payload: event.payload }))),
+);
 
 function terminalFor(event: BrowserReplayEvent) {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
