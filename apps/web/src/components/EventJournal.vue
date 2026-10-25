@@ -4,6 +4,7 @@ import { computed } from "vue";
 import ApprovalCard from "@/components/ApprovalCard.vue";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
+import { deriveJournalRows } from "@/features/journal/streaming-messages.ts";
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -11,25 +12,11 @@ const props = defineProps<{
   sessionLive: boolean;
 }>();
 
-// Run-grouped rows: a header whenever the transcript crosses into a new
-// run, then the events. Sequence numbers stay in the gutter — the replay
-// coordinate system the operator thinks in (§12.5).
-type Row =
-  | { kind: "run"; runId: string; key: string }
-  | { kind: "event"; event: BrowserReplayEvent };
-
-const rows = computed<Row[]>(() => {
-  const out: Row[] = [];
-  let lastRun: string | null = null;
-  for (const event of props.events) {
-    if (event.runId !== lastRun) {
-      out.push({ kind: "run", runId: event.runId, key: `run-${event.runId}` });
-      lastRun = event.runId;
-    }
-    out.push({ kind: "event", event });
-  }
-  return out;
-});
+// Run-grouped rows with the streaming messages coalesced in (§12.3): deltas
+// never render as rows — each open message is one growing row at the position
+// of its last delta, closed by the message.completed that carries its id. The
+// derivation is pure and tested in features/journal/streaming-messages.ts.
+const rows = computed(() => deriveJournalRows(props.events));
 
 // The journal is the authority on an approval's outcome (§13.2): a card is
 // read-only once a later `approval.resolved`/`approval.expired` with the same
@@ -73,7 +60,7 @@ const emptyCopy = computed(() =>
         <span class="font-mono">{{ row.runId }}</span>
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
       </div>
-      <div v-else class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
+      <div v-else-if="row.kind === 'event'" class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
         <span
           class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
           :title="row.event.occurredAt"
@@ -92,6 +79,22 @@ const emptyCopy = computed(() =>
             class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground">{{
             JSON.stringify(row.event.payload, null, 2)
           }}</pre>
+        </div>
+      </div>
+      <div v-else class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
+        <span
+          class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
+        >
+          {{ row.lastSequence }}
+        </span>
+        <div>
+          <span class="font-mono text-xs text-muted-foreground">
+            message.delta <template v-if="row.interrupted">· bị dừng giữa chừng</template>
+          </span>
+          <pre
+            class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap"
+            :class="row.interrupted ? 'text-muted-foreground' : 'text-foreground'"
+          >{{ row.text }}</pre>
         </div>
       </div>
     </template>

@@ -41,7 +41,11 @@ describe("createStreamNormalizer", () => {
     normalize(streamEvent(messageStart("msg_1")));
     expect(
       normalize(
-        streamEvent({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "hm" } }),
+        streamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "hm" },
+        }),
       ),
     ).toEqual([]);
   });
@@ -90,11 +94,15 @@ describe("createStreamNormalizer", () => {
     const normalize = createStreamNormalizer();
     normalize(streamEvent(messageStart("msg_1")));
     expect(normalize(streamEvent({ type: "message_stop" }))).toEqual([]);
-    expect(normalize(streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text" } }))).toEqual(
-      [],
-    );
+    expect(
+      normalize(
+        streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text" } }),
+      ),
+    ).toEqual([]);
     expect(normalize(streamEvent({ type: "content_block_stop", index: 0 }))).toEqual([]);
-    expect(normalize(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } }))).toEqual([]);
+    expect(
+      normalize(streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" } })),
+    ).toEqual([]);
   });
 
   test("payloads carry no raw event fields", () => {
