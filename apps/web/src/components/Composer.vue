@@ -235,7 +235,7 @@ async function stop(): Promise<void> {
       </span>
     </div>
 
-    <InputGroupAddon align="block-end" class="justify-between border-t border-border px-3.5 pt-2! pb-2">
+    <InputGroupAddon align="block-end" class="justify-between px-3.5 pt-2 pb-2">
       <div class="flex items-center gap-1.5">
         <Button
           variant="ghost"

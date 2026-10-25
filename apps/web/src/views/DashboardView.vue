@@ -5,6 +5,7 @@ import type { Component } from "vue";
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { toast } from "vue-sonner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatTokens } from "../lib/format-tokens.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { sessions } from "../stores/sessions.ts";
@@ -146,7 +147,7 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto">
+  <ScrollArea class="min-h-0 flex-1">
     <div class="mx-auto grid w-full max-w-[900px] gap-5 px-7 py-7">
       <header>
         <p class="font-mono text-[13px] text-primary">cc-web / tổng quan</p>
@@ -282,5 +283,5 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
         </section>
       </div>
     </div>
-  </div>
+  </ScrollArea>
 </template>

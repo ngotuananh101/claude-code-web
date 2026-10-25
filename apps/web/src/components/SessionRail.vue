@@ -19,6 +19,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { relativeTime } from "../lib/relative-time.ts";
 import { closeSession, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
@@ -82,7 +83,7 @@ async function signOut(): Promise<void> {
 </script>
 
 <template>
-  <aside class="flex h-full w-[300px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
+  <aside class="flex h-full w-[300px] shrink-0 flex-col bg-sidebar">
     <div class="flex items-center gap-2.5 px-4 pt-4.5">
       <RouterLink
         to="/"
@@ -155,7 +156,8 @@ async function signOut(): Promise<void> {
       </RouterLink>
     </nav>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+    <ScrollArea class="min-h-0 flex-1">
+      <div class="px-2 pb-2">
       <div class="flex h-9 items-center justify-between px-2.5">
         <p class="text-sm font-semibold text-foreground">Phiên</p>
         <Button
@@ -203,9 +205,10 @@ async function signOut(): Promise<void> {
         ở đây ngay khi bắt đầu.
       </p>
       <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">Đang đọc journal…</p>
-    </div>
+      </div>
+    </ScrollArea>
 
-    <footer class="border-t border-sidebar-border px-3 py-2.5">
+    <footer class="px-3 py-2.5">
       <div class="flex items-center gap-2.5">
         <span
           class="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary uppercase"

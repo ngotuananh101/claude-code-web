@@ -115,7 +115,7 @@ async function refreshNow(): Promise<void> {
   <section class="relative flex min-h-0 min-w-0 flex-1 flex-col">
     <template v-if="active">
       <header
-        class="z-10 flex items-baseline justify-between gap-4 border-b border-border px-7 pt-4 pb-3"
+        class="z-10 flex items-baseline justify-between gap-4 px-7 pt-4 pb-3"
       >
         <span class="truncate font-mono text-[13px]">{{ active.sessionId }}</span>
         <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">

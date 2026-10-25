@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { computed } from "vue";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -34,7 +35,8 @@ const emptyCopy = computed(() =>
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto pt-2.5 pr-7 pb-6">
+  <ScrollArea class="min-h-0 flex-1">
+    <div class="pt-2.5 pr-7 pb-6">
     <p
       v-if="needsResync"
       class="mt-4.5 ml-5 border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
@@ -70,5 +72,6 @@ const emptyCopy = computed(() =>
         </div>
       </div>
     </template>
-  </div>
+    </div>
+  </ScrollArea>
 </template>

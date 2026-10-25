@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 /**
  * The runners console (§6.1): the owner's connectors and the one-time token
@@ -94,7 +95,7 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto">
+  <ScrollArea class="min-h-0 flex-1">
     <div class="mx-auto w-full max-w-[720px] px-7 py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
         cc-web / runners
@@ -169,5 +170,5 @@ onMounted(() => void load());
         </div>
       </div>
     </div>
-  </div>
+  </ScrollArea>
 </template>
