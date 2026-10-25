@@ -157,10 +157,10 @@ async function signOut(): Promise<void> {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
       <div class="flex h-9 items-center justify-between px-2.5">
-        <p class="text-sm font-medium text-foreground">Phiên</p>
+        <p class="text-sm font-semibold text-foreground">Phiên</p>
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon-xs"
           aria-label="Tìm phiên"
           title="Tìm phiên (Ctrl+K)"
           @click="searchOpen = true"
