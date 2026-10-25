@@ -114,6 +114,9 @@ const emptyCopy = computed(() =>
             <template v-else-if="row.state === 'interrupted'">· bị dừng giữa chừng</template>
           </span>
           <pre
+            v-if="row.inputSummary"
+            class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-muted-foreground">{{ row.inputSummary }}</pre>
+          <pre
             v-if="row.outputSummary"
             class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-muted-foreground">{{ row.outputSummary }}</pre>
         </div>
