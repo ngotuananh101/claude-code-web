@@ -18,7 +18,7 @@
 
 import { Database } from "bun:sqlite";
 import { createSdkStream } from "@cc-web/agent-adapter";
-import { PROTOCOL_VERSION } from "@cc-web/protocol";
+import { PROTOCOL_VERSION, type DeclaredWorkspace } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { EventPump } from "./connection/event-pump.ts";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
@@ -26,6 +26,33 @@ import { dialWebSocket } from "./connection/websocket-link.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { RunController } from "./execution/run-controller.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
+
+/**
+ * The hello a runner sends after authentication (§6.2), built here so the
+ * composition and its shape are testable without a socket.
+ */
+export function helloFrame(input: {
+  runnerId: string;
+  runnerVersion: string;
+  sdkVersion: string;
+  bootId: string;
+  declaredWorkspaces?: DeclaredWorkspace[];
+}): Record<string, unknown> {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    runnerId: input.runnerId,
+    // Stable for the process lifetime: a reconnect from the same process is
+    // the same boot, and the server uses the generation, not this, to fence.
+    bootId: input.bootId,
+    runnerVersion: input.runnerVersion,
+    sdkVersion: input.sdkVersion,
+    platform: `${process.platform}/${process.arch}`,
+    maxConcurrentRuns: 1,
+    activeRuns: [],
+    eventOffsets: [],
+    workspaces: input.declaredWorkspaces ?? [],
+  };
+}
 
 export type DaemonOptions = {
   identityDir: string;
@@ -41,6 +68,12 @@ export type DaemonOptions = {
    * directory.
    */
   workspacePathFor?: (workspaceId: string) => string | undefined;
+  /**
+   * The workspaces this boot serves (§15.1), advertised in the hello and every
+   * reconcile. Derived from the same environment value as `workspacePathFor`,
+   * so what the runner advertises and what it resolves cannot disagree.
+   */
+  declaredWorkspaces?: DeclaredWorkspace[];
   /**
    * The SDK seam. Defaults to the real adapter; tests inject a fake so the whole
    * daemon runs without a model call.
@@ -112,20 +145,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         url: identity.controlUrl,
         credential: identity.credential,
       }),
-    hello: () => ({
-      protocolVersion: PROTOCOL_VERSION,
-      runnerId: identity.runnerId,
-      // Stable for the process lifetime: a reconnect from the same process is
-      // the same boot, and the server uses the generation, not this, to fence.
-      bootId: bootId(),
-      runnerVersion: options.runnerVersion,
-      sdkVersion: options.sdkVersion,
-      platform: `${process.platform}/${process.arch}`,
-      maxConcurrentRuns: 1,
-      activeRuns: [],
-      eventOffsets: [],
-    }),
+    hello: () =>
+      helloFrame({
+        runnerId: identity.runnerId,
+        runnerVersion: options.runnerVersion,
+        sdkVersion: options.sdkVersion,
+        bootId: bootId(),
+        ...(options.declaredWorkspaces === undefined
+          ? {}
+          : { declaredWorkspaces: options.declaredWorkspaces }),
+      }),
     inventory: options.inventory ?? (() => runs.inventory()),
+    ...(options.declaredWorkspaces === undefined
+      ? {}
+      : { workspaces: options.declaredWorkspaces }),
     sleep: (ms) => Bun.sleep(ms),
     onEvent: (event) => {
       // §12.2: on `ready` the backlog moves. Rows pending from before the

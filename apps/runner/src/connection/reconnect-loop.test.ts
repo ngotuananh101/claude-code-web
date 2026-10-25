@@ -51,6 +51,7 @@ function harness(
   options: {
     maxAttempts?: number;
     onEventsAcked?: (ack: { attemptId: string; through: number }) => void;
+    workspaces?: Array<{ workspaceId: string; path: string }>;
   } = {},
 ) {
   const links: FakeLink[] = [];
@@ -82,6 +83,7 @@ function harness(
       sleeps.push(ms);
     },
     onEvent: (event) => events.push(event),
+    ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
     ...(options.onEventsAcked === undefined ? {} : { onEventsAcked: options.onEventsAcked }),
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   });
@@ -531,5 +533,26 @@ describe("event frames", () => {
     await loop.settle();
     expect(loop.state).not.toBe("ready");
     expect(loop.sendFrame({ type: "events", events: [] })).toBe(false);
+  });
+});
+
+describe("declared workspaces on the wire", () => {
+  test("the reconcile frame carries the workspaces the loop was given", async () => {
+    const h = harness({ workspaces: [{ workspaceId: "default", path: "/srv/proj" }] });
+    await h.loop.start();
+
+    h.link.receive({ type: "hello.ok", generation: 1, connectionState: "connected" });
+    expect(h.link.sent[1]).toMatchObject({
+      type: "reconcile",
+      workspaces: [{ workspaceId: "default", path: "/srv/proj" }],
+    });
+  });
+
+  test("a loop with no workspaces option sends an empty declaration", async () => {
+    const h = harness();
+    await h.loop.start();
+
+    h.link.receive({ type: "hello.ok", generation: 1, connectionState: "connected" });
+    expect(h.link.sent[1]).toMatchObject({ type: "reconcile", workspaces: [] });
   });
 });

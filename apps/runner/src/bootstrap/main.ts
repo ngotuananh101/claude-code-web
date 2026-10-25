@@ -23,7 +23,7 @@ import {
   writeUnitAndEnable,
 } from "../service/systemd.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
-import { defaultWorkspaceResolver } from "../workspaces/workspaces.ts";
+import { declaredWorkspaces, defaultWorkspaceResolver } from "../workspaces/workspaces.ts";
 
 /**
  * The server origin baked in at compile time by the release workflow
@@ -108,14 +108,17 @@ function executablePath(): string {
 
 async function start(): Promise<void> {
   const dir = identityDir();
+  const defaultWorkspaceEnv = process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"];
 
   const daemon = await startDaemon({
     identityDir: dir,
     runnerVersion: "0.0.0",
     sdkVersion: "0.3.309",
     // §11.1 MVP: one directory named in the environment serves the default
-    // workspace until the registration surface exists.
-    workspacePathFor: defaultWorkspaceResolver(process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"]),
+    // workspace until the registration surface exists. The declaration and the
+    // resolver read the same value, so they cannot disagree (§15.1).
+    workspacePathFor: defaultWorkspaceResolver(defaultWorkspaceEnv),
+    declaredWorkspaces: declaredWorkspaces(defaultWorkspaceEnv),
     onEvent: (event) => {
       // Connection lifecycle only. Never log the credential, and never log
       // command payloads — they can contain prompt text (§19.4).

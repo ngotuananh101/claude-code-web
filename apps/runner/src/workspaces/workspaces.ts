@@ -8,6 +8,20 @@
  * into an `unknown_workspace` refusal rather than a guess.
  */
 
+import type { DeclaredWorkspace } from "@cc-web/protocol";
+
+/**
+ * The workspaces this runner serves, derived from `CC_WEB_RUNNER_DEFAULT_WORKSPACE`'s
+ * value — the same source `defaultWorkspaceResolver` reads, so what the runner
+ * advertises in its hello and what its resolver answers can never disagree.
+ * A blank value declares nothing.
+ */
+export function declaredWorkspaces(env: string | undefined): DeclaredWorkspace[] {
+  const path = env?.trim();
+  if (path === undefined || path === "") return [];
+  return [{ workspaceId: "default", path }];
+}
+
 /**
  * Build a resolver from `CC_WEB_RUNNER_DEFAULT_WORKSPACE`'s value. A blank
  * value disables the bridge entirely — an empty string is not a path anyone

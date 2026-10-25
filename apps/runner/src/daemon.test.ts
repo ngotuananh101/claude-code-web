@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
-import { type Daemon, startDaemon } from "./daemon.ts";
+import { helloFrame, type Daemon, startDaemon } from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { saveIdentity } from "./identity/identity-store.ts";
 
@@ -215,5 +215,32 @@ describe("boot recovery", () => {
     // nobody knows the state of.
     expect(attemptState(second.db, "attempt-old")).toBe("interrupted");
     expect(lockHolder(second.db, join(dir, "project"))).toBeUndefined();
+  });
+});
+
+describe("the hello frame", () => {
+  test("carries the workspaces the daemon declares", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+      declaredWorkspaces: [{ workspaceId: "default", path: "/srv/proj" }],
+    });
+    expect(frame).toMatchObject({
+      protocolVersion: 1,
+      runnerId: "runner-a",
+      workspaces: [{ workspaceId: "default", path: "/srv/proj" }],
+    });
+  });
+
+  test("an empty declaration is sent as an empty list, never omitted", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+    });
+    expect(frame["workspaces"]).toEqual([]);
   });
 });

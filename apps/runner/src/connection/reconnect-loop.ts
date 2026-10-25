@@ -77,6 +77,11 @@ export type ReconnectLoopOptions = {
   dial: () => Promise<Link>;
   hello: () => Record<string, unknown>;
   inventory: () => RunnerInventoryItem[];
+  /**
+   * The workspaces this boot serves (§15.1). They ride every reconcile so a
+   * declaration change takes effect on the next reconnect, not the next restart.
+   */
+  workspaces?: Array<{ workspaceId: string; path: string }>;
   sleep: (ms: number) => Promise<void>;
   onEvent: (event: LoopEvent) => void;
   /**
@@ -196,7 +201,13 @@ export class ReconnectLoop {
 
         // §14.3: reconciliation is what promotes `connected` to `ready`. It is
         // sent only now, because the server refuses it before negotiation.
-        this.#link?.send(JSON.stringify({ type: "reconcile", runner: this.#options.inventory() }));
+        this.#link?.send(
+          JSON.stringify({
+            type: "reconcile",
+            runner: this.#options.inventory(),
+            workspaces: this.#options.workspaces ?? [],
+          }),
+        );
         return;
       }
 
