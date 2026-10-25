@@ -94,9 +94,9 @@ describe("state lifecycle", () => {
     expect(pendingApproval(db, "apr-1")?.state).toBe("pending");
 
     finishApproval(db, { approvalId: "apr-1", state: "resolved", now: 2_000 });
-    const resolved = db
-      .prepare("SELECT DISTINCT state FROM pending_approvals")
-      .all() as Array<{ state: string }>;
+    const resolved = db.prepare("SELECT DISTINCT state FROM pending_approvals").all() as Array<{
+      state: string;
+    }>;
     expect(resolved.every((r) => ["pending", "resolved", "expired"].includes(r.state))).toBe(true);
   });
 });

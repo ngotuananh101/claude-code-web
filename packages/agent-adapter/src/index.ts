@@ -32,7 +32,9 @@ export type SdkStreamInput = {
     toolName: string,
     input: unknown,
     options: { signal: AbortSignal },
-  ) => Promise<{ behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string }>;
+  ) => Promise<
+    { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string }
+  >;
 };
 
 /**

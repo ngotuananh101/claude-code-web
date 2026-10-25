@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { finishApproval, migrateRunnerDb, pendingApproval } from "@cc-web/runner-db";
-import { ApprovalRouter, canonicalInputHash, type ApprovalOutcome } from "./approvals.ts";
+import { type ApprovalOutcome, ApprovalRouter, canonicalInputHash } from "./approvals.ts";
 import { summarizeToolInput } from "./redact.ts";
 
 /**
@@ -179,15 +179,20 @@ describe("respond — allow", () => {
     const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
-      h.router.respond({ approvalId, decision: "allow", answers: { "Q?": "A" }, inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", answers: { "Q?": "A" }, inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: true });
 
     const outcome = (await parked) as ApprovalOutcome;
     expect(outcome.behavior).toBe("allow");
-    expect((outcome as { updatedInput: { questions: unknown[]; answers: unknown } }).updatedInput).toEqual({
+    expect(
+      (outcome as { updatedInput: { questions: unknown[]; answers: unknown } }).updatedInput,
+    ).toEqual({
       questions: [{ question: "Q?", options: [{ label: "A" }, { label: "B" }] }],
       answers: { "Q?": "A" },
     });
@@ -202,10 +207,13 @@ describe("respond — strict parse and refusals", () => {
     const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
-      h.router.respond({ approvalId, decision: "true" as unknown as "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "true" as unknown as "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: true });
 
     const outcome = (await parked) as ApprovalOutcome;
@@ -234,10 +242,13 @@ describe("respond — strict parse and refusals", () => {
     const approvalId = String(h.events[0]!.payload.approvalId);
     const inputHash = String(h.events[0]!.payload.inputHash);
 
-    h.router.respond({ approvalId, decision: "deny", inputHash }, {
-      attemptId: "attempt-1",
-      runId: "run-1",
-    });
+    h.router.respond(
+      { approvalId, decision: "deny", inputHash },
+      {
+        attemptId: "attempt-1",
+        runId: "run-1",
+      },
+    );
 
     expect((await parked) as ApprovalOutcome).toEqual({
       behavior: "deny",
@@ -253,10 +264,13 @@ describe("respond — strict parse and refusals", () => {
     });
     const qId = String(h2.events[0]!.payload.approvalId);
     const qHash = String(h2.events[0]!.payload.inputHash);
-    h2.router.respond({ approvalId: qId, decision: "deny", inputHash: qHash }, {
-      attemptId: "attempt-1",
-      runId: "run-1",
-    });
+    h2.router.respond(
+      { approvalId: qId, decision: "deny", inputHash: qHash },
+      {
+        attemptId: "attempt-1",
+        runId: "run-1",
+      },
+    );
     expect((await parkedQuestion) as ApprovalOutcome).toEqual({
       behavior: "deny",
       message: "User did not answer the question",
@@ -270,39 +284,54 @@ describe("respond — strict parse and refusals", () => {
     const inputHash = String(h.events[0]!.payload.inputHash);
 
     expect(
-      h.router.respond({ approvalId, decision: "allow", inputHash: "wrong" }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash: "wrong" },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "hash_mismatch" });
     expect(
-      h.router.respond({ approvalId, decision: "allow", inputHash }, {
-        attemptId: "attempt-2",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash },
+        {
+          attemptId: "attempt-2",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "attempt_mismatch" });
     expect(
-      h.router.respond({ approvalId: "apr_missing", decision: "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId: "apr_missing", decision: "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "unknown" });
 
     expect(h.events.filter((e) => e.type === "approval.resolved")).toHaveLength(0);
     expect(pendingApproval(h.db, approvalId)?.state).toBe("pending");
 
     expect(
-      h.router.respond({ approvalId, decision: "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: true });
     await parked;
     expect(
-      h.router.respond({ approvalId, decision: "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "already_finished" });
   });
 
@@ -320,10 +349,13 @@ describe("respond — strict parse and refusals", () => {
     });
 
     expect(
-      late.respond({ approvalId, decision: "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      late.respond(
+        { approvalId, decision: "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "expired" });
   });
 });
@@ -393,16 +425,18 @@ describe("abandonAttempt", () => {
     // forgets it (a fresh router instance sees only the DB row).
     const other = new ApprovalRouter({
       db: h.db,
-      append: (type, payload) => h.events.push({ type, payload: payload as Record<string, unknown> }),
+      append: (type, payload) =>
+        h.events.push({ type, payload: payload as Record<string, unknown> }),
       now: () => 1_000,
       schedule: () => () => {},
     });
     other.abandonAttempt("attempt-1", "crashed");
 
     expect(pendingApproval(h.db, approvalId)?.state).toBe("expired");
-    expect(
-      h.events.find((e) => e.type === "approval.expired")!.payload,
-    ).toEqual({ approvalId, reason: "crashed" });
+    expect(h.events.find((e) => e.type === "approval.expired")!.payload).toEqual({
+      approvalId,
+      reason: "crashed",
+    });
   });
 });
 
@@ -415,10 +449,13 @@ describe("once-guard under races", () => {
 
     finishApproval(h.db, { approvalId, state: "expired", now: 7_000 });
     expect(
-      h.router.respond({ approvalId, decision: "allow", inputHash }, {
-        attemptId: "attempt-1",
-        runId: "run-1",
-      }),
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash },
+        {
+          attemptId: "attempt-1",
+          runId: "run-1",
+        },
+      ),
     ).toEqual({ ok: false, reason: "expired" });
 
     // The callback must still resolve — the sweep owns its terminal now.

@@ -23,7 +23,7 @@ import {
   releaseAttempt,
   sdkSessionIdForSession,
 } from "@cc-web/runner-db";
-import { ApprovalRouter, type ApprovalOutcome } from "./approvals.ts";
+import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 
 /** The SDK seam: given options, returns the message stream (§10.2). */
@@ -70,10 +70,7 @@ export type ExecuteOptions = {
    * tests of non-approval paths omit it, and the production controller always
    * provides one.
    */
-  router?: (
-    append: (type: string, payload: unknown) => void,
-    attemptId: string,
-  ) => ApprovalRouter;
+  router?: (append: (type: string, payload: unknown) => void, attemptId: string) => ApprovalRouter;
   /** Called after every `approval.*` append: a suspended run never settles,
    * so the pump must be flushed by the gate itself, not by onSettled. */
   onApprovalEvent?: () => void;

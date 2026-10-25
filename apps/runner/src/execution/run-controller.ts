@@ -21,10 +21,10 @@ import {
   recoverStaleAttempts,
   releaseAttempt,
 } from "@cc-web/runner-db";
+import type { RunnerInventoryItem } from "../connection/reconnect-loop.ts";
 import { ApprovalRouter } from "./approvals.ts";
 import { asCommandEnvelope, commandIdOf } from "./envelope.ts";
 import { executeRun, type SdkStream } from "./executor.ts";
-import type { RunnerInventoryItem } from "../connection/reconnect-loop.ts";
 
 export type CommandReceipt = {
   commandId: string;
@@ -163,16 +163,14 @@ export class RunController {
     // the command was delivered and persisted; what failed is the decision.
     if (parsed.kind === "approval.respond") {
       const payload = (parsed.payload ?? {}) as Record<string, unknown>;
-      const approvalId =
-        typeof payload["approvalId"] === "string" ? payload["approvalId"] : "";
+      const approvalId = typeof payload["approvalId"] === "string" ? payload["approvalId"] : "";
       const row = pendingApproval(this.#db, approvalId);
       const attemptId =
         typeof parsed.attemptId === "string" && parsed.attemptId !== ""
           ? parsed.attemptId
           : (row?.attemptId ?? "");
       const router =
-        this.#routers.get(attemptId) ??
-        new ApprovalRouter({ db: this.#db, append: () => {} });
+        this.#routers.get(attemptId) ?? new ApprovalRouter({ db: this.#db, append: () => {} });
       const result = router.respond(
         {
           approvalId,
@@ -182,7 +180,9 @@ export class RunController {
         },
         { attemptId, runId: parsed.runId ?? "" },
       );
-      return result.ok ? receipt(parsed, true) : { ...receipt(parsed, true), reason: result.reason };
+      return result.ok
+        ? receipt(parsed, true)
+        : { ...receipt(parsed, true), reason: result.reason };
     }
 
     const attemptId = parsed.attemptId ?? parsed.commandId;

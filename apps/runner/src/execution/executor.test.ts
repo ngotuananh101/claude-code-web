@@ -7,8 +7,8 @@ import {
   lockHolder,
   migrateRunnerDb,
 } from "@cc-web/runner-db";
-import { executeRun, type SdkOptions, type SdkStream } from "./executor.ts";
 import { ApprovalRouter } from "./approvals.ts";
+import { executeRun, type SdkOptions, type SdkStream } from "./executor.ts";
 
 /**
  * Running one attempt (§10.1, §12.2).
@@ -916,10 +916,14 @@ describe("the permission mode", () => {
       })();
     };
 
-    await executeRun(db, { ...COMMAND, payload: { prompt: "hello", permissionMode: "bypassPermissions" } }, {
-      workspacePath: WORKSPACES.get("workspace-1")!,
-      sdk,
-    });
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", permissionMode: "bypassPermissions" } },
+      {
+        workspacePath: WORKSPACES.get("workspace-1")!,
+        sdk,
+      },
+    );
 
     expect(captured?.permissionMode).toBe("bypassPermissions");
   });
@@ -961,16 +965,20 @@ describe("the approval gate", () => {
     const flushed: number[] = [];
     const sdk: SdkStream = (options) =>
       (async function* () {
-        await options.canUseTool!("Bash", { command: "ls" }, {
-          signal: new AbortController().signal,
-        });
+        await options.canUseTool!(
+          "Bash",
+          { command: "ls" },
+          {
+            signal: new AbortController().signal,
+          },
+        );
         yield { type: "result", subtype: "success", result: "ok" };
       })();
 
     const run = executeRun(db, COMMAND, {
       workspacePath: WORKSPACES.get("workspace-1")!,
       sdk,
-      router: (append, attemptId) => {
+      router: (append) => {
         router = new ApprovalRouter({ db, append });
         return router;
       },
@@ -1018,9 +1026,13 @@ describe("the approval gate", () => {
     let router: ApprovalRouter | undefined;
     const sdk: SdkStream = (options) =>
       (async function* () {
-        await options.canUseTool!("AskUserQuestion", { questions: [{ question: "Q?" }] }, {
-          signal: new AbortController().signal,
-        });
+        await options.canUseTool!(
+          "AskUserQuestion",
+          { questions: [{ question: "Q?" }] },
+          {
+            signal: new AbortController().signal,
+          },
+        );
         yield { type: "result", subtype: "success", result: "ok" };
       })();
 

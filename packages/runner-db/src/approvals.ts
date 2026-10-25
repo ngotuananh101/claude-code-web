@@ -70,18 +70,16 @@ export function pendingApproval(db: Database, approvalId: string): PendingApprov
               kind, expires_at, state
        FROM pending_approvals WHERE approval_id = ?`,
     )
-    .get(approvalId) as
-    | {
-        approval_id: string;
-        attempt_id: string;
-        tool_call_id: string;
-        input_hash: string;
-        callback_generation: string;
-        kind: string;
-        expires_at: number;
-        state: string;
-      }
-    | null;
+    .get(approvalId) as {
+    approval_id: string;
+    attempt_id: string;
+    tool_call_id: string;
+    input_hash: string;
+    callback_generation: string;
+    kind: string;
+    expires_at: number;
+    state: string;
+  } | null;
   if (row === null) return undefined;
 
   return {
