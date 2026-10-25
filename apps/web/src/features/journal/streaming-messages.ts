@@ -9,7 +9,9 @@ import type { BrowserReplayEvent } from "@cc-web/protocol";
  * SDK message id, placed inline at the position of the message's last delta
  * and closed by the `message.completed` that carries the same id. Tool calls
  * pair the same way: `tool.started` and `tool.completed` collapse into one row
- * per call id that settles when the tool returns. A run terminal that arrives
+ * per call id that settles when the tool returns, and the row carries the
+ * call's input as a capped JSON summary read from the completed message's
+ * `tool_use` block. A run terminal that arrives
  * mid-stream leaves the partial text and the in-flight tool as interrupted
  * rows: the run's outcome is real, and so is the work that preceded it.
  *
@@ -35,6 +37,7 @@ export type JournalRow =
       toolCallId: string;
       toolName: string | null;
       state: "running" | "done" | "error" | "interrupted";
+      inputSummary: string | null;
       outputSummary: string | null;
       lastSequence: number;
     };
@@ -50,11 +53,15 @@ type ToolEntry = {
   toolCallId: string;
   toolName: string | null;
   state: "running" | "done" | "error" | "interrupted";
+  inputSummary: string | null;
   outputSummary: string | null;
   lastSequence: number;
 };
 
 const RUN_TERMINALS = new Set(["run.finished", "run.failed", "run.interrupted"]);
+
+/** Input JSON longer than this is sliced and marked with an ellipsis. */
+const INPUT_SUMMARY_MAX = 240;
 
 /** Payload readers that refuse anything but the documented shapes (§12.4). */
 function messageIdOf(payload: unknown): string | undefined {
@@ -82,6 +89,34 @@ function completedMessageIdOf(payload: unknown): string | undefined {
   return typeof direct === "string" && direct !== "" ? direct : undefined;
 }
 
+/**
+ * Input summaries keyed by tool call id, read from the `tool_use` blocks of a
+ * completed message. The block id is the same id the raw stream announced in
+ * `tool.started`, which is what lets the summary attach to its row even when
+ * the complete frame precedes the raw start.
+ */
+function toolInputSummariesOf(payload: unknown, into: Map<string, string>): void {
+  const message = (payload as Record<string, unknown> | null)?.["message"];
+  if (typeof message !== "object" || message === null) return;
+  const content = (message as Record<string, unknown>)["content"];
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const record = block as Record<string, unknown>;
+    if (record["type"] !== "tool_use") continue;
+    const id = record["id"];
+    if (typeof id !== "string" || id === "") continue;
+    if (record["input"] === undefined) continue;
+    let json: string;
+    try {
+      json = JSON.stringify(record["input"]);
+    } catch {
+      continue;
+    }
+    into.set(id, json.length > INPUT_SUMMARY_MAX ? `${json.slice(0, INPUT_SUMMARY_MAX)}…` : json);
+  }
+}
+
 export function deriveJournalRows(events: readonly BrowserReplayEvent[]): JournalRow[] {
   // Visible rows in emit order, each tagged with the sequence of the event
   // that produced it. A run header carries its trigger event's sequence, not
@@ -91,6 +126,7 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
   const open = new Map<string, StreamEntry>();
   const completed = new Set<string>();
   const tools = new Map<string, ToolEntry>();
+  const toolInputs = new Map<string, string>();
   let lastRun: string | null = null;
 
   for (const event of events) {
@@ -144,6 +180,7 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
           toolCallId: id,
           toolName: typeof name === "string" && name !== "" ? name : null,
           state: "running",
+          inputSummary: null,
           outputSummary: null,
           lastSequence: event.sessionSequence,
         });
@@ -166,6 +203,7 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
         toolCallId: id,
         toolName: null,
         state: "running" as const,
+        inputSummary: null,
         outputSummary: null,
         lastSequence: event.sessionSequence,
       };
@@ -182,6 +220,7 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
         open.delete(id);
         completed.add(id);
       }
+      toolInputSummariesOf(event.payload, toolInputs);
       pending.push({ row: { kind: "event", event }, sequence: event.sessionSequence });
       continue;
     }
@@ -196,6 +235,14 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
     }
 
     pending.push({ row: { kind: "event", event }, sequence: event.sessionSequence });
+  }
+
+  // Attach the collected input summaries in one final pass: attachment never
+  // moves a row (lastSequence is untouched), so it cannot depend on the order
+  // the complete frames arrived relative to the raw tool events.
+  for (const [id, summary] of toolInputs) {
+    const entry = tools.get(id);
+    if (entry !== undefined) entry.inputSummary = summary;
   }
 
   // Streaming and tool entries sit inline at the position of their last
@@ -249,6 +296,7 @@ function toolRow(entry: ToolEntry): JournalRow {
     toolCallId: entry.toolCallId,
     toolName: entry.toolName,
     state: entry.state,
+    inputSummary: entry.inputSummary,
     outputSummary: entry.outputSummary,
     lastSequence: entry.lastSequence,
   };

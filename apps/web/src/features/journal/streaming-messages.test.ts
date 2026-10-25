@@ -28,6 +28,15 @@ function toolRows(rows: ReturnType<typeof deriveJournalRows>) {
   return rows.filter((row) => row.kind === "tool");
 }
 
+/** A `message.completed` payload in the executor's redacted SDKAssistantMessage shape. */
+function completedWith(content: unknown[]): BrowserReplayEvent {
+  return event("message.completed", {
+    type: "assistant",
+    message: { id: "msg_1", content, model: "m" },
+    parent_tool_use_id: null,
+  });
+}
+
 describe("deriveJournalRows", () => {
   test("run headers appear when the run changes", () => {
     reset();
@@ -219,6 +228,7 @@ describe("deriveJournalRows", () => {
         toolName: "Bash",
         state: "done",
         outputSummary: "hi",
+        inputSummary: null,
         lastSequence: 2,
       },
     ]);
@@ -238,6 +248,7 @@ describe("deriveJournalRows", () => {
         toolName: "Bash",
         state: "running",
         outputSummary: null,
+        inputSummary: null,
         lastSequence: 1,
       },
     ]);
@@ -274,6 +285,7 @@ describe("deriveJournalRows", () => {
         toolName: null,
         state: "done",
         outputSummary: null,
+        inputSummary: null,
         lastSequence: 1,
       },
     ]);
@@ -296,9 +308,77 @@ describe("deriveJournalRows", () => {
         toolName: "Bash",
         state: "done",
         outputSummary: "hi",
+        inputSummary: null,
         lastSequence: 1,
       },
     ]);
+  });
+
+  test("a tool_use in a completed message attaches its input to the tool row", () => {
+    // The summary attaches without disturbing the row: state stays running and
+    // lastSequence stays at the tool's own last event, not the message's.
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "ls" } }]),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({
+      state: "running",
+      inputSummary: '{"command":"ls"}',
+      lastSequence: 1,
+    });
+  });
+
+  test("the input summary lands even when the completed message precedes the raw start", () => {
+    // The complete-before-raw SDK ordering quirk: the message carrying the
+    // tool_use arrives before tool.started. The final attachment pass makes the
+    // summary order-independent.
+    reset();
+    const rows = deriveJournalRows([
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "ls" } }]),
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: false }),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({ inputSummary: '{"command":"ls"}', lastSequence: 3 });
+  });
+
+  test("an oversized input is capped at 240 characters plus an ellipsis", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([
+        { type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "x".repeat(300) } },
+      ]),
+    ]);
+    const summary = toolRows(rows)[0]?.inputSummary;
+    expect(summary).toHaveLength(241);
+    expect(summary?.endsWith("…")).toBe(true);
+  });
+
+  test("a tool_use without a usable input leaves the summary null", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash" }]),
+      event("tool.started", { toolCallId: "toolu-2", toolName: "Read" }),
+      completedWith([{ type: "tool_use", id: "toolu-2", name: "Read", input: undefined }]),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe(null);
+    expect(toolRows(rows)[1]?.inputSummary).toBe(null);
+  });
+
+  test("tool_use blocks without a usable id are skipped", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([
+        { type: "tool_use", name: "NoId", input: { a: 1 } },
+        { type: "tool_use", id: "", name: "Empty", input: { a: 1 } },
+        { type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "ls" } },
+        { type: "text", text: "hi" },
+      ]),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe('{"command":"ls"}');
   });
 
   test("malformed tool payloads are ignored", () => {
