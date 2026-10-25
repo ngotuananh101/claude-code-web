@@ -43,6 +43,21 @@ function messageIdOf(payload: unknown): string | undefined {
   return typeof id === "string" && id !== "" ? id : undefined;
 }
 
+/**
+ * The completed event persists the redacted SDKAssistantMessage, which has no
+ * top-level id — the message id lives at `message.id`. The direct `id` read is
+ * a fallback for journal rows written before this shape was pinned, not the
+ * primary: reading it first would strand real runs' streaming entries open.
+ */
+function completedMessageIdOf(payload: unknown): string | undefined {
+  const record = payload as Record<string, unknown> | null;
+  if (record === null || typeof record !== "object") return undefined;
+  const nested = (record["message"] as Record<string, unknown> | null)?.["id"];
+  if (typeof nested === "string" && nested !== "") return nested;
+  const direct = record["id"];
+  return typeof direct === "string" && direct !== "" ? direct : undefined;
+}
+
 export function deriveJournalRows(events: readonly BrowserReplayEvent[]): JournalRow[] {
   const rows: JournalRow[] = [];
   const open = new Map<string, StreamEntry>();
@@ -88,8 +103,8 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
     }
 
     if (event.type === "message.completed") {
-      const id = (event.payload as Record<string, unknown> | null)?.["id"];
-      if (typeof id === "string") {
+      const id = completedMessageIdOf(event.payload);
+      if (id !== undefined) {
         open.delete(id);
         completed.add(id);
       }

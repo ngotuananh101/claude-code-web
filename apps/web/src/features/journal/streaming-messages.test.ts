@@ -49,6 +49,30 @@ describe("deriveJournalRows", () => {
     ).toEqual(["message.completed"]);
   });
 
+  test("the executor's real completed shape (redacted SDKAssistantMessage) closes the entry", () => {
+    // The executor persists redactSdkMessage(assistantFrame): the id lives at
+    // payload.message.id, not payload.id (SDKAssistantMessage has no top-level
+    // id). A completed payload shaped any other way must not strand the open
+    // streaming entry as a forever-"interrupted" duplicate.
+    reset();
+    const rows = deriveJournalRows([
+      event("message.started", { messageId: "msg_1" }),
+      event("message.delta", { messageId: "msg_1", text: "Hel" }),
+      event("message.delta", { messageId: "msg_1", text: "lo" }),
+      event("message.completed", {
+        type: "assistant",
+        message: { id: "msg_1", content: [{ type: "text", text: "Hello" }], model: "m" },
+        parent_tool_use_id: null,
+      }),
+    ]);
+    expect(streamingRows(rows)).toEqual([]);
+    expect(
+      rows
+        .filter((row) => row.kind === "event")
+        .map((row) => (row as { event: BrowserReplayEvent }).event.type),
+    ).toEqual(["message.completed"]);
+  });
+
   test("open deltas render one streaming row inline with accumulated text", () => {
     reset();
     const rows = deriveJournalRows([

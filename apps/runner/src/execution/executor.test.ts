@@ -174,6 +174,83 @@ describe("a clean run", () => {
     expect(types.filter((t) => t === "run.status")).toHaveLength(0);
     expect(types).toEqual(["run.started", "session.updated", "message.completed", "run.finished"]);
   });
+
+  test("the streaming contract: delta ids and the completed payload name the same message", async () => {
+    // §12.3/§12.4 seam, pinned end to end: the normalizer derives messageId
+    // from message_start, and the executor persists the redacted assistant
+    // frame whose id sits at payload.message.id. If these drift apart, the
+    // browser's derivation never closes the streaming entry on real runs —
+    // the fixture-shaped tests on either side would both still pass.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        yield {
+          type: "stream_event",
+          event: { type: "message_start", message: { id: "msg_X" } },
+          session_id: "sdk-1",
+        };
+        yield {
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "Hel" },
+          },
+          session_id: "sdk-1",
+        };
+        yield {
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "lo" },
+          },
+          session_id: "sdk-1",
+        };
+        yield {
+          type: "assistant",
+          message: { id: "msg_X", content: [{ type: "text", text: "Hello" }] },
+        };
+        yield { type: "result", subtype: "success", result: "Hello" };
+      })();
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "session.updated",
+      "message.started",
+      "message.delta",
+      "message.delta",
+      "message.completed",
+      "run.finished",
+    ]);
+
+    const started = JSON.parse(list[2]!.payload) as { messageId?: string };
+    expect(started.messageId).toBe("msg_X");
+    for (const delta of [list[3]!, list[4]!]) {
+      const payload = JSON.parse(delta.payload) as { messageId?: string; text?: string };
+      expect(payload.messageId).toBe("msg_X");
+      expect(typeof payload.text).toBe("string");
+    }
+    const completed = JSON.parse(list[5]!.payload) as {
+      message?: { id?: string };
+      id?: string;
+    };
+    // The correlation the browser derivation depends on: the completed
+    // frame's id equals the messageId the started/delta events carried.
+    expect(completed.message?.id).toBe("msg_X");
+    expect(completed.id).toBeUndefined();
+  });
 });
 
 describe("a failing run", () => {
