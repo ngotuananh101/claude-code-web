@@ -312,6 +312,33 @@ try {
       : (terminal?.type ?? "no terminal event"),
   );
 
+  // --- live streaming (§12.3): a run that reached the model streams the
+  // normalized frames — message.started plus at least one text fragment.
+  // A credential-shaped failure never gets there, so the assertions gate on it.
+  const finished = terminal?.type === "run.finished";
+  const startedRows = events.filter((e) => e.type === "message.started");
+  const deltaRows = events.filter((e) => e.type === "message.delta");
+  const deltasWellFormed =
+    deltaRows.length > 0 &&
+    deltaRows.every((e) => {
+      const payload = JSON.parse(e.payload) as { messageId?: unknown; text?: unknown };
+      return (
+        typeof payload.messageId === "string" &&
+        payload.messageId !== "" &&
+        typeof payload.text === "string"
+      );
+    });
+  check(
+    "a finished run streams message.started",
+    !finished || startedRows.length > 0,
+    `message.started rows: ${startedRows.length}`,
+  );
+  check(
+    "a finished run streams well-formed message.delta fragments",
+    !finished || deltasWellFormed,
+    `message.delta rows: ${deltaRows.length}`,
+  );
+
   // --- 6. the attempt settles and the workspace lock is released ---
   const lockDeadline = Date.now() + 10_000;
   let locked = 1;
