@@ -842,6 +842,54 @@ describe("approvals", () => {
     await controller.settle();
   });
 
+  test("a respond for an attempt with no registered router is refused without touching the row", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    // The race the old fallback papered over: the run settled and its router
+    // is gone, but its pending row has not been swept yet. A redelivered
+    // approval.respond must not resolve the row through a mute append — the
+    // decision would be recorded with no approval.resolved ever shipping.
+    insertPendingApproval(db, {
+      approvalId: "apr-late",
+      attemptId: "attempt-late",
+      toolCallId: "tc-late",
+      inputHash: "hash-late",
+      callbackGeneration: 0,
+      kind: "tool_permission",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const receipt = await controller.handle({
+      protocolVersion: 1,
+      commandId: "cmd-late",
+      runnerId: "runner-a",
+      kind: "approval.respond",
+      issuedAt: "2026-10-23T00:00:01.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-late",
+      payload: { approvalId: "apr-late", decision: "allow", inputHash: "hash-late" },
+    });
+
+    // Accepted — delivered and persisted; the refusal is the decision's (§9.4).
+    expect(receipt).toEqual({
+      commandId: "cmd-late",
+      attemptId: "attempt-late",
+      accepted: true,
+      reason: "unknown",
+    });
+    expect(pendingApproval(db, "apr-late")?.state).toBe("pending");
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM event_outbox WHERE type LIKE 'approval.%'").get(),
+    ).toEqual({ n: 0 });
+  });
+
   test("boot sweep expires approvals of dead attempts in place, without events", () => {
     const { db } = setup();
     insertPendingApproval(db, {

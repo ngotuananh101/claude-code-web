@@ -169,8 +169,14 @@ export class RunController {
         typeof parsed.attemptId === "string" && parsed.attemptId !== ""
           ? parsed.attemptId
           : (row?.attemptId ?? "");
-      const router =
-        this.#routers.get(attemptId) ?? new ApprovalRouter({ db: this.#db, append: () => {} });
+      // No router means no live gate: the run settled or the process restarted.
+      // Resolving the row here — through a mute append — would flip it without
+      // ever emitting approval.resolved, an audit trail nothing honors. Refuse
+      // instead; the attempt's own sweep closes the row with its real terminal.
+      const router = this.#routers.get(attemptId);
+      if (router === undefined) {
+        return { ...receipt(parsed, true), reason: "unknown" };
+      }
       const result = router.respond(
         {
           approvalId,
