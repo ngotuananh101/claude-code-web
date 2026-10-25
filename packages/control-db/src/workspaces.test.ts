@@ -42,7 +42,9 @@ describe("upsertRunnerWorkspaces", () => {
     ]);
 
     const rows = db
-      .prepare("SELECT workspace_id, path FROM workspaces WHERE runner_id = 'runner-a' ORDER BY workspace_id")
+      .prepare(
+        "SELECT workspace_id, path FROM workspaces WHERE runner_id = 'runner-a' ORDER BY workspace_id",
+      )
       .all() as Array<{ workspace_id: string; path: string }>;
     expect(rows).toEqual([
       { workspace_id: "default", path: "/srv/proj" },
@@ -82,7 +84,11 @@ describe("upsertRunnerWorkspaces", () => {
     upsertRunnerWorkspaces(db, "runner-a", []);
 
     expect(
-      (db.query("SELECT COUNT(*) AS n FROM workspaces WHERE runner_id = 'runner-b'").get() as { n: number }).n,
+      (
+        db.query("SELECT COUNT(*) AS n FROM workspaces WHERE runner_id = 'runner-b'").get() as {
+          n: number;
+        }
+      ).n,
     ).toBe(1);
   });
 });
@@ -96,8 +102,18 @@ describe("workspacesForOwner", () => {
 
     const workspaces = workspacesForOwner(db, "owner-1");
     expect(workspaces).toEqual([
-      { workspaceId: "default", runnerId: "runner-a", path: "/srv/proj", createdAt: expect.any(Number) },
-      { workspaceId: "w-2", runnerId: "runner-b", path: "/srv/other", createdAt: expect.any(Number) },
+      {
+        workspaceId: "default",
+        runnerId: "runner-a",
+        path: "/srv/proj",
+        createdAt: expect.any(Number),
+      },
+      {
+        workspaceId: "w-2",
+        runnerId: "runner-b",
+        path: "/srv/other",
+        createdAt: expect.any(Number),
+      },
     ]);
   });
 

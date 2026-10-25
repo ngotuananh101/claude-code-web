@@ -18,7 +18,7 @@
 
 import { Database } from "bun:sqlite";
 import { createSdkStream } from "@cc-web/agent-adapter";
-import { PROTOCOL_VERSION, type DeclaredWorkspace } from "@cc-web/protocol";
+import { type DeclaredWorkspace, PROTOCOL_VERSION } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { EventPump } from "./connection/event-pump.ts";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
@@ -156,9 +156,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           : { declaredWorkspaces: options.declaredWorkspaces }),
       }),
     inventory: options.inventory ?? (() => runs.inventory()),
-    ...(options.declaredWorkspaces === undefined
-      ? {}
-      : { workspaces: options.declaredWorkspaces }),
+    ...(options.declaredWorkspaces === undefined ? {} : { workspaces: options.declaredWorkspaces }),
     sleep: (ms) => Bun.sleep(ms),
     onEvent: (event) => {
       // §12.2: on `ready` the backlog moves. Rows pending from before the

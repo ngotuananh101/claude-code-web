@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
-import { helloFrame, type Daemon, startDaemon } from "./daemon.ts";
+import { type Daemon, helloFrame, startDaemon } from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { saveIdentity } from "./identity/identity-store.ts";
 

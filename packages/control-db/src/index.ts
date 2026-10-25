@@ -6,13 +6,6 @@
  */
 
 export {
-  type DeclaredWorkspaceRow,
-  type OwnerWorkspace,
-  upsertRunnerWorkspaces,
-  workspacesForOwner,
-} from "./workspaces.ts";
-
-export {
   type ApprovalKind,
   type ApprovalRecord,
   approvalForSession,
@@ -72,3 +65,9 @@ export {
   type UsageTotals,
   usageStats,
 } from "./stats.ts";
+export {
+  type DeclaredWorkspaceRow,
+  type OwnerWorkspace,
+  upsertRunnerWorkspaces,
+  workspacesForOwner,
+} from "./workspaces.ts";

@@ -39,8 +39,8 @@ import { handleMe } from "./routes/me-routes.ts";
 import { handleCreateRunner, handleListRunners } from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
 import { handleListSessions } from "./routes/sessions-routes.ts";
-import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
 import { handleUsageStats } from "./routes/stats-routes.ts";
+import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
 import {
   BrowserGateway,
   type BrowserSocketData,

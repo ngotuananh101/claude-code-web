@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { CommandOutbox } from "./command-outbox.ts";
+import type { CommandOutbox } from "./command-outbox.ts";
 
 /**
  * The approvals projection (§13).

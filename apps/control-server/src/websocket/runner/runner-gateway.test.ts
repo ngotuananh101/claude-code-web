@@ -201,7 +201,13 @@ describe("runner gateway", () => {
       JSON.stringify({
         type: "reconcile",
         runner: [
-          { runId: "run-1", attemptId: "attempt-1", state: "running", processAlive: true, approvalsAlive: false },
+          {
+            runId: "run-1",
+            attemptId: "attempt-1",
+            state: "running",
+            processAlive: true,
+            approvalsAlive: false,
+          },
         ],
       }),
     );

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type RunState,
   parseDeclaredWorkspaces,
+  type RunState,
   reconcile,
   type ServerRunState,
 } from "./reconcile.ts";

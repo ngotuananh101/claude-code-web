@@ -87,15 +87,15 @@ describe("hello negotiation", () => {
       ok: false,
       reason: "malformed",
     });
-    expect(negotiateHello(hello({ workspaces: [{ workspaceId: "default" }] }), policy)).toMatchObject(
-      { ok: false, reason: "malformed" },
-    );
+    expect(
+      negotiateHello(hello({ workspaces: [{ workspaceId: "default" }] }), policy),
+    ).toMatchObject({ ok: false, reason: "malformed" });
     expect(
       negotiateHello(hello({ workspaces: [{ workspaceId: "", path: "/srv/proj" }] }), policy),
     ).toMatchObject({ ok: false, reason: "malformed" });
-    expect(negotiateHello(hello({ workspaces: [{ workspaceId: "w", path: 42 }] }), policy)).toMatchObject(
-      { ok: false, reason: "malformed" },
-    );
+    expect(
+      negotiateHello(hello({ workspaces: [{ workspaceId: "w", path: 42 }] }), policy),
+    ).toMatchObject({ ok: false, reason: "malformed" });
   });
 
   test("rejects a hello carrying provider secrets or raw environment", () => {
