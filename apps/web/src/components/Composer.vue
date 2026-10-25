@@ -201,6 +201,10 @@ async function send(): Promise<void> {
     toast.error("Phiên đang có run — hãy đợi run hiện tại kết thúc.");
     return;
   }
+  if (result.reason === "session_pinned") {
+    toast.error("Phiên này đã ghim runner/workspace khác — không thể đổi giữa chừng.");
+    return;
+  }
   if (result.reason === "runner_unavailable") {
     toast.error("Chưa có runner sẵn sàng nhận run — kiểm tra trang runners.");
     return;

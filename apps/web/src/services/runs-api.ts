@@ -11,7 +11,7 @@ export type StartRunResult =
   | { ok: true; runId: string; attemptId: string; sessionId: string }
   | {
       ok: false;
-      reason: "unauthorized" | "session_busy" | "runner_unavailable" | "error";
+      reason: "unauthorized" | "session_busy" | "session_pinned" | "runner_unavailable" | "error";
     };
 
 /**
@@ -45,7 +45,12 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
   }
 
   if (response.status === 401) return { ok: false, reason: "unauthorized" };
-  if (response.status === 409) return { ok: false, reason: "session_busy" };
+  if (response.status === 409) {
+    // The route names the contradiction in the body: waiting for the active
+    // run and "the session cannot move" are different messages to the operator.
+    const pinned = (await response.text()).trim() === "session_pinned";
+    return { ok: false, reason: pinned ? "session_pinned" : "session_busy" };
+  }
   if (response.status === 503) return { ok: false, reason: "runner_unavailable" };
   if (!response.ok) return { ok: false, reason: "error" };
 

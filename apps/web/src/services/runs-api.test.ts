@@ -98,6 +98,15 @@ describe("startRun", () => {
     expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "session_busy" });
   });
 
+  test("a 409 body session_pinned keeps its own outcome", async () => {
+    // The route answers a pin contradiction with a bare text body, not JSON —
+    // the mapping reads the body, because the two refusals mean different
+    // things to the operator (wait vs. the session cannot move).
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("session_pinned", { status: 409 })) as typeof fetch;
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "session_pinned" });
+  });
+
   test("503 collapses to runner_unavailable", async () => {
     capture(503, "runner_offline");
     expect(await startRun("s", { prompt: "p" })).toEqual({
