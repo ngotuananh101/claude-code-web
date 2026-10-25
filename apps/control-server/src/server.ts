@@ -26,6 +26,7 @@ import {
   sessionEarliest,
   sessionOwner,
   sessionWatermark,
+  upsertRunnerWorkspaces,
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION, RunRegistry } from "@cc-web/protocol";
 import type { Server } from "bun";
@@ -147,6 +148,12 @@ export function createServer(options: ServerOptions): ServerHandle {
     // runner's gate is gone.
     onAbandonApproval: (_runnerId, action) => {
       expirePendingApprovalsForAttempt(options.db, action.attemptId);
+    },
+    // §15.1: the runner's hello/reconcile declaration replaces its rows — the
+    // registration path §11.1 defers to, so the composer can list real
+    // workspaces without a separate registration API.
+    onWorkspaces: (runnerId, workspaces) => {
+      upsertRunnerWorkspaces(options.db, runnerId, workspaces);
     },
     // §12.1, §12.2: journal every event before any ACK is written, and let the
     // ACK carry only the contiguous watermark the journal can vouch for. A resend

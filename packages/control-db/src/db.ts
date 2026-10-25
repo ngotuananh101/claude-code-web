@@ -220,6 +220,20 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS approvals_session
       ON approvals (session_id);
   `);
+
+  // What each runner currently serves (§15.1). The runner is the registration
+  // authority: rows are a declarative replace per runner on every hello and
+  // reconcile, so a boot that stops declaring a workspace loses its row —
+  // placement can never pick a workspace the current boot does not vouch for.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      runner_id     TEXT NOT NULL REFERENCES runners (id),
+      workspace_id  TEXT NOT NULL,
+      path          TEXT NOT NULL,
+      registered_at INTEGER NOT NULL,
+      PRIMARY KEY (runner_id, workspace_id)
+    );
+  `);
 }
 
 /**

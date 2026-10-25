@@ -19,8 +19,10 @@
 
 import {
   ConnectionRegistry,
+  type DeclaredWorkspace,
   EVENT_TYPES,
   negotiateHello,
+  parseDeclaredWorkspaces,
   PROTOCOL_VERSION,
   type RunnerCommand,
   type RunnerEvent,
@@ -123,6 +125,12 @@ type GatewayOptions = {
    * knows nothing about a database.
    */
   onAbandonApproval?: (runnerId: string, action: { runId: string; attemptId: string }) => void;
+  /**
+   * Called with the workspaces a runner declares (§15.1) on every successful
+   * hello and reconcile. The projection replaces the runner's rows wholesale,
+   * so a boot that stops declaring a workspace loses its row.
+   */
+  onWorkspaces?: (runnerId: string, workspaces: DeclaredWorkspace[]) => void;
 };
 
 /** What a successful authorization hands to the socket that carries it. */
@@ -152,6 +160,7 @@ export class RunnerGateway {
   readonly #onAbandonApproval:
     | ((runnerId: string, action: { runId: string; attemptId: string }) => void)
     | undefined;
+  readonly #onWorkspaces: ((runnerId: string, workspaces: DeclaredWorkspace[]) => void) | undefined;
   readonly #live = new Map<string, Connection>();
 
   constructor(options: GatewayOptions) {
@@ -163,6 +172,7 @@ export class RunnerGateway {
     this.#onReceipt = options.onReceipt;
     this.#onEvents = options.onEvents;
     this.#onAbandonApproval = options.onAbandonApproval;
+    this.#onWorkspaces = options.onWorkspaces;
   }
 
   /**
@@ -414,6 +424,11 @@ export class RunnerGateway {
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 
+    // §15.1: the hello carries the boot's full declaration. Handed over before
+    // hello.ok — a declaration the server refused to store must not be visible
+    // in a frame that says "negotiated".
+    this.#onWorkspaces?.(connection.socket.data.runnerId, result.workspaces);
+
     this.#send(connection, {
       type: "hello.ok",
       negotiation: result.negotiation,
@@ -437,6 +452,16 @@ export class RunnerGateway {
       this.#send(connection, { type: "error", reason: "malformed" });
       return { ok: false, reason: "malformed" };
     }
+
+    // §15.1: every reconcile re-carries the boot's declaration, so a changed
+    // one takes effect on the next reconnect without a restart. Malformed is
+    // refused before promotion — placement must never read a partial sync.
+    const workspaces = parseDeclaredWorkspaces(message["workspaces"]);
+    if (workspaces === undefined) {
+      this.#send(connection, { type: "error", reason: "malformed" });
+      return { ok: false, reason: "malformed" };
+    }
+    this.#onWorkspaces?.(runnerId, workspaces);
 
     const result = reconcile({
       server: this.#serverInventory(connection),

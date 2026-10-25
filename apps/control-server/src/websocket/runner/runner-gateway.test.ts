@@ -505,3 +505,80 @@ describe("event ingestion", () => {
     expect(result).toEqual({ ok: false, reason: "malformed" });
   });
 });
+
+describe("declared workspaces reach the projection", () => {
+  let seen: Array<{ runnerId: string; workspaces: Array<{ workspaceId: string; path: string }> }>;
+  let gateway: RunnerGateway;
+
+  function makeGateway(): RunnerGateway {
+    return new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onWorkspaces: (runnerId, workspaces) => {
+        seen.push({ runnerId, workspaces });
+      },
+    });
+  }
+
+  beforeEach(() => {
+    seen = [];
+    gateway = makeGateway();
+  });
+
+  test("a hello's declared workspaces are handed over once", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "hello",
+        hello: { ...hello, workspaces: [{ workspaceId: "default", path: "/srv/proj" }] },
+      }),
+    );
+
+    expect(seen).toEqual([
+      { runnerId: "runner-a", workspaces: [{ workspaceId: "default", path: "/srv/proj" }] },
+    ]);
+  });
+
+  test("a hello without the field reports an empty declaration", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+
+    expect(seen).toEqual([{ runnerId: "runner-a", workspaces: [] }]);
+  });
+
+  test("a reconcile re-declares workspaces, so a changed boot takes effect", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "reconcile",
+        runner: [],
+        workspaces: [{ workspaceId: "default", path: "/srv/moved" }],
+      }),
+    );
+
+    expect(seen).toEqual([
+      { runnerId: "runner-a", workspaces: [] },
+      { runnerId: "runner-a", workspaces: [{ workspaceId: "default", path: "/srv/moved" }] },
+    ]);
+  });
+
+  test("malformed workspaces on a reconcile are refused, never promoted", () => {
+    const { socket, sent } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "reconcile", runner: [], workspaces: "default" }),
+    );
+
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "malformed" });
+    expect(gateway.stateOf("runner-a")).not.toBe("ready");
+    expect(seen).toEqual([{ runnerId: "runner-a", workspaces: [] }]);
+  });
+});
