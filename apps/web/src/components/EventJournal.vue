@@ -4,6 +4,7 @@ import { computed } from "vue";
 import ApprovalCard from "@/components/ApprovalCard.vue";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
+import { assistantTextOf, proseClasses, renderMarkdown } from "@/features/journal/markdown.ts";
 import { deriveJournalRows } from "@/features/journal/streaming-messages.ts";
 
 const props = defineProps<{
@@ -32,6 +33,13 @@ function terminalFor(event: BrowserReplayEvent) {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const approvalId = payload["approvalId"];
   return typeof approvalId === "string" ? approvalTerminals.value.get(approvalId) : undefined;
+}
+
+// The prose inside a completed assistant message; "" means the payload is not
+// the assistant shape the executor writes, and the row falls back to raw JSON
+// so an unexpected shape stays visible (markdown.ts owns the extraction).
+function proseOf(event: BrowserReplayEvent): string {
+  return event.type === "message.completed" ? assistantTextOf(event.payload) : "";
 }
 
 const emptyCopy = computed(() =>
@@ -76,6 +84,13 @@ const emptyCopy = computed(() =>
             :event="row.event"
             :terminal="terminalFor(row.event)"
           />
+          <!-- v-html is safe here by construction: markdown.ts renders with
+               raw HTML disabled and scheme-validated links, pinned by tests. -->
+          <div
+            v-else-if="proseOf(row.event) !== ''"
+            :class="proseClasses"
+            v-html="renderMarkdown(proseOf(row.event))"
+          ></div>
           <pre
             v-else
             class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground">{{
@@ -113,10 +128,10 @@ const emptyCopy = computed(() =>
           <span class="font-mono text-xs text-muted-foreground">
             message.delta <template v-if="row.interrupted">· bị dừng giữa chừng</template>
           </span>
-          <pre
-            class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap"
-            :class="row.interrupted ? 'text-muted-foreground' : 'text-foreground'"
-          >{{ row.text }}</pre>
+          <div
+            :class="[proseClasses, row.interrupted ? 'text-muted-foreground' : 'text-foreground']"
+            v-html="renderMarkdown(row.text)"
+          ></div>
         </div>
       </div>
     </template>
