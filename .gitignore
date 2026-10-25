@@ -54,3 +54,6 @@ coverage/
 test-results/
 playwright-report/
 .superpowers/
+
+# generated per-install/build: the SDK CLI asset shim (scripts/claude-asset.ts)
+packages/agent-adapter/src/claude-asset.generated.ts

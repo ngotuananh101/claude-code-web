@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "doctor": "bun run scripts/doctor.ts",
+    "postinstall": "bun run scripts/claude-asset.ts",
     "spike": "bun run scripts/spike/phase0.ts",
     "typecheck": "tsc -b --pretty && tsc -p apps/web --noEmit",
     "lint": "biome check .",
