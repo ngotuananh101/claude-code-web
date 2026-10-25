@@ -67,7 +67,7 @@ async function connectRunner(url: string, credential: string, inbox: Database) {
   const received: Array<Record<string, unknown>> = [];
 
   link = await dialWebSocket({
-    url: url.replace("http", "ws") + "/ws/runner",
+    url: `${url.replace("http", "ws")}/ws/runner`,
     credential,
   });
 

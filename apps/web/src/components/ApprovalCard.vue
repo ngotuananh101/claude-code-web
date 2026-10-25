@@ -80,10 +80,10 @@ const allAnswered = computed(() =>
   questions.value.every((q) => (answers[q.question] ?? "") !== ""),
 );
 
-const canDecide = computed(() => {
+/** Nothing decided yet, by journal or by this browser: the card takes input. */
+const interactive = computed(() => {
   if (props.terminal !== undefined) return false;
   if (ui?.deciding || ui?.decision !== undefined) return false;
-  if (kind === "user_question") return allAnswered.value;
   return true;
 });
 
@@ -117,7 +117,7 @@ async function decide(
   decision: "allow" | "deny",
   answersMap?: Record<string, string>,
 ): Promise<void> {
-  if (!canDecide.value || approvalId === "") return;
+  if (!interactive.value || approvalId === "") return;
   await submitDecision(approvalId, decision, answersMap);
 }
 
@@ -172,7 +172,7 @@ function submitAnswers(): void {
             size="sm"
             class="h-auto w-full justify-start py-1.5 text-left text-[13px]"
             :class="answers[q.question] === option.label ? 'border-primary bg-primary/10' : ''"
-            :disabled="!canDecide"
+            :disabled="!interactive"
             @click="pick(q.question, option.label)"
           >
             <span class="min-w-0">
@@ -191,7 +191,7 @@ function submitAnswers(): void {
             class="h-7 text-[13px]"
             placeholder="Khác — nhập câu trả lời…"
             :aria-label="`Câu trả lời khác cho: ${q.question}`"
-            :disabled="!canDecide"
+            :disabled="!interactive"
             @update:model-value="answerWithOther(q.question)"
           />
         </div>
@@ -202,7 +202,7 @@ function submitAnswers(): void {
       Đang chuyển quyết định…
     </div>
 
-    <div v-if="canDecide" class="mt-2.5 flex items-center gap-2">
+    <div v-if="interactive" class="mt-2.5 flex items-center gap-2">
       <template v-if="kind === 'tool_permission'">
         <Button size="sm" @click="decide('allow')">Cho phép</Button>
         <Button size="sm" variant="outline" @click="decide('deny')">Từ chối</Button>
