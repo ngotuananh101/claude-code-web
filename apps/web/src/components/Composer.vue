@@ -153,13 +153,17 @@ async function stop(): Promise<void> {
 </script>
 
 <template>
-  <InputGroup class="bg-card shadow-sm">
-    <InputGroupAddon v-if="sessionId === null" align="block-start" class="gap-1.5">
+  <InputGroup class="gap-0 bg-card shadow-sm">
+    <InputGroupAddon
+      v-if="sessionId === null"
+      align="block-start"
+      class="gap-1.5 px-3.5 pt-2.5 pb-0"
+    >
       <Select v-model="runnerId">
         <SelectTrigger
           size="sm"
           aria-label="Chọn runner"
-          class="h-7 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         >
           <Server :size="13" />
           <SelectValue />
@@ -180,7 +184,7 @@ async function stop(): Promise<void> {
         <SelectTrigger
           size="sm"
           aria-label="Chọn project"
-          class="h-7 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         >
           <FolderOpen :size="13" />
           <SelectValue />
@@ -193,7 +197,7 @@ async function stop(): Promise<void> {
         <SelectTrigger
           size="sm"
           aria-label="Chọn branch"
-          class="h-7 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         >
           <GitBranch :size="13" />
           <SelectValue />
@@ -206,8 +210,7 @@ async function stop(): Promise<void> {
 
     <InputGroupTextarea
       v-model="prompt"
-      rows="3"
-      class="max-h-52 px-4 py-3 text-[13px] leading-relaxed"
+      class="max-h-52 min-h-12 px-3.5 py-2.5 text-[13px] leading-relaxed"
       placeholder="Gửi prompt cho runner…"
       aria-label="Ô soạn prompt"
       @keydown.enter.exact.prevent="send"
@@ -232,14 +235,14 @@ async function stop(): Promise<void> {
       </span>
     </div>
 
-    <InputGroupAddon align="block-end" class="justify-between border-t border-border pt-2 pb-2">
+    <InputGroupAddon align="block-end" class="justify-between border-t border-border px-3.5 pt-2! pb-2">
       <div class="flex items-center gap-1.5">
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label="Đính kèm tệp"
           title="Đính kèm tệp"
-          class="text-muted-foreground"
+          class="size-7! text-muted-foreground"
           @click="pickFiles"
         >
           <Paperclip :size="15" />
@@ -249,7 +252,7 @@ async function stop(): Promise<void> {
           <SelectTrigger
             size="sm"
             aria-label="Chọn quyền của run"
-            class="h-7 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+            class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             <Shield :size="13" :class="permissionTone" />
             <SelectValue />
@@ -270,7 +273,7 @@ async function stop(): Promise<void> {
           <SelectTrigger
             size="sm"
             aria-label="Chọn model"
-            class="h-7 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+            class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             <SelectValue />
           </SelectTrigger>
@@ -294,7 +297,7 @@ async function stop(): Promise<void> {
           size="icon-sm"
           aria-label="Gửi prompt"
           title="Gửi prompt (Enter)"
-          class="rounded-full"
+          class="size-7! rounded-full"
           :disabled="!canSend"
           @click="send"
         >
