@@ -87,11 +87,42 @@ const TERMINAL: ReadonlySet<RunState> = new Set(["completed", "failed", "cancell
  * A workspace the runner declares it is serving (§5.1, §15.1). The runner is
  * the registration authority: it carries this list in its hello and every
  * reconcile, and the control plane stores it verbatim.
+ *
+ * `branches` (M4) are the workspace's local heads (`refs/heads/`), listed by
+ * the runner itself. Absent means the runner predates the field or serves a
+ * non-repo directory — "no branches known", not "no branches exist".
  */
 export type DeclaredWorkspace = {
   workspaceId: string;
   path: string;
+  branches?: string[];
 };
+
+/** Bounds a declared branch list: past this the dropdown is unusable anyway. */
+const MAX_BRANCHES = 200;
+/** Git refnames cap far below this; a longer entry is junk, not a branch. */
+const MAX_BRANCH_NAME = 256;
+
+/**
+ * Parse the `branches` field of one declared workspace. `undefined` leaves
+ * the property absent (§6.4 back-compat); anything present but outside the
+ * shape is the malformed signal — same strictness as the rest of the
+ * declaration, because an entry coerced here is a branch the runner never
+ * vouched for. Count and duplicates are bounded, not rejected: a big repo
+ * stays connectable and the first occurrence is the one kept.
+ */
+function parseBranches(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const branches: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry === "") return undefined;
+    if (entry.length > MAX_BRANCH_NAME) return undefined;
+    if (branches.length >= MAX_BRANCHES) break;
+    if (!branches.includes(entry)) branches.push(entry);
+  }
+  return branches;
+}
 
 /**
  * Parse the `workspaces` field of a hello or reconcile message. Absent means
@@ -111,7 +142,13 @@ export function parseDeclaredWorkspaces(value: unknown): DeclaredWorkspace[] | u
     const path = record["path"];
     if (typeof workspaceId !== "string" || workspaceId === "") return undefined;
     if (typeof path !== "string" || path === "") return undefined;
-    workspaces.push({ workspaceId, path });
+    if (record["branches"] === undefined) {
+      workspaces.push({ workspaceId, path });
+      continue;
+    }
+    const branches = parseBranches(record["branches"]);
+    if (branches === undefined) return undefined;
+    workspaces.push({ workspaceId, path, branches });
   }
   return workspaces;
 }

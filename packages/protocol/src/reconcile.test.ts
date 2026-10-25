@@ -323,4 +323,54 @@ describe("parseDeclaredWorkspaces", () => {
     expect(parseDeclaredWorkspaces(null)).toBeUndefined();
     expect(parseDeclaredWorkspaces(42)).toBeUndefined();
   });
+
+  test("an absent branches field leaves the property absent (older runners)", () => {
+    const parsed = parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv" }]);
+    expect(parsed).toEqual([{ workspaceId: "w", path: "/srv" }]);
+    expect("branches" in parsed![0]!).toBe(false);
+  });
+
+  test("an empty branches list is a valid declaration", () => {
+    expect(parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: [] }])).toEqual([
+      { workspaceId: "w", path: "/srv", branches: [] },
+    ]);
+  });
+
+  test("a well-formed branches list parses onto the workspace", () => {
+    expect(
+      parseDeclaredWorkspaces([
+        { workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] },
+      ]),
+    ).toEqual([{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }]);
+  });
+
+  test("branches outside the shape are malformed, not coerced", () => {
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: "main" }]),
+    ).toBeUndefined();
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: ["main", ""] }]),
+    ).toBeUndefined();
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: ["main", 42] }]),
+    ).toBeUndefined();
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: ["x".repeat(257)] }]),
+    ).toBeUndefined();
+  });
+
+  test("more than 200 branches keep the first 200", () => {
+    const branches = Array.from({ length: 250 }, (_, i) => `b-${i}`);
+    const parsed = parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches }]);
+    expect(parsed![0]!.branches).toHaveLength(200);
+    expect(parsed![0]!.branches![0]).toBe("b-0");
+    expect(parsed![0]!.branches![199]).toBe("b-199");
+  });
+
+  test("duplicate branches keep the first occurrence", () => {
+    const parsed = parseDeclaredWorkspaces([
+      { workspaceId: "w", path: "/srv", branches: ["a", "b", "a"] },
+    ]);
+    expect(parsed![0]!.branches).toEqual(["a", "b"]);
+  });
 });
