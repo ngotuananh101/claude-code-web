@@ -111,7 +111,7 @@ async function send(): Promise<void> {
   // workspaceId rides along only where its selector lives: the new-session
   // screen. An existing session keeps the workspace it was created with.
   const workspaceId = props.sessionId === null ? project.value : undefined;
-  const result = await startRun(sessionId, prompt.value.trim(), workspaceId);
+  const result = await startRun(sessionId, prompt.value.trim(), workspaceId, permission.value);
   sending.value = false;
 
   if (result.ok) {

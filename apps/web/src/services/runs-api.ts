@@ -18,13 +18,17 @@ export async function startRun(
   sessionId: string,
   prompt: string,
   workspaceId?: string,
+  permissionMode?: string,
 ): Promise<StartRunResult> {
   let response: Response;
   try {
+    const body: Record<string, unknown> = { prompt };
+    if (workspaceId) body["workspaceId"] = workspaceId;
+    if (permissionMode !== undefined) body["permissionMode"] = permissionMode;
     response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(workspaceId ? { prompt, workspaceId } : { prompt }),
+      body: JSON.stringify(body),
     });
   } catch {
     return { ok: false, reason: "error" };

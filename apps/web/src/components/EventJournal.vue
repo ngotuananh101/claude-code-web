@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { computed } from "vue";
+import ApprovalCard from "@/components/ApprovalCard.vue";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const props = defineProps<{
@@ -28,6 +29,35 @@ const rows = computed<Row[]>(() => {
   }
   return out;
 });
+
+// The journal is the authority on an approval's outcome (§13.2): a card is
+// read-only once a later `approval.resolved`/`approval.expired` with the same
+// id is in the transcript.
+const approvalTerminals = computed(() => {
+  const terminals = new Map<string, { decision?: "allow" | "deny"; reason?: string }>();
+  for (const event of props.events) {
+    if (event.type !== "approval.resolved" && event.type !== "approval.expired") continue;
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const approvalId = payload["approvalId"];
+    if (typeof approvalId !== "string") continue;
+    if (event.type === "approval.resolved") {
+      terminals.set(approvalId, {
+        decision: payload["decision"] === "deny" ? "deny" : "allow",
+      });
+    } else {
+      terminals.set(approvalId, {
+        reason: typeof payload["reason"] === "string" ? payload["reason"] : undefined,
+      });
+    }
+  }
+  return terminals;
+});
+
+function terminalFor(event: BrowserReplayEvent) {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const approvalId = payload["approvalId"];
+  return typeof approvalId === "string" ? approvalTerminals.value.get(approvalId) : undefined;
+}
 
 const emptyCopy = computed(() =>
   props.sessionLive ? "Đang chờ sự kiện đầu tiên." : "Phiên này chưa có gì trong journal.",
@@ -66,7 +96,14 @@ const emptyCopy = computed(() =>
         </span>
         <div>
           <span class="font-mono text-xs text-muted-foreground">{{ row.event.type }}</span>
-          <pre class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground">{{
+          <ApprovalCard
+            v-if="row.event.type === 'approval.requested'"
+            :event="row.event"
+            :terminal="terminalFor(row.event)"
+          />
+          <pre
+            v-else
+            class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-foreground">{{
             JSON.stringify(row.event.payload, null, 2)
           }}</pre>
         </div>

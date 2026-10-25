@@ -44,7 +44,7 @@ export async function handleDispatchRun(
     return new Response("bad request", { status: 400 });
   }
 
-  const record = body as { prompt?: unknown; workspaceId?: unknown };
+  const record = body as { prompt?: unknown; workspaceId?: unknown; permissionMode?: unknown };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
     return new Response("bad request", { status: 400 });
@@ -53,6 +53,23 @@ export async function handleDispatchRun(
     typeof record.workspaceId === "string" && record.workspaceId.trim() !== ""
       ? record.workspaceId
       : "default";
+
+  // §13: the permission mode is the operator's standing choice for this run.
+  // An unknown value is refused, not silently defaulted — a typo asking for
+  // "bypassPermissions" must never run at "default" and vice versa.
+  const PERMISSION_MODES: ReadonlySet<string> = new Set([
+    "default",
+    "acceptEdits",
+    "bypassPermissions",
+    "plan",
+  ]);
+  let permissionMode: string | undefined;
+  if (record.permissionMode !== undefined) {
+    if (typeof record.permissionMode !== "string" || !PERMISSION_MODES.has(record.permissionMode)) {
+      return new Response("bad request", { status: 400 });
+    }
+    permissionMode = record.permissionMode;
+  }
 
   // Checked before runner selection so a double-submit answers with its own
   // cause: the session is busy, not "no runner could take it" (§2.3).
@@ -84,7 +101,14 @@ export async function handleDispatchRun(
   const runId = crypto.randomUUID();
   const attemptId = crypto.randomUUID();
   const decision = await scheduler.dispatch(
-    { sessionId, runId, attemptId, workspaceId, prompt },
+    {
+      sessionId,
+      runId,
+      attemptId,
+      workspaceId,
+      prompt,
+      ...(permissionMode === undefined ? {} : { permissionMode }),
+    },
     scheduler.capacityFor(ready, {
       runnerId: ready,
       state: "ready",
