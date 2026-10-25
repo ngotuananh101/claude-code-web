@@ -39,6 +39,7 @@ import { handleMe } from "./routes/me-routes.ts";
 import { handleCreateRunner, handleListRunners } from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
 import { handleListSessions } from "./routes/sessions-routes.ts";
+import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
 import { handleUsageStats } from "./routes/stats-routes.ts";
 import {
   BrowserGateway,
@@ -252,6 +253,10 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/sessions" && request.method === "GET") {
         return handleListSessions(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/workspaces" && request.method === "GET") {
+        return handleListWorkspaces(request, options, allowed, browserGateway);
       }
 
       if (url.pathname === "/api/stats/usage" && request.method === "GET") {
