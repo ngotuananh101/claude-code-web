@@ -1,4 +1,9 @@
-import { approvalForSession, fingerprintOf, recordApprovalDecision } from "@cc-web/control-db";
+import {
+  approvalForSession,
+  CommandOutbox,
+  fingerprintOf,
+  recordApprovalDecision,
+} from "@cc-web/control-db";
 import type { Dispatcher } from "../dispatch/dispatcher.ts";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
@@ -104,7 +109,9 @@ export async function handleApprovalDecision(
     approvalId,
     decision: decision.decision,
     ...(answersJson === undefined ? {} : { answersJson }),
-    outbox: { commandId, fingerprint },
+    outbox: new CommandOutbox(options.db),
+    commandId,
+    fingerprint,
   });
 
   if (!result.ok) {

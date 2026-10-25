@@ -82,7 +82,9 @@ describe("recordApprovalDecision", () => {
     const result = recordApprovalDecision(db, {
       approvalId: "missing",
       decision: "allow",
-      outbox: { commandId: "cmd-1", fingerprint: "fp-1" },
+      outbox: new CommandOutbox(db),
+      commandId: "cmd-1",
+      fingerprint: "fp-1",
     });
 
     expect(result).toEqual({ ok: false, reason: "unknown" });
@@ -96,7 +98,9 @@ describe("recordApprovalDecision", () => {
       approvalId: "apr-1",
       decision: "deny",
       answersJson: JSON.stringify([{ question: "why", answer: "no" }]),
-      outbox: { commandId: "cmd-1", fingerprint: "fp-1" },
+      outbox: new CommandOutbox(db),
+      commandId: "cmd-1",
+      fingerprint: "fp-1",
       now: 1_100,
     });
 
@@ -154,12 +158,16 @@ describe("recordApprovalDecision", () => {
     const first = recordApprovalDecision(db, {
       approvalId: "apr-1",
       decision: "allow",
-      outbox: { commandId: "cmd-1", fingerprint: "fp-1" },
+      outbox: new CommandOutbox(db),
+      commandId: "cmd-1",
+      fingerprint: "fp-1",
     });
     const second = recordApprovalDecision(db, {
       approvalId: "apr-1",
       decision: "deny",
-      outbox: { commandId: "cmd-2", fingerprint: "fp-2" },
+      outbox: new CommandOutbox(db),
+      commandId: "cmd-2",
+      fingerprint: "fp-2",
     });
 
     expect(first.ok).toBe(true);
@@ -200,7 +208,9 @@ describe("closeApproval", () => {
     recordApprovalDecision(db, {
       approvalId: "apr-1",
       decision: "allow",
-      outbox: { commandId: "cmd-1", fingerprint: "fp-1" },
+      outbox: new CommandOutbox(db),
+      commandId: "cmd-1",
+      fingerprint: "fp-1",
     });
 
     expect(closeApproval(db, { approvalId: "apr-1", state: "resolved", now: 1_200 })).toBe(true);

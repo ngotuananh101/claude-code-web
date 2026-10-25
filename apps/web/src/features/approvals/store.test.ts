@@ -14,7 +14,7 @@ function stubFetch(status: number): void {
     new Response(JSON.stringify({}), {
       status,
       headers: { "Content-Type": "application/json" },
-    })) as typeof fetch;
+    })) as unknown as typeof fetch;
 }
 
 afterEach(() => {
@@ -73,7 +73,7 @@ describe("submitDecision outcomes", () => {
         release = resolve;
       });
       return new Response(JSON.stringify({}), { status: 202 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const pending = submitDecision("apr-store-7", "allow");
     expect(approvalUi("apr-store-7").deciding).toBe(true);

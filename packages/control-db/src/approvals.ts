@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { CommandOutbox } from "./command-outbox.ts";
 
 /**
  * The approvals projection (§13).
@@ -158,28 +159,26 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
 
     // The command's payload names the exact approval and the hash the runner
     // is holding — the runner re-validates both before resolving its callback.
-    const payload = JSON.stringify({
+    // The INSERT itself is insertPendingSync, shared with the async enqueue
+    // path: two column lists for the same table is how they drift apart (F3).
+    const payload = {
       approvalId: input.approvalId,
       decision: input.decision,
       answers: input.answersJson === undefined ? null : JSON.parse(input.answersJson),
       inputHash: row.input_hash,
-    });
-    db.prepare(
-      `INSERT INTO command_outbox
-         (command_id, runner_id, kind, payload, fingerprint, issued_at, expires_at,
-          session_id, run_id, attempt_id, workspace_id,
-          delivery_state, attempt_count, created_at)
-       VALUES (?, ?, 'approval.respond', ?, ?, ?, NULL, ?, ?, ?, NULL, 'pending', 0, ?)`,
-    ).run(
-      input.outbox.commandId,
-      row.runner_id,
-      payload,
-      input.outbox.fingerprint,
-      new Date(now).toISOString(),
-      row.session_id,
-      row.run_id,
-      row.attempt_id,
-      now,
+    };
+    input.outbox.insertPendingSync(
+      {
+        commandId: input.commandId,
+        runnerId: row.runner_id,
+        kind: "approval.respond",
+        payload,
+        issuedAt: new Date(now).toISOString(),
+        sessionId: row.session_id,
+        runId: row.run_id,
+        attemptId: row.attempt_id,
+      },
+      input.fingerprint,
     );
 
     return {
@@ -197,7 +196,11 @@ type DecisionInput = {
   approvalId: string;
   decision: "allow" | "deny";
   answersJson?: string;
-  outbox: { commandId: string; fingerprint: string };
+  /** The outbox the command commits into, sharing this transaction's connection. */
+  outbox: CommandOutbox;
+  commandId: string;
+  /** Computed before the transaction opened (§13.1) — the async path's twin. */
+  fingerprint: string;
   now?: number;
 };
 
