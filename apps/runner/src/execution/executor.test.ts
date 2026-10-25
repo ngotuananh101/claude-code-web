@@ -1333,3 +1333,138 @@ describe("the approval gate", () => {
     expect((await run).state).toBe("finished");
   });
 });
+
+describe("workspace preparation (M4 branch gate)", () => {
+  const finishingSdk: SdkStream = () =>
+    (async function* () {
+      yield { type: "result", subtype: "success", result: "done" };
+    })();
+
+  test("a refused preparation fails the run before any SDK call and releases the lock", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let sdkCalled = false;
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", branch: "dev" } },
+      {
+        workspacePath: "/home/runner/project",
+        sdk: () => {
+          sdkCalled = true;
+          return finishingSdk();
+        },
+        prepareWorkspace: async () => ({
+          kind: "refused",
+          reason: "dirty_tree",
+          branch: "dev",
+        }),
+      },
+    );
+
+    expect(outcome.state).toBe("failed");
+    expect(sdkCalled).toBe(false);
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual(["run.started", "run.failed"]);
+    expect(JSON.parse(list[1]!.payload)).toEqual({
+      error: "branch_refused",
+      reason: "dirty_tree",
+      branch: "dev",
+    });
+    expect(attemptState(db, "attempt-1")).toBe("failed");
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+
+  test("a checkout records one honest status row before the run proceeds", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const seen: Array<{ workspacePath: string; branch: string | undefined }> = [];
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", branch: "dev" } },
+      {
+        workspacePath: "/home/runner/project",
+        sdk: finishingSdk,
+        prepareWorkspace: async (workspacePath, branch) => {
+          seen.push({ workspacePath, branch });
+          return { kind: "ready", checkedOut: true, branch };
+        },
+      },
+    );
+
+    expect(outcome.state).toBe("finished");
+    expect(seen).toEqual([{ workspacePath: "/home/runner/project", branch: "dev" }]);
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual(["run.started", "run.status", "run.finished"]);
+    expect(JSON.parse(list[1]!.payload)).toEqual({ action: "checkout", branch: "dev" });
+  });
+
+  test("a ready result without a checkout adds no row", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const outcome = await executeRun(db, COMMAND, {
+      workspacePath: "/home/runner/project",
+      sdk: finishingSdk,
+      prepareWorkspace: async () => ({ kind: "ready", checkedOut: false }),
+    });
+
+    expect(outcome.state).toBe("finished");
+    expect(events(db).map((e) => e.type)).toEqual(["run.started", "run.finished"]);
+  });
+
+  test("an empty or non-string branch payload is absent, like the model rule", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    const seen: Array<string | undefined> = [];
+    const prepare = async (_workspacePath: string, branch: string | undefined) => {
+      seen.push(branch);
+      return { kind: "ready" as const, checkedOut: false };
+    };
+
+    beginAttempt(db, {
+      attemptId: "attempt-2",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    await executeRun(db, { ...COMMAND, payload: { prompt: "hello", branch: "" } }, {
+      workspacePath: "/home/runner/project",
+      sdk: finishingSdk,
+      prepareWorkspace: prepare,
+    });
+    await executeRun(
+      db,
+      { ...COMMAND, attemptId: "attempt-2", payload: { prompt: "hello", branch: 42 } },
+      {
+        workspacePath: "/home/runner/project",
+        sdk: finishingSdk,
+        prepareWorkspace: prepare,
+      },
+    );
+
+    expect(seen).toEqual([undefined, undefined]);
+  });
+});

@@ -90,6 +90,16 @@ export type ExecuteOptions = {
   sdk: SdkStream;
   signal?: AbortSignal;
   /**
+   * The workspace-preparation gate (M4): runs after `run.started` and before
+   * anything touches the SDK, under the workspace lock the caller already
+   * holds. The daemon wires the branch checkout gate here; tests inject
+   * fakes. Absent means nothing to prepare — the pre-M4 behavior.
+   */
+  prepareWorkspace?: (
+    workspacePath: string,
+    branch: string | undefined,
+  ) => Promise<PrepareWorkspaceResult>;
+  /**
    * Builds the attempt's approval gate from the executor's own append closure
    * (§13) — the gate's events must share the attempt's sequence. Optional:
    * tests of non-approval paths omit it, and the production controller always
@@ -121,9 +131,12 @@ export async function executeRun(
     typeof record?.["permissionMode"] === "string" ? record["permissionMode"] : "default";
   // Unlike permissionMode there is no runner-side default: an unnamed model
   // means the SDK's own choice, so the option is omitted downstream. Empty is
-  // as absent — defense in depth behind the route's strict set.
+  // as absent — defense in depth behind the route's strict set. The branch
+  // follows the same rule: it only exists as a non-empty string.
   const model =
     typeof record?.["model"] === "string" && record["model"] !== "" ? record["model"] : undefined;
+  const branch =
+    typeof record?.["branch"] === "string" && record["branch"] !== "" ? record["branch"] : undefined;
 
   const now = () => new Date().toISOString();
   let sequence = 0;
@@ -220,6 +233,30 @@ export async function executeRun(
     // `finally` — leaving the attempt `starting` and the workspace locked with
     // no owner.
     append("run.started", { commandId: command.commandId });
+
+    // M4: prepare the workspace (the branch gate) after the run is observable
+    // and before the SDK exists — a refusal is the operator's answer, so it is
+    // a journal event, not a transport error. The `finally` below owns the
+    // attempt and the lock on every path out of here.
+    if (options.prepareWorkspace !== undefined) {
+      const prepared = await options.prepareWorkspace(options.workspacePath, branch);
+      if (prepared.kind === "refused") {
+        state = "failed";
+        terminalWritten = true;
+        append("run.failed", {
+          error: "branch_refused",
+          reason: prepared.reason,
+          ...(prepared.branch === undefined ? {} : { branch: prepared.branch }),
+        });
+        return { state: "failed" };
+      }
+      if (prepared.checkedOut) {
+        append("run.status", {
+          action: "checkout",
+          ...(prepared.branch === undefined ? {} : { branch: prepared.branch }),
+        });
+      }
+    }
 
     // §13: the gate's events ride this attempt's sequenced append, and every
     // one of them triggers the pump flush — a suspended run never settles, so
