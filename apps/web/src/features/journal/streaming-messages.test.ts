@@ -24,6 +24,10 @@ function streamingRows(rows: ReturnType<typeof deriveJournalRows>) {
   return rows.filter((row) => row.kind === "streaming");
 }
 
+function toolRows(rows: ReturnType<typeof deriveJournalRows>) {
+  return rows.filter((row) => row.kind === "tool");
+}
+
 describe("deriveJournalRows", () => {
   test("run headers appear when the run changes", () => {
     reset();
@@ -199,5 +203,135 @@ describe("deriveJournalRows", () => {
       event("run.finished", {}),
     ]);
     expect(streamingRows(rows)).toEqual([]);
+  });
+
+  test("a started and completed tool pair renders one settled row", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: false, outputSummary: "hi" }),
+    ]);
+    expect(toolRows(rows)).toEqual([
+      {
+        kind: "tool",
+        key: "tool-toolu-1",
+        toolCallId: "toolu-1",
+        toolName: "Bash",
+        state: "done",
+        outputSummary: "hi",
+        lastSequence: 2,
+      },
+    ]);
+    expect(rows.filter((row) => row.kind === "event")).toHaveLength(0);
+  });
+
+  test("an in-flight tool renders one running row in the live tail", () => {
+    reset();
+    const rows = deriveJournalRows([event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" })]);
+    expect(toolRows(rows)).toEqual([
+      {
+        kind: "tool",
+        key: "tool-toolu-1",
+        toolCallId: "toolu-1",
+        toolName: "Bash",
+        state: "running",
+        outputSummary: null,
+        lastSequence: 1,
+      },
+    ]);
+  });
+
+  test("an error completion settles the row as error", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: true, outputSummary: "boom" }),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({ state: "error", outputSummary: "boom" });
+  });
+
+  test("a run terminal mid-tool marks the row interrupted", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("run.interrupted", {}),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({ state: "interrupted" });
+  });
+
+  test("a completed for an unknown id renders a settled row with no name", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.completed", { toolCallId: "toolu-x", isError: false }),
+    ]);
+    expect(toolRows(rows)).toEqual([
+      {
+        kind: "tool",
+        key: "tool-toolu-x",
+        toolCallId: "toolu-x",
+        toolName: null,
+        state: "done",
+        outputSummary: null,
+        lastSequence: 1,
+      },
+    ]);
+  });
+
+  test("a late started after completion fills the name without reopening", () => {
+    // The SDK ordering quirk observed with text applies to tools too: the
+    // complete frames can precede their own raw stream events. A settled row
+    // gains the name and keeps its settled position.
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.completed", { toolCallId: "toolu-1", isError: false, outputSummary: "hi" }),
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+    ]);
+    expect(toolRows(rows)).toEqual([
+      {
+        kind: "tool",
+        key: "tool-toolu-1",
+        toolCallId: "toolu-1",
+        toolName: "Bash",
+        state: "done",
+        outputSummary: "hi",
+        lastSequence: 1,
+      },
+    ]);
+  });
+
+  test("malformed tool payloads are ignored", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: 42, toolName: "Bash" }),
+      event("tool.started", {}),
+      event("tool.completed", { isError: false }),
+      event("run.finished", {}),
+    ]);
+    expect(toolRows(rows)).toEqual([]);
+  });
+
+  test("two tool calls render two rows in started order", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.started", { toolCallId: "toolu-2", toolName: "Read" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: false }),
+      event("tool.completed", { toolCallId: "toolu-2", isError: false }),
+    ]);
+    expect(toolRows(rows).map((row) => (row as { toolCallId: string }).toolCallId)).toEqual([
+      "toolu-1",
+      "toolu-2",
+    ]);
+  });
+
+  test("a settled tool row sits inline between the surrounding events", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("run.started", {}),
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: false }),
+      event("run.finished", {}),
+    ]);
+    expect(rows.map((row) => row.kind)).toEqual(["run", "event", "tool", "event"]);
   });
 });
