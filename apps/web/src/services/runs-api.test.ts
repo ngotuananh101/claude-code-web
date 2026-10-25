@@ -62,6 +62,16 @@ describe("startRun", () => {
     expect(captured.url).toBe("/api/sessions/session%20%2F%C3%9F/runs");
   });
 
+  test("a workspaceId travels in the body; without one the body stays prompt-only", async () => {
+    const withWorkspace = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", "hello", "proj-x");
+    expect(withWorkspace.body).toEqual({ prompt: "hello", workspaceId: "proj-x" });
+
+    const withoutWorkspace = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", "hello");
+    expect(withoutWorkspace.body).toEqual({ prompt: "hello" });
+  });
+
   test("409 collapses to session_busy", async () => {
     capture(409, "session_busy");
     expect((await startRun("s", "p")).ok).toBe(false);

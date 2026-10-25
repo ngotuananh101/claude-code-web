@@ -91,7 +91,7 @@ async function signOut(): Promise<void> {
       >
         cc
       </RouterLink>
-      <RouterLink to="/" class="truncate text-sm font-medium hover:opacity-80">cc-web</RouterLink>
+      <ConnectionChip />
       <span class="ml-auto flex items-center gap-0.5">
         <Button
           variant="ghost"
@@ -206,7 +206,6 @@ async function signOut(): Promise<void> {
     </div>
 
     <footer class="border-t border-sidebar-border px-3 py-2.5">
-      <ConnectionChip class="mb-2" />
       <div class="flex items-center gap-2.5">
         <span
           class="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary uppercase"

@@ -14,13 +14,17 @@ export type StartRunResult =
       reason: "unauthorized" | "session_busy" | "runner_unavailable" | "error";
     };
 
-export async function startRun(sessionId: string, prompt: string): Promise<StartRunResult> {
+export async function startRun(
+  sessionId: string,
+  prompt: string,
+  workspaceId?: string,
+): Promise<StartRunResult> {
   let response: Response;
   try {
     response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify(workspaceId ? { prompt, workspaceId } : { prompt }),
     });
   } catch {
     return { ok: false, reason: "error" };
