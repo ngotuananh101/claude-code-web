@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { loadAccount, loadSessions } from "./stores/sessions.ts";
+import { loadAccount, loadSessions } from "../stores/sessions.ts";
 
 /**
  * The console's pages behind one rail: the usage dashboard (the default
@@ -13,18 +13,18 @@ export const router = createRouter({
   routes: [
     {
       path: "/",
-      component: () => import("./views/ConsoleLayout.vue"),
+      component: () => import("../views/ConsoleLayout.vue"),
       children: [
-        { path: "", name: "dashboard", component: () => import("./views/DashboardView.vue") },
+        { path: "", name: "dashboard", component: () => import("../views/DashboardView.vue") },
         {
           path: "sessions/:sessionId?",
           name: "sessions",
-          component: () => import("./views/SessionView.vue"),
+          component: () => import("../views/SessionView.vue"),
         },
-        { path: "runners", name: "runners", component: () => import("./views/RunnersView.vue") },
+        { path: "runners", name: "runners", component: () => import("../views/RunnersView.vue") },
       ],
     },
-    { path: "/login", component: () => import("./views/LoginView.vue") },
+    { path: "/login", component: () => import("../views/LoginView.vue") },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

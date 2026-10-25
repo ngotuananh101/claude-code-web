@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate, verifyRunnerCredential } from "@cc-web/control-db";
-import { AuthService } from "./auth/auth-service.ts";
-import { createSigner } from "./auth/tokens.ts";
-import { createServer, type ServerHandle } from "./server.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
+import { createServer, type ServerHandle } from "../server.ts";
 
 /**
  * The dashboard's usage read over HTTP (§17.1 browser surface).

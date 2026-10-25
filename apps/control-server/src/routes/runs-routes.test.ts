@@ -7,12 +7,12 @@ import {
   verifyRunnerCredential,
 } from "@cc-web/control-db";
 import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
-import type { Link } from "../../runner/src/connection/reconnect-loop.ts";
-import { dialWebSocket } from "../../runner/src/connection/websocket-link.ts";
-import { asCommandEnvelope } from "../../runner/src/execution/envelope.ts";
-import { AuthService } from "./auth/auth-service.ts";
-import { createSigner } from "./auth/tokens.ts";
-import { createServer, type ServerHandle } from "./server.ts";
+import type { Link } from "../../../runner/src/connection/reconnect-loop.ts";
+import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
+import { asCommandEnvelope } from "../../../runner/src/execution/envelope.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
+import { createServer, type ServerHandle } from "../server.ts";
 
 /**
  * The browser's run surface over HTTP (§17.1): submit a prompt, cancel a run.

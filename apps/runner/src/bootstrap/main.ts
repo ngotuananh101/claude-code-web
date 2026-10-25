@@ -23,7 +23,7 @@ import {
   writeUnitAndEnable,
 } from "../service/systemd.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
-import { defaultWorkspaceResolver } from "../workspaces.ts";
+import { defaultWorkspaceResolver } from "../workspaces/workspaces.ts";
 
 /**
  * The server origin baked in at compile time by the release workflow

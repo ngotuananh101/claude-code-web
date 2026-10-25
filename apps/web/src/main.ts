@@ -14,7 +14,7 @@ import "./styles/app.css";
 import "vue-sonner/style.css";
 import { createApp } from "vue";
 import App from "./App.vue";
-import { router } from "./router.ts";
+import { router } from "./router/index.ts";
 
 // The generated theme defines a .dark palette; follow the OS preference so
 // both palettes apply without an in-app toggle.

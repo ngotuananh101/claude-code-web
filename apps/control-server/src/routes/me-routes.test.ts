@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { AuthService } from "./auth/auth-service.ts";
-import { createSigner } from "./auth/tokens.ts";
-import { createServer, type RunnerCredentialCheck, type ServerHandle } from "./server.ts";
+import { AuthService } from "../auth/auth-service.ts";
+import { createSigner } from "../auth/tokens.ts";
+import { createServer, type RunnerCredentialCheck, type ServerHandle } from "../server.ts";
 
 /**
  * The signed-in account's own name over HTTP (§16.2's rail footer). The rail
