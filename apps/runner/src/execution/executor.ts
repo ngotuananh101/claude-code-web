@@ -26,6 +26,7 @@ import {
 import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 import { createStreamNormalizer } from "./stream-normalizer.ts";
+import { isToolResultFrame, toolCompletionsOf } from "./tool-results.ts";
 
 /** The SDK seam: given options, returns the message stream (§10.2). */
 export type SdkStream = (options: SdkOptions) => AsyncIterable<Record<string, unknown>>;
@@ -257,6 +258,15 @@ export async function executeRun(
       // text as it arrives.
       if (type === "stream_event") {
         for (const normalized of normalize(sdkMessage)) append(normalized.type, normalized.payload);
+        continue;
+      }
+
+      // §12.3: a pure tool_result user frame is the SDK's evidence the tool
+      // ran and returned — one tool.completed per block replaces the generic
+      // run.status blob the whole frame used to land as. Mixed or echo frames
+      // keep that path so an unexpected shape stays visible.
+      if (type === "user" && isToolResultFrame(sdkMessage)) {
+        for (const completion of toolCompletionsOf(sdkMessage)) append("tool.completed", completion);
         continue;
       }
 

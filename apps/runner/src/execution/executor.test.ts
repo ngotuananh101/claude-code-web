@@ -251,6 +251,65 @@ describe("a clean run", () => {
     expect(completed.message?.id).toBe("msg_X");
     expect(completed.id).toBeUndefined();
   });
+
+  test("the tool contract: block starts and tool_result frames name the same call", async () => {
+    // §12.3/§12.4 seam: tool.started comes from the raw stream (the model
+    // emitting a tool_use block), tool.completed from the user frame the CLI
+    // sends when the tool returned. The ids must correlate, and the pure
+    // tool_result frame must replace the generic run.status row it used to
+    // land as — the assistant frame must not disturb either.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const toolUse = { type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "echo hi" } };
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        yield {
+          type: "stream_event",
+          event: { type: "content_block_start", index: 1, content_block: toolUse },
+          session_id: "sdk-1",
+        };
+        yield { type: "assistant", message: { id: "msg_1", content: [toolUse] } };
+        yield {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu-1", content: "hi", is_error: false }],
+          },
+        };
+        yield { type: "result", subtype: "success", result: "hi" };
+      })();
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "session.updated",
+      "tool.started",
+      "message.completed",
+      "tool.completed",
+      "run.finished",
+    ]);
+
+    const started = JSON.parse(list[2]!.payload) as { toolCallId?: string; toolName?: string };
+    expect(started.toolCallId).toBe("toolu-1");
+    expect(started.toolName).toBe("Bash");
+    const completion = JSON.parse(list[4]!.payload) as {
+      toolCallId?: string;
+      isError?: boolean;
+      outputSummary?: string;
+    };
+    expect(completion.toolCallId).toBe("toolu-1");
+    expect(completion.isError).toBe(false);
+    expect(completion.outputSummary).toBe("hi");
+  });
 });
 
 describe("a failing run", () => {
