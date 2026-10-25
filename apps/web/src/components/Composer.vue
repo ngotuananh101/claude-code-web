@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowUp, FolderOpen, GitBranch, Paperclip, Server, Shield, Square, X } from "@lucide/vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from "@/components/ui/input-group";
@@ -11,7 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cancelRun, startRun } from "../services/runs-api";
+import { cancelRun, type StartRunRequest, startRun } from "../services/runs-api";
+import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api";
 
 /**
  * The prompt box (§16.1). On the new-session page (sessionId null) it mints
@@ -21,10 +22,10 @@ import { cancelRun, startRun } from "../services/runs-api";
  * The toolbar mirrors the desktop composer: context selectors above, the
  * prompt in the middle, actions below. The context row belongs to the
  * new-session screen alone — an existing session already fixed its
- * runner/project/branch when it was created. Only some of it travels today:
- * the project select is the dispatch body's workspaceId; the runner
- * preference and branch/model/permission stay in this tab until the API
- * grows (§11.3 still places runs on the first ready runner).
+ * runner/project/branch when it was created. The project select offers the
+ * workspaces the runners declared (§15.1); picking one pins the dispatch
+ * through it, and a specific runner narrows the choices to that runner's
+ * workspaces. The branch select stays local until the branch surface exists.
  */
 
 const props = defineProps<{
@@ -58,8 +59,9 @@ const modelLabels: Record<string, string> = {
   haiku: "Haiku",
 };
 
-/** The runner list is advisory: picking one does not override §11.3 placement. */
+/** The runner list is advisory until a specific one is picked. */
 const runners = ref<Array<{ runnerId: string }>>([]);
+const workspaces = ref<OwnerWorkspace[]>([]);
 
 onMounted(() => {
   void (async () => {
@@ -70,6 +72,65 @@ onMounted(() => {
     };
     runners.value = body.runners.filter((r) => r.revokedAt === null);
   })();
+  void (async () => {
+    const result = await fetchWorkspaces();
+    if (result.ok) workspaces.value = result.workspaces;
+  })();
+});
+
+/**
+ * One choice in the project select. The value is the composite
+ * `${runnerId}/${workspaceId}` — UUIDs contain no `/`, so it round-trips —
+ * and the fallback exists for older runners that declared nothing: their
+ * dispatch keeps the legacy prompt-only body.
+ */
+type ProjectOption = {
+  value: string;
+  workspaceId: string;
+  runnerId: string | undefined;
+  path: string;
+};
+
+const projectOptions = computed<ProjectOption[]>(() => {
+  const declared =
+    runnerId.value === "auto"
+      ? workspaces.value
+      : workspaces.value.filter((w) => w.runnerId === runnerId.value);
+  if (declared.length === 0) {
+    return [{ value: "default", workspaceId: "default", runnerId: undefined, path: "default" }];
+  }
+  return declared.map((w) => ({
+    value: `${w.runnerId}/${w.workspaceId}`,
+    workspaceId: w.workspaceId,
+    runnerId: w.runnerId,
+    path: w.path,
+  }));
+});
+
+const selectedProject = computed(
+  () => projectOptions.value.find((o) => o.value === project.value) ?? projectOptions.value[0]!,
+);
+
+// A specific runner narrows the project options; a project that fell out of
+// the list resets to the first one that survived the narrowing.
+watch(runnerId, () => {
+  if (!projectOptions.value.some((o) => o.value === project.value)) {
+    project.value = projectOptions.value[0]!.value;
+  }
+});
+
+// A project carries its own runner: picking one while a different specific
+// runner is chosen moves the runner select to the project's runner. "auto"
+// stays auto — the route may place the run on any declaring runner.
+watch(project, () => {
+  const option = projectOptions.value.find((o) => o.value === project.value);
+  if (
+    option?.runnerId !== undefined &&
+    runnerId.value !== "auto" &&
+    runnerId.value !== option.runnerId
+  ) {
+    runnerId.value = option.runnerId;
+  }
 });
 
 const canSend = computed(() => prompt.value.trim() !== "" && !sending.value);
@@ -108,10 +169,23 @@ async function send(): Promise<void> {
   if (!canSend.value) return;
   sending.value = true;
   const sessionId = props.sessionId ?? crypto.randomUUID();
-  // workspaceId rides along only where its selector lives: the new-session
-  // screen. An existing session keeps the workspace it was created with.
-  const workspaceId = props.sessionId === null ? project.value : undefined;
-  const result = await startRun(sessionId, prompt.value.trim(), workspaceId, permission.value);
+  const body: StartRunRequest = { prompt: prompt.value.trim(), permissionMode: permission.value };
+  // The model is a per-run choice; "Mặc định" means the SDK's own default, so
+  // nothing travels rather than a stand-in value.
+  if (model.value !== "default") body.model = model.value;
+  // Workspace and runner context rides only where its selectors live: the
+  // new-session screen. An existing session keeps what it was created with,
+  // and the legacy fallback (nothing declared) keeps a prompt-only body so
+  // §11.3 placement still answers it.
+  if (props.sessionId === null) {
+    if (selectedProject.value.runnerId !== undefined) {
+      body.workspaceId = selectedProject.value.workspaceId;
+    }
+    if (runnerId.value !== "auto") {
+      body.runnerId = runnerId.value;
+    }
+  }
+  const result = await startRun(sessionId, body);
   sending.value = false;
 
   if (result.ok) {
@@ -187,10 +261,22 @@ async function stop(): Promise<void> {
           class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         >
           <FolderOpen :size="13" />
-          <SelectValue />
+          <span class="max-w-[220px] truncate font-mono text-xs">{{ selectedProject.path }}</span>
         </SelectTrigger>
         <SelectContent position="popper">
-          <SelectItem value="default" class="font-mono text-xs">default</SelectItem>
+          <SelectItem
+            v-for="option in projectOptions"
+            :key="option.value"
+            :value="option.value"
+            class="max-w-[360px]"
+          >
+            <span class="flex flex-col items-start">
+              <span class="max-w-[300px] truncate font-mono text-xs">{{ option.path }}</span>
+              <span v-if="option.runnerId" class="font-mono text-[10px] text-muted-foreground">
+                {{ option.runnerId }}
+              </span>
+            </span>
+          </SelectItem>
         </SelectContent>
       </Select>
       <Select v-model="branch">

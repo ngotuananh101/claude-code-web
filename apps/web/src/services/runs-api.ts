@@ -14,17 +14,27 @@ export type StartRunResult =
       reason: "unauthorized" | "session_busy" | "runner_unavailable" | "error";
     };
 
-export async function startRun(
-  sessionId: string,
-  prompt: string,
-  workspaceId?: string,
-  permissionMode?: string,
-): Promise<StartRunResult> {
+/**
+ * What the composer sends for one run. Every field but the prompt is absent
+ * when the operator did not choose it — the body is built with conditional
+ * spreads so the wire carries exactly the choices that were made (§8.1).
+ */
+export type StartRunRequest = {
+  prompt: string;
+  workspaceId?: string;
+  runnerId?: string;
+  permissionMode?: string;
+  model?: string;
+};
+
+export async function startRun(sessionId: string, run: StartRunRequest): Promise<StartRunResult> {
   let response: Response;
   try {
-    const body: Record<string, unknown> = { prompt };
-    if (workspaceId) body["workspaceId"] = workspaceId;
-    if (permissionMode !== undefined) body["permissionMode"] = permissionMode;
+    const body: Record<string, unknown> = { prompt: run.prompt };
+    if (run.workspaceId !== undefined) body["workspaceId"] = run.workspaceId;
+    if (run.runnerId !== undefined) body["runnerId"] = run.runnerId;
+    if (run.permissionMode !== undefined) body["permissionMode"] = run.permissionMode;
+    if (run.model !== undefined) body["model"] = run.model;
     response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

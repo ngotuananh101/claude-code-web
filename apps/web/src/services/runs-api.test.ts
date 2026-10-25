@@ -41,7 +41,7 @@ describe("startRun", () => {
       runnerId: "runner-a",
     });
 
-    const result = await startRun("session-1", "hello");
+    const result = await startRun("session-1", { prompt: "hello" });
 
     expect(result).toEqual({
       ok: true,
@@ -57,43 +57,66 @@ describe("startRun", () => {
   test("the session id is URL-encoded, the prompt never is", async () => {
     const captured = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
 
-    await startRun("session /ß", "hello");
+    await startRun("session /ß", { prompt: "hello" });
 
     expect(captured.url).toBe("/api/sessions/session%20%2F%C3%9F/runs");
   });
 
   test("a workspaceId travels in the body; without one the body stays prompt-only", async () => {
     const withWorkspace = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
-    await startRun("session-1", "hello", "proj-x");
+    await startRun("session-1", { prompt: "hello", workspaceId: "proj-x" });
     expect(withWorkspace.body).toEqual({ prompt: "hello", workspaceId: "proj-x" });
 
     const withoutWorkspace = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
-    await startRun("session-1", "hello");
+    await startRun("session-1", { prompt: "hello" });
     expect(withoutWorkspace.body).toEqual({ prompt: "hello" });
+  });
+
+  test("a runner pin and a model travel in the body only when set", async () => {
+    const pinned = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", {
+      prompt: "hello",
+      runnerId: "runner-b",
+      permissionMode: "acceptEdits",
+      model: "opus",
+    });
+    expect(pinned.body).toEqual({
+      prompt: "hello",
+      runnerId: "runner-b",
+      permissionMode: "acceptEdits",
+      model: "opus",
+    });
+
+    const plain = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", { prompt: "hello", permissionMode: "default" });
+    expect(plain.body).toEqual({ prompt: "hello", permissionMode: "default" });
   });
 
   test("409 collapses to session_busy", async () => {
     capture(409, "session_busy");
-    expect((await startRun("s", "p")).ok).toBe(false);
-    expect(await startRun("s", "p")).toEqual({ ok: false, reason: "session_busy" });
+    expect((await startRun("s", { prompt: "p" })).ok).toBe(false);
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "session_busy" });
   });
 
   test("503 collapses to runner_unavailable", async () => {
     capture(503, "runner_offline");
-    expect(await startRun("s", "p")).toEqual({ ok: false, reason: "runner_unavailable" });
+    expect(await startRun("s", { prompt: "p" })).toEqual({
+      ok: false,
+      reason: "runner_unavailable",
+    });
   });
 
   test("401 collapses to unauthorized", async () => {
     capture(401, "unauthorized");
-    expect(await startRun("s", "p")).toEqual({ ok: false, reason: "unauthorized" });
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "unauthorized" });
   });
 
   test("anything else is a plain error, and so is a network failure", async () => {
     capture(500, "boom");
-    expect(await startRun("s", "p")).toEqual({ ok: false, reason: "error" });
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "error" });
 
     globalThis.fetch = (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch;
-    expect(await startRun("s", "p")).toEqual({ ok: false, reason: "error" });
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "error" });
   });
 });
 
