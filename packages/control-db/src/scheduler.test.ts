@@ -39,6 +39,7 @@ const request = {
   attemptId: "attempt-1",
   workspaceId: "workspace-1",
   prompt: "hello",
+  ownerId: "user-1",
 };
 
 describe("scheduler", () => {
@@ -142,6 +143,47 @@ describe("scheduler", () => {
 
     expect(decision).toEqual({ ok: false, reason: "duplicate_run" });
     expect(db.query("SELECT COUNT(*) AS n FROM command_outbox").get()).toEqual({ n: 1 });
+  });
+
+  test("an accepted dispatch pins the session (§2.3)", async () => {
+    const { db, scheduler } = setup();
+
+    await scheduler.dispatch(request, capacity());
+
+    // The pin records whose session it is and where it ran, so the route can
+    // answer a foreign owner with 404 and rerun placement never.
+    expect(
+      db
+        .query("SELECT owner_id, workspace_id, runner_id FROM sessions WHERE id = ?")
+        .get("session-1"),
+    ).toEqual({ owner_id: "user-1", workspace_id: "workspace-1", runner_id: "runner-a" });
+  });
+
+  test("the pin outlives a dispatch on another runner", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+
+    // Free the session the way a terminal event would, then send the next run
+    // of the same session at a different runner. First pin wins (ADR-006):
+    // moving a session is migration, not a side effect of a dispatch.
+    db.exec("DELETE FROM active_runs");
+    const decision = await scheduler.dispatch(
+      { ...request, runId: "run-2", attemptId: "attempt-2" },
+      capacity({ runnerId: "runner-b" }),
+    );
+    expect(decision.ok).toBe(true);
+
+    expect(db.query("SELECT runner_id FROM sessions WHERE id = ?").get("session-1")).toEqual({
+      runner_id: "runner-a",
+    });
+  });
+
+  test("a refused dispatch writes no pin", async () => {
+    const { db, scheduler } = setup();
+
+    await scheduler.dispatch(request, capacity({ state: "connected" }));
+
+    expect(db.query("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
   });
 });
 

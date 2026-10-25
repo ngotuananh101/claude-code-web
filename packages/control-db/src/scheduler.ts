@@ -19,6 +19,7 @@
 
 import type { Database } from "bun:sqlite";
 import { CommandOutbox } from "./command-outbox.ts";
+import { ensureSessionPin } from "./sessions.ts";
 
 export type RunnerState = "offline" | "connected" | "ready" | "draining" | "revoked";
 
@@ -35,6 +36,12 @@ export type DispatchRequest = {
   attemptId: string;
   workspaceId: string;
   prompt: string;
+  /**
+   * The session's owner (§2.3). Recorded on the pin so the dispatch route can
+   * answer another user's reuse of the session id with 404 — no existence
+   * leak — instead of dispatching into someone else's session.
+   */
+  ownerId: string;
   /**
    * The SDK permission mode the operator picked (§13). Validated by the route;
    * absent means the runner's own default. It rides the run.start payload so
@@ -100,6 +107,17 @@ export class Scheduler {
     if (this.activeRunFor(request.sessionId)) {
       return { ok: false, reason: "session_busy" };
     }
+
+    // The pin is written only for an accepted dispatch — a refusal must never
+    // relocate a session — and before the enqueue on purpose: a crash between
+    // the two leaves a pinned session with no run, which the operator retries
+    // into the same pin, never the reverse.
+    ensureSessionPin(this.#db, {
+      sessionId: request.sessionId,
+      ownerId: request.ownerId,
+      workspaceId: request.workspaceId,
+      runnerId: capacity.runnerId,
+    });
 
     const commandId = `cmd_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
