@@ -143,6 +143,40 @@ export class Scheduler {
     this.#db.query("DELETE FROM active_runs WHERE run_id = ?").run(runId);
   }
 
+  /**
+   * A durable cancel for an active run (§14.2).
+   *
+   * Enqueued like a start, so it inherits the same delivery guarantees: if the
+   * runner is away, the cancel waits in the outbox and goes out on reconnect.
+   * The active run is deliberately untouched — a cancel is a request, not an
+   * outcome, and the slot frees only when the terminal event arrives. Releasing
+   * here instead would let a lost cancel wedge a second run onto a workspace
+   * the first run is still holding.
+   */
+  async cancel(
+    runId: string,
+  ): Promise<{ ok: true; commandId: string } | { ok: false; reason: "unknown_run" }> {
+    const row = this.#db
+      .query("SELECT session_id, runner_id, attempt_id FROM active_runs WHERE run_id = ?")
+      .get(runId) as { session_id: string; runner_id: string; attempt_id: string } | null;
+    if (row === null) return { ok: false, reason: "unknown_run" };
+
+    const commandId = `cmd_${crypto.randomUUID()}`;
+    await this.#outbox.enqueue({
+      commandId,
+      runnerId: row.runner_id,
+      kind: "run.cancel",
+      issuedAt: new Date().toISOString(),
+      sessionId: row.session_id,
+      runId,
+      attemptId: row.attempt_id,
+      payload: {},
+    });
+
+    this.#onDispatched?.(row.runner_id, commandId);
+    return { ok: true, commandId };
+  }
+
   activeRunFor(sessionId: string): { runId: string; runnerId: string } | undefined {
     const row = this.#db
       .query("SELECT run_id, runner_id FROM active_runs WHERE session_id = ?")

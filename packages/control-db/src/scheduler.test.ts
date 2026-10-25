@@ -144,3 +144,65 @@ describe("scheduler", () => {
     expect(db.query("SELECT COUNT(*) AS n FROM command_outbox").get()).toEqual({ n: 1 });
   });
 });
+
+describe("scheduler cancel (§14.2)", () => {
+  test("cancel enqueues a run.cancel addressed to the holding runner", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+
+    const decision = await scheduler.cancel("run-1");
+
+    expect(decision.ok).toBe(true);
+    const rows = db
+      .query(
+        "SELECT kind, runner_id, run_id, attempt_id, session_id FROM command_outbox WHERE kind = 'run.cancel'",
+      )
+      .all();
+    // The envelope carries the ids the runner's abort lookup needs — without
+    // attemptId and runId the cancel reaches a runner that cannot find the run.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      runner_id: "runner-a",
+      run_id: "run-1",
+      attempt_id: "attempt-1",
+      session_id: "session-1",
+    });
+  });
+
+  test("cancel delivery is part of the call, via the dispatch listener", async () => {
+    const drained: string[] = [];
+    const db = new Database(":memory:");
+    migrate(db);
+    const scheduler = new Scheduler(db, {
+      onDispatched: (runnerId) => drained.push(runnerId),
+    });
+    await scheduler.dispatch(request, capacity());
+
+    await scheduler.cancel("run-1");
+
+    // The start's drain happened on dispatch; the cancel needs its own, or it
+    // sits in the outbox until the runner happens to reconnect.
+    expect(drained).toEqual(["runner-a", "runner-a"]);
+  });
+
+  test("an unknown run is refused, not enqueued", async () => {
+    const { db, scheduler } = setup();
+
+    const decision = await scheduler.cancel("run-nobody");
+
+    expect(decision).toEqual({ ok: false, reason: "unknown_run" });
+    expect(db.query("SELECT COUNT(*) AS n FROM command_outbox").get()).toEqual({ n: 0 });
+  });
+
+  test("cancel keeps the active run — the terminal event releases it", async () => {
+    const { scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+
+    await scheduler.cancel("run-1");
+
+    // A cancel is a request, not an outcome (§14.2): the run keeps its slot
+    // until the runner reports a terminal event, so a failed cancel cannot
+    // wedge a second run onto a workspace that is still busy.
+    expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
+  });
+});

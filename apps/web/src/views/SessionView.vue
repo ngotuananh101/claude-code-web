@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
 import Composer from "../components/Composer.vue";
@@ -30,6 +30,56 @@ const routeSession = computed(() => {
 const active = computed(() => sessions.sessions.find((s) => s.sessionId === sessions.activeId));
 
 const activeLive = computed(() => resolveSessionLive(active.value?.live, sessions.stream?.live));
+
+/** The run this page started, until its terminal event clears it. */
+const startedRunId = ref<string | null>(null);
+
+/**
+ * The run a stop request would target. Prefer the one started here (it may not
+ * be in the journal yet); otherwise walk the journal backwards — the newest
+ * `run.started` is the in-flight run, unless a terminal event for it came
+ * after, in which case nothing is running.
+ */
+const liveRunId = computed(() => {
+  if (startedRunId.value !== null) return startedRunId.value;
+  const events = sessions.stream?.events ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!;
+    if (event.type === "run.started") return event.runId;
+    if (
+      event.type === "run.finished" ||
+      event.type === "run.failed" ||
+      event.type === "run.interrupted"
+    ) {
+      return null;
+    }
+  }
+  return null;
+});
+
+// A terminal event for the run this page started is the honest "it is over":
+// the composer's stop button disappears with it, not on a timer.
+watch(
+  () => sessions.stream?.events.length,
+  () => {
+    const runId = startedRunId.value;
+    if (runId === null) return;
+    const terminal = (sessions.stream?.events ?? []).some(
+      (event) =>
+        event.runId === runId &&
+        (event.type === "run.finished" ||
+          event.type === "run.failed" ||
+          event.type === "run.interrupted"),
+    );
+    if (terminal) startedRunId.value = null;
+  },
+);
+
+/** A run started from the composer opens the journal it will stream into. */
+function onStarted(sessionId: string, runId: string): void {
+  startedRunId.value = runId;
+  if (sessionId !== routeSession.value) router.push(`/sessions/${sessionId}`);
+}
 
 // The greeting is the one line of the console that talks to the operator, not
 // about the system — time-of-day Vietnamese, like the login page.
@@ -88,7 +138,7 @@ async function refreshNow(): Promise<void> {
       </div>
 
       <div class="z-10 px-7 pt-2 pb-4.5">
-        <Composer />
+        <Composer :session-id="routeSession" :active-run-id="liveRunId" @started="onStarted" />
       </div>
     </template>
 
@@ -101,7 +151,7 @@ async function refreshNow(): Promise<void> {
           </p>
         </div>
 
-        <Composer class="w-full max-w-[660px]" />
+        <Composer class="w-full max-w-[660px]" :session-id="routeSession" :active-run-id="null" @started="onStarted" />
 
         <div class="flex flex-wrap items-center justify-center gap-2">
           <RouterLink

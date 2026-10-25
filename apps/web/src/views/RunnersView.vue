@@ -94,52 +94,74 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <div class="runners overflow-y-auto">
-    <div class="page">
-      <p class="wordmark font-mono">cc-web / runners</p>
-      <h1>Connectors.</h1>
-      <p class="lede">
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="mx-auto w-full max-w-[720px] px-7 py-7">
+      <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
+        cc-web / runners
+        <span class="h-px flex-1 bg-border" aria-hidden="true" />
+      </p>
+      <h1 class="mb-2 text-[26px] font-medium tracking-tight">Connectors.</h1>
+      <p class="mb-6 text-sm leading-relaxed text-muted-foreground">
         Runner là connector chạy trên máy chứa dự án của bạn: nó tự kết nối ra
         server này, nhận lệnh, và ghi lại những gì agent đã làm vào journal.
       </p>
 
-      <div class="toolbar">
-        <Button class="mint" :disabled="mintBusy" @click="mint">Thêm runner</Button>
+      <div class="mb-6 flex">
+        <Button :disabled="mintBusy" @click="mint">Thêm runner</Button>
       </div>
 
-      <section v-if="minted" class="event minted">
-        <span class="seq font-mono" aria-hidden="true">{{ mintedSeq }}</span>
-        <div class="event-body">
-          <p class="minted-title">Token runner dùng một lần</p>
-          <p class="minted-note">
+      <!-- The journal's newest event: sequence gutter, one-time payload. -->
+      <section v-if="minted" class="grid grid-cols-[76px_1fr] gap-x-3.5 border-t border-border py-4">
+        <span class="select-all pr-4.5 text-right font-mono text-xs leading-6 text-muted-foreground" aria-hidden="true">
+          {{ mintedSeq }}
+        </span>
+        <div class="grid gap-3.5">
+          <p class="text-sm font-medium">Token runner dùng một lần</p>
+          <p class="text-[13px] text-muted-foreground">
             Chỉ hiển thị một lần — server chỉ lưu hash của nó. Copy ngay bây giờ.
           </p>
-          <div class="secret font-mono">
-            <span class="secret-value">{{ minted.token }}</span>
-            <button class="copy" type="button" @click="copyToken">copy</button>
+          <div class="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5">
+            <span class="min-w-0 flex-1 break-all font-mono text-[13px] select-all">{{ minted.token }}</span>
+            <button
+              class="shrink-0 cursor-pointer rounded-sm border border-border bg-transparent px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              type="button"
+              @click="copyToken"
+            >
+              copy
+            </button>
           </div>
-          <div class="field">
-            <span class="field-label font-mono">runner id</span>
-            <span class="secret-value font-mono">{{ minted.runnerId }}</span>
+          <div class="grid gap-1">
+            <span class="font-mono text-xs tracking-wider text-muted-foreground uppercase">runner id</span>
+            <span class="break-all font-mono text-[13px] select-all">{{ minted.runnerId }}</span>
           </div>
-          <pre class="setup font-mono">{{ setupCommands }}</pre>
-          <Button variant="outline" size="sm" class="done" @click="minted = null">
+          <pre class="whitespace-pre-wrap break-all rounded-md border-l-2 border-border px-3.5 py-2.5 font-mono text-[12.5px] leading-relaxed text-muted-foreground">{{ setupCommands }}</pre>
+          <Button variant="outline" size="sm" class="justify-self-start" @click="minted = null">
             Xong
           </Button>
         </div>
       </section>
 
-      <p v-if="runners.length === 0 && minted === null" class="empty">
+      <p
+        v-if="runners.length === 0 && minted === null"
+        class="mt-7 border-t border-border pt-4 text-sm text-muted-foreground"
+      >
         Chưa có runner nào. Mint một token rồi chạy lệnh setup trên máy đó.
       </p>
 
-      <div v-for="(runner, i) in runners" :key="runner.runnerId" class="event-row">
-        <span class="seq font-mono" :title="new Date(runner.createdAt).toISOString()">
+      <div
+        v-for="(runner, i) in runners"
+        :key="runner.runnerId"
+        class="grid grid-cols-[76px_1fr] gap-x-3.5 border-t border-border py-3 transition-colors hover:bg-muted/50"
+      >
+        <span
+          class="select-all pr-4.5 text-right font-mono text-xs leading-6 text-muted-foreground"
+          :title="new Date(runner.createdAt).toISOString()"
+        >
           {{ pad(i + 1) }}
         </span>
-        <div class="event-body">
-          <span class="runner-id font-mono">{{ runner.runnerId }}</span>
-          <span class="runner-meta font-mono">
+        <div class="grid min-w-0 gap-0.5">
+          <span class="break-all font-mono text-[13px]">{{ runner.runnerId }}</span>
+          <span class="font-mono text-xs text-muted-foreground">
             đã kết nối {{ fmt(runner.createdAt) }}
             <template v-if="runner.revokedAt !== null"> · đã thu hồi {{ fmt(runner.revokedAt) }}</template>
           </span>
@@ -148,186 +170,3 @@ onMounted(() => void load());
     </div>
   </div>
 </template>
-
-<style scoped>
-.runners {
-  min-height: 100%;
-  display: grid;
-  place-items: start center;
-  padding: 48px 0;
-}
-
-.page {
-  width: min(720px, calc(100vw - 48px));
-}
-
-/* The journal's run divider: mono wordmark, hairline running out. */
-.wordmark {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 13px;
-  color: var(--primary);
-  margin: 0 0 26px;
-}
-
-.wordmark::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-}
-
-h1 {
-  font-size: 26px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-  margin: 0 0 8px;
-}
-
-.lede {
-  color: var(--muted-foreground);
-  font-size: 14px;
-  line-height: 1.5;
-  margin: 0 0 26px;
-}
-
-.toolbar {
-  display: flex;
-  margin-bottom: 26px;
-}
-
-/* A minted token is the journal's newest event: sequence gutter, payload. */
-.event {
-  display: grid;
-  grid-template-columns: 48px 1fr;
-  column-gap: 14px;
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-}
-
-.seq {
-  text-align: right;
-  line-height: 14px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  user-select: all;
-}
-
-.event-body {
-  display: grid;
-  gap: 14px;
-}
-
-.minted-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.minted-note {
-  margin: -8px 0 0;
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-
-.field {
-  display: grid;
-  gap: 4px;
-}
-
-.field-label {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-/* The secret itself: mono, click-to-select-all, copy beside it. */
-.secret {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  background: var(--muted);
-}
-
-.secret-value {
-  font-size: 13px;
-  user-select: all;
-  word-break: break-all;
-}
-
-.copy {
-  margin-left: auto;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.copy:hover {
-  color: var(--foreground);
-}
-
-.setup {
-  margin: 0;
-  padding: 10px 12px;
-  border-left: 2px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.done {
-  justify-self: start;
-}
-
-.empty {
-  margin: 30px 0;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 14px;
-}
-
-.event-row {
-  display: grid;
-  grid-template-columns: 48px 1fr;
-  column-gap: 14px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
-}
-
-.event-row:hover {
-  background: var(--muted);
-}
-
-.runner-id {
-  font-size: 13px;
-  word-break: break-all;
-}
-
-.runner-meta {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-@media (max-width: 379px) {
-  .event,
-  .event-row {
-    grid-template-columns: 1fr;
-    row-gap: 8px;
-  }
-
-  .seq {
-    text-align: left;
-  }
-}
-</style>
