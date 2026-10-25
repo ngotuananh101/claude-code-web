@@ -23,6 +23,23 @@ describe("parseArgs", () => {
     });
   });
 
+  test("the release workflow's equals-form flags parse", () => {
+    // .github/workflows/runner-build.yml builds args=(--target="..." --outfile ...)
+    // — one bash word per flag — so the equals form is the release contract.
+    expect(
+      parseArgs(["--target=bun-linux-arm64", "--outfile", "dist/cc-web-runner-bun-linux-arm64"]),
+    ).toEqual({
+      target: "bun-linux-arm64",
+      outfile: "dist/cc-web-runner-bun-linux-arm64",
+      defines: [],
+    });
+    expect(parseArgs(['--define=CC_WEB_DEFAULT_SERVER:"https://x.example"'])).toEqual({
+      target: "host",
+      outfile: "dist/cc-web-runner",
+      defines: ['CC_WEB_DEFAULT_SERVER:"https://x.example"'],
+    });
+  });
+
   test("an unknown flag is refused", () => {
     expect(() => parseArgs(["--frobnicate"])).toThrow();
   });

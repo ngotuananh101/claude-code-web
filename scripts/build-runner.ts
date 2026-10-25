@@ -24,20 +24,19 @@ export type BuildArgs = { target: string; outfile: string; defines: string[] };
 
 export function parseArgs(argv: string[]): BuildArgs {
   const args: BuildArgs = { target: "host", outfile: DEFAULT_OUTFILE, defines: [] };
+  const known = ["--target", "--outfile", "--define"];
   for (let i = 0; i < argv.length; i++) {
-    const flag = argv[i];
-    const value = argv[i + 1];
-    if (flag === "--target" || flag === "--outfile") {
-      if (value === undefined) throw new Error(`${flag} requires a value`);
-      args[flag === "--target" ? "target" : "outfile"] = value;
-      i++;
-    } else if (flag === "--define") {
-      if (value === undefined) throw new Error("--define requires a name:value pair");
-      args.defines.push(value);
-      i++;
-    } else {
-      throw new Error(`unknown build:runner flag: ${flag}`);
-    }
+    // Both `--flag value` and the workflow's `--flag=value` (one bash word) are
+    // accepted, so the release contract cannot drift from local invocations.
+    const token = argv[i] ?? "";
+    const flag = known.find((f) => token === f || token.startsWith(`${f}=`));
+    if (flag === undefined) throw new Error(`unknown build:runner flag: ${token}`);
+    const inline = token === flag ? undefined : token.slice(flag.length + 1);
+    const value = inline ?? argv[i + 1];
+    if (value === undefined) throw new Error(`${flag} requires a value`);
+    if (flag === "--define") args.defines.push(value);
+    else args[flag === "--target" ? "target" : "outfile"] = value;
+    if (inline === undefined) i++;
   }
   return args;
 }
@@ -46,7 +45,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   // The shim must name the target's platform binary before the bundler reads
   // it — this is the whole point of the script.
-  generateShim(args.target);
+  await generateShim(args.target);
 
   const spawned = Bun.spawnSync(
     [
