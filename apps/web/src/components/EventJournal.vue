@@ -81,6 +81,26 @@ const emptyCopy = computed(() =>
           }}</pre>
         </div>
       </div>
+      <div v-else-if="row.kind === 'tool'" class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
+        <span
+          class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
+        >
+          {{ row.lastSequence }}
+        </span>
+        <div>
+          <span class="font-mono text-xs text-muted-foreground">
+            tool · {{ row.toolName ?? "…" }}
+            <template v-if="row.state === 'running'">· đang chạy</template>
+            <template v-else-if="row.state === 'error'">
+              <span class="text-destructive">· lỗi</span>
+            </template>
+            <template v-else-if="row.state === 'interrupted'">· bị dừng giữa chừng</template>
+          </span>
+          <pre
+            v-if="row.outputSummary"
+            class="mt-0.5 font-mono text-[12.5px] leading-[1.55] break-words whitespace-pre-wrap text-muted-foreground">{{ row.outputSummary }}</pre>
+        </div>
+      </div>
       <div v-else class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
         <span
           class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
