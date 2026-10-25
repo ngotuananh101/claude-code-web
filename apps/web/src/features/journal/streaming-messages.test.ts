@@ -10,7 +10,9 @@ function event(type: string, payload: unknown, runId = "run-1"): BrowserReplayEv
     eventId: `evt-${seq}`,
     runId,
     attemptId: "attempt-1",
-    occurredAt: "2026-10-25T00:00:00Z",
+    // Distinct per event so a row's lastOccurredAt pin can tell which event
+    // last touched it.
+    occurredAt: `2026-10-25T00:00:${String(seq).padStart(2, "0")}Z`,
     type: type as BrowserReplayEvent["type"],
     payload,
   };
@@ -100,6 +102,7 @@ describe("deriveJournalRows", () => {
         messageId: "msg_1",
         text: "Hello",
         lastSequence: 3,
+        lastOccurredAt: "2026-10-25T00:00:03Z",
         interrupted: false,
       },
     ]);
@@ -119,6 +122,10 @@ describe("deriveJournalRows", () => {
         messageId: "msg_1",
         text: "partial",
         lastSequence: 2,
+        // The terminal is the last thing that touched the row (the interrupted
+        // mark), so its time is the tooltip's — while placement stays at the
+        // last delta's sequence.
+        lastOccurredAt: "2026-10-25T00:00:03Z",
         interrupted: true,
       },
     ]);
@@ -168,6 +175,7 @@ describe("deriveJournalRows", () => {
         messageId: "msg_1",
         text: "OK",
         lastSequence: 3,
+        lastOccurredAt: "2026-10-25T00:00:03Z",
         interrupted: false,
       },
     ]);
@@ -227,9 +235,10 @@ describe("deriveJournalRows", () => {
         toolCallId: "toolu-1",
         toolName: "Bash",
         state: "done",
-        outputSummary: "hi",
         inputSummary: null,
+        outputSummary: "hi",
         lastSequence: 2,
+        lastOccurredAt: "2026-10-25T00:00:02Z",
       },
     ]);
     expect(rows.filter((row) => row.kind === "event")).toHaveLength(0);
@@ -250,6 +259,7 @@ describe("deriveJournalRows", () => {
         outputSummary: null,
         inputSummary: null,
         lastSequence: 1,
+        lastOccurredAt: "2026-10-25T00:00:01Z",
       },
     ]);
   });
@@ -287,6 +297,7 @@ describe("deriveJournalRows", () => {
         outputSummary: null,
         inputSummary: null,
         lastSequence: 1,
+        lastOccurredAt: "2026-10-25T00:00:01Z",
       },
     ]);
   });
@@ -310,8 +321,28 @@ describe("deriveJournalRows", () => {
         outputSummary: "hi",
         inputSummary: null,
         lastSequence: 1,
+        // The late started changed the row (its name), so the tooltip time is
+        // the started event's — while placement stays pinned at the completion.
+        lastOccurredAt: "2026-10-25T00:00:02Z",
       },
     ]);
+  });
+
+  test("a tool row's lastOccurredAt follows the event that last changed it", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("tool.completed", { toolCallId: "toolu-1", isError: false }),
+      event("run.interrupted", {}),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({
+      state: "done",
+      lastSequence: 2,
+      // The terminal did not touch a settled row, so its time stays the
+      // completion's; a running row would have taken the terminal's time with
+      // its interrupted mark.
+      lastOccurredAt: "2026-10-25T00:00:02Z",
+    });
   });
 
   test("a tool_use in a completed message attaches its input to the tool row", () => {

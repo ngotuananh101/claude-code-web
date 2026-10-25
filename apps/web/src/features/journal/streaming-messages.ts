@@ -29,6 +29,8 @@ export type JournalRow =
       messageId: string;
       text: string;
       lastSequence: number;
+      /** When the event that last changed this row occurred (the tooltip). */
+      lastOccurredAt: string;
       interrupted: boolean;
     }
   | {
@@ -40,12 +42,15 @@ export type JournalRow =
       inputSummary: string | null;
       outputSummary: string | null;
       lastSequence: number;
+      /** When the event that last changed this row occurred (the tooltip). */
+      lastOccurredAt: string;
     };
 
 type StreamEntry = {
   messageId: string;
   text: string;
   lastSequence: number;
+  lastOccurredAt: string;
   interrupted: boolean;
 };
 
@@ -56,6 +61,7 @@ type ToolEntry = {
   inputSummary: string | null;
   outputSummary: string | null;
   lastSequence: number;
+  lastOccurredAt: string;
 };
 
 const RUN_TERMINALS = new Set(["run.finished", "run.failed", "run.interrupted"]);
@@ -145,6 +151,7 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
           messageId: id,
           text: "",
           lastSequence: event.sessionSequence,
+          lastOccurredAt: event.occurredAt,
           interrupted: false,
         });
       continue;
@@ -161,11 +168,18 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
       const entry =
         open.get(id) ??
         (completed.has(id)
-          ? { messageId: id, text: "", lastSequence: event.sessionSequence, interrupted: false }
+          ? {
+              messageId: id,
+              text: "",
+              lastSequence: event.sessionSequence,
+              lastOccurredAt: event.occurredAt,
+              interrupted: false,
+            }
           : undefined);
       if (entry === undefined) continue;
       entry.text += text;
       entry.lastSequence = event.sessionSequence;
+      entry.lastOccurredAt = event.occurredAt;
       open.set(id, entry);
       continue;
     }
@@ -183,12 +197,17 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
           inputSummary: null,
           outputSummary: null,
           lastSequence: event.sessionSequence,
+          lastOccurredAt: event.occurredAt,
         });
       } else {
         // A late started for an id a completion already settled (the SDK can
         // emit complete frames before their own raw events) only fills the
-        // name — a settled row keeps its position and state.
-        if (typeof name === "string" && name !== "") entry.toolName = name;
+        // name — a settled row keeps its position and state. The name is a
+        // visible change, so the row's time does move to this event.
+        if (typeof name === "string" && name !== "") {
+          entry.toolName = name;
+          entry.lastOccurredAt = event.occurredAt;
+        }
         if (entry.state === "running") entry.lastSequence = event.sessionSequence;
       }
       continue;
@@ -206,10 +225,12 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
         inputSummary: null,
         outputSummary: null,
         lastSequence: event.sessionSequence,
+        lastOccurredAt: event.occurredAt,
       };
       entry.state = payload?.["isError"] === true ? "error" : "done";
       entry.outputSummary = typeof summary === "string" && summary !== "" ? summary : null;
       entry.lastSequence = event.sessionSequence;
+      entry.lastOccurredAt = event.occurredAt;
       tools.set(id, entry);
       continue;
     }
@@ -226,9 +247,18 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
     }
 
     if (RUN_TERMINALS.has(event.type)) {
-      for (const entry of open.values()) entry.interrupted = true;
+      // The interrupted mark is a visible change to every open entry, so the
+      // terminal's time is what their tooltips carry — placement is not: it
+      // stays at each entry's own last event.
+      for (const entry of open.values()) {
+        entry.interrupted = true;
+        entry.lastOccurredAt = event.occurredAt;
+      }
       for (const entry of tools.values()) {
-        if (entry.state === "running") entry.state = "interrupted";
+        if (entry.state === "running") {
+          entry.state = "interrupted";
+          entry.lastOccurredAt = event.occurredAt;
+        }
       }
       pending.push({ row: { kind: "event", event }, sequence: event.sessionSequence });
       continue;
@@ -285,6 +315,7 @@ function streamingRow(entry: StreamEntry): JournalRow {
     messageId: entry.messageId,
     text: entry.text,
     lastSequence: entry.lastSequence,
+    lastOccurredAt: entry.lastOccurredAt,
     interrupted: entry.interrupted,
   };
 }
@@ -299,5 +330,6 @@ function toolRow(entry: ToolEntry): JournalRow {
     inputSummary: entry.inputSummary,
     outputSummary: entry.outputSummary,
     lastSequence: entry.lastSequence,
+    lastOccurredAt: entry.lastOccurredAt,
   };
 }

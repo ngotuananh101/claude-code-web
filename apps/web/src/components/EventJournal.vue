@@ -101,6 +101,7 @@ const emptyCopy = computed(() =>
       <div v-else-if="row.kind === 'tool'" class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
         <span
           class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
+          :title="row.lastOccurredAt"
         >
           {{ row.lastSequence }}
         </span>
@@ -124,6 +125,7 @@ const emptyCopy = computed(() =>
       <div v-else class="grid grid-cols-[76px_1fr] py-1.75 hover:bg-muted/50">
         <span
           class="pr-4.5 text-right text-xs leading-[1.9] font-mono text-muted-foreground select-all"
+          :title="row.lastOccurredAt"
         >
           {{ row.lastSequence }}
         </span>
