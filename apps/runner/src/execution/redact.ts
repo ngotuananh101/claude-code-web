@@ -75,6 +75,17 @@ export function redactErrorText(text: string): string {
 }
 
 /**
+ * The one-line view of a tool call that travels with `approval.requested`
+ * (§13.1). The full input never leaves the runner — the journal carries this
+ * summary, so it gets the same secret masking as error text and a hard size
+ * cap that keeps one huge `Write` input from bloating the event payload.
+ */
+export function summarizeToolInput(input: unknown): string {
+  const raw = typeof input === "string" ? input : JSON.stringify(input ?? null);
+  return redactErrorText(raw).slice(0, 2000);
+}
+
+/**
  * Fields whose value is diagnostic text rather than run content.
  *
  * The SDK reports a failure two ways: as a thrown error, and as a `result`
