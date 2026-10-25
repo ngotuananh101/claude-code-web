@@ -113,6 +113,32 @@ describe("deriveJournalRows", () => {
     expect(rows.filter((row) => row.kind === "event")).toHaveLength(1);
   });
 
+  test("a delta following its own completed reopens the entry (observed SDK ordering)", () => {
+    // The compiled-binary probe showed the SDK can emit a complete assistant
+    // message before the text deltas of the same message id. The transcript
+    // must stream that text too, and the final completed closes it again.
+    reset();
+    const prefix = [
+      event("message.started", { messageId: "msg_1" }),
+      event("message.completed", { id: "msg_1" }),
+      event("message.delta", { messageId: "msg_1", text: "OK" }),
+    ];
+    const mid = deriveJournalRows(prefix);
+    expect(streamingRows(mid)).toEqual([
+      {
+        kind: "streaming",
+        key: "streaming-msg_1",
+        messageId: "msg_1",
+        text: "OK",
+        lastSequence: 3,
+        interrupted: false,
+      },
+    ]);
+    const rows = deriveJournalRows([...prefix, event("message.completed", { id: "msg_1" })]);
+    expect(streamingRows(rows)).toEqual([]);
+    expect(rows.filter((row) => row.kind === "event")).toHaveLength(2);
+  });
+
   test("interleaved messages keep their texts separate", () => {
     reset();
     const rows = deriveJournalRows([

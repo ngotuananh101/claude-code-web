@@ -46,6 +46,7 @@ function messageIdOf(payload: unknown): string | undefined {
 export function deriveJournalRows(events: readonly BrowserReplayEvent[]): JournalRow[] {
   const rows: JournalRow[] = [];
   const open = new Map<string, StreamEntry>();
+  const completed = new Set<string>();
   let lastRun: string | null = null;
 
   for (const event of events) {
@@ -69,17 +70,29 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
     if (event.type === "message.delta") {
       const id = messageIdOf(event.payload);
       const text = (event.payload as Record<string, unknown> | null)?.["text"];
-      const entry = id === undefined ? undefined : open.get(id);
-      if (entry !== undefined && typeof text === "string") {
-        entry.text += text;
-        entry.lastSequence = event.sessionSequence;
-      }
+      if (typeof text !== "string" || id === undefined) continue;
+      // The SDK can emit a message's complete frame before its own text deltas
+      // (observed from the compiled binary). A delta for an id the transcript
+      // already completed reopens the entry — the following completed for that
+      // id closes it again; a delta for a truly unknown id stays ignored.
+      const entry =
+        open.get(id) ??
+        (completed.has(id)
+          ? { messageId: id, text: "", lastSequence: event.sessionSequence, interrupted: false }
+          : undefined);
+      if (entry === undefined) continue;
+      entry.text += text;
+      entry.lastSequence = event.sessionSequence;
+      open.set(id, entry);
       continue;
     }
 
     if (event.type === "message.completed") {
       const id = (event.payload as Record<string, unknown> | null)?.["id"];
-      if (typeof id === "string") open.delete(id);
+      if (typeof id === "string") {
+        open.delete(id);
+        completed.add(id);
+      }
       rows.push({ kind: "event", event });
       continue;
     }
