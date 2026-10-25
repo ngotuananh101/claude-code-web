@@ -11,8 +11,12 @@ import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
  * Submit a prompt as a run: decide, persist, deliver — all inside
  * scheduler.dispatch — and answer 202 with the ids the journal will use.
  *
- * Runner selection is the §11.3 MVP: the owner's runners in creation order,
- * first one the gateway reports `ready`. No placement beyond that, and the
+ * Placement (§15.1, §11.3): the runners declare their workspaces, and a body
+ * that names one is pinned to that set — the candidate runners are the owner's
+ * who declare the workspace, the earliest-ready wins. A `runnerId` in the body
+ * must be the owner's own runner and must declare the workspace it is being
+ * asked to run in. A body that names neither keeps the §11.3 MVP: the owner's
+ * runners in creation order, first one the gateway reports `ready`. The
  * capacity base is one concurrent run, which is what §11.3 sizes the MVP at.
  */
 export async function handleDispatchRun(
@@ -49,6 +53,7 @@ export async function handleDispatchRun(
     workspaceId?: unknown;
     permissionMode?: unknown;
     model?: unknown;
+    runnerId?: unknown;
   };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
@@ -88,25 +93,71 @@ export async function handleDispatchRun(
     model = record.model;
   }
 
+  // §15.1: an explicit runner pin. A non-string is malformed input; a string
+  // that is not the owner's own live runner is refused with its own code —
+  // a run must never silently land somewhere the operator did not pin.
+  let runnerId: string | undefined;
+  if (record.runnerId !== undefined) {
+    if (typeof record.runnerId !== "string") {
+      return new Response("bad request", { status: 400 });
+    }
+    const pinned = options.db
+      .query("SELECT id FROM runners WHERE id = ? AND owner_id = ? AND revoked_at IS NULL")
+      .get(record.runnerId, authorized.userId) as { id: string } | null;
+    if (pinned === null) {
+      return new Response("unknown_runner", { status: 400 });
+    }
+    runnerId = record.runnerId;
+  }
+
   // Checked before runner selection so a double-submit answers with its own
   // cause: the session is busy, not "no runner could take it" (§2.3).
   if (scheduler.activeRunFor(sessionId)) {
     return new Response("session_busy", { status: 409 });
   }
 
-  const rows = options.db
-    .query("SELECT id FROM runners WHERE owner_id = ? AND revoked_at IS NULL ORDER BY created_at")
-    .all(authorized.userId) as Array<{ id: string }>;
+  // Candidates, in creation order. A workspace in the body narrows them to the
+  // runners that declare it (§15.1: the runner is the registration authority) —
+  // a workspaceId nobody declared must never widen into "any ready runner".
+  // The 4xx refusals come before readiness on purpose: a placement that cannot
+  // work is a client error even when a runner happens to be down.
+  let candidates: Array<{ id: string }>;
+  if (typeof record.workspaceId === "string" && record.workspaceId.trim() !== "") {
+    candidates = options.db
+      .query(
+        `SELECT r.id FROM runners r
+         JOIN workspaces w ON w.runner_id = r.id
+         WHERE r.owner_id = ? AND r.revoked_at IS NULL AND w.workspace_id = ?
+         ORDER BY r.created_at`,
+      )
+      .all(authorized.userId, workspaceId) as Array<{ id: string }>;
+    if (candidates.length === 0) {
+      return new Response("unknown_workspace", { status: 400 });
+    }
+    if (runnerId !== undefined && !candidates.some((row) => row.id === runnerId)) {
+      return new Response("unknown_workspace", { status: 400 });
+    }
+  } else {
+    candidates = options.db
+      .query("SELECT id FROM runners WHERE owner_id = ? AND revoked_at IS NULL ORDER BY created_at")
+      .all(authorized.userId) as Array<{ id: string }>;
+  }
 
   let ready: string | undefined;
   let connected = false;
-  for (const row of rows) {
-    const state = runnerGateway.stateOf(row.id);
-    if (state === "ready") {
-      ready = row.id;
-      break;
+  if (runnerId !== undefined) {
+    const state = runnerGateway.stateOf(runnerId);
+    if (state === "ready") ready = runnerId;
+    else if (state === "connected") connected = true;
+  } else {
+    for (const row of candidates) {
+      const state = runnerGateway.stateOf(row.id);
+      if (state === "ready") {
+        ready = row.id;
+        break;
+      }
+      if (state === "connected") connected = true;
     }
-    if (state === "connected") connected = true;
   }
   if (ready === undefined) {
     // §17.3: never hold the request on an offline runner. The reason tells the

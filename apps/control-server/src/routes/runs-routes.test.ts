@@ -4,6 +4,7 @@ import {
   CommandOutbox,
   issueRunnerCredential,
   migrate,
+  upsertRunnerWorkspaces,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
 import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
@@ -26,11 +27,11 @@ import { createServer, type ServerHandle } from "../server.ts";
 const origin = "https://cc.example.test";
 
 let handle: ServerHandle | undefined;
-let link: Link | undefined;
+let links: Link[] = [];
 
 afterEach(() => {
-  link?.close();
-  link = undefined;
+  for (const link of links) link.close();
+  links = [];
   handle?.stop();
   handle = undefined;
 });
@@ -62,20 +63,40 @@ async function start() {
 /**
  * A runner that completes the §6.2 handshake and answers commands from the real
  * inbox. Emits nothing on its own; the tests push events through `send`.
+ *
+ * Several tests hold two runners at once, so every link is kept for the
+ * afterEach sweep. The hello carries the declared workspaces exactly like the
+ * real runner's does (Task 8) — omitting them declares none, which is what an
+ * older runner would do.
  */
-async function connectRunner(url: string, credential: string, inbox: Database) {
+async function connectRunner(
+  url: string,
+  credential: string,
+  inbox: Database,
+  options: { runnerId?: string; workspaces?: Array<{ workspaceId: string; path: string }> } = {},
+) {
+  const runnerId = options.runnerId ?? "runner-a";
   const received: Array<Record<string, unknown>> = [];
 
-  link = await dialWebSocket({
+  const link = await dialWebSocket({
     url: `${url.replace("http", "ws")}/ws/runner`,
     credential,
   });
+  links.push(link);
 
   const opened = new Promise<void>((resolve) => {
-    link!.onMessage((raw) => {
+    link.onMessage((raw) => {
       const frame = JSON.parse(raw) as Record<string, unknown>;
       if (frame["type"] === "hello.ok") {
-        link!.send(JSON.stringify({ type: "reconcile", runner: [] }));
+        // The real runner re-carries its declaration on every reconcile (Task
+        // 8); an empty one here would wipe what the hello just stored.
+        link.send(
+          JSON.stringify({
+            type: "reconcile",
+            runner: [],
+            workspaces: options.workspaces ?? [],
+          }),
+        );
       }
       if (frame["type"] === "reconcile.ok") resolve();
 
@@ -86,8 +107,8 @@ async function connectRunner(url: string, credential: string, inbox: Database) {
         const result =
           parsed === undefined
             ? { ok: false as const, reason: "malformed" }
-            : acceptCommand(inbox, parsed, { localRunnerId: "runner-a" });
-        link!.send(
+            : acceptCommand(inbox, parsed, { localRunnerId: runnerId });
+        link.send(
           JSON.stringify({
             type: "command.receipt",
             commandId: record["commandId"],
@@ -105,14 +126,15 @@ async function connectRunner(url: string, credential: string, inbox: Database) {
       type: "hello",
       hello: {
         protocolVersion: 1,
-        runnerId: "runner-a",
-        bootId: "boot-1",
+        runnerId,
+        bootId: `boot-${runnerId}`,
         runnerVersion: "0.0.0",
         sdkVersion: "0.3.309",
         platform: "linux/x64",
         maxConcurrentRuns: 1,
         activeRuns: [],
         eventOffsets: [],
+        workspaces: options.workspaces ?? [],
       },
     }),
   );
@@ -120,7 +142,7 @@ async function connectRunner(url: string, credential: string, inbox: Database) {
   await opened;
   return {
     received,
-    send: (frame: Record<string, unknown>) => link!.send(JSON.stringify(frame)),
+    send: (frame: Record<string, unknown>) => link.send(JSON.stringify(frame)),
   };
 }
 
@@ -374,6 +396,200 @@ describe("the model on POST /api/sessions/:id/runs", () => {
     expect(
       payloads.some((row) => "model" in (JSON.parse(row.payload) as Record<string, unknown>)),
     ).toBe(false);
+  });
+});
+
+describe("placement pins the runner through the workspace", () => {
+  test("a workspace declared on one runner only dispatches to that runner", async () => {
+    const { db, url, cookie, credential } = await start();
+    issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" });
+
+    // runner-a is the earlier runner and is ready — but it declares a different
+    // workspace. Only runner-b declares "default", so the run must land there
+    // even though the legacy first-ready rule would have chosen runner-a.
+    const inboxA = runnerInbox();
+    await connectRunner(url, credential, inboxA, {
+      workspaces: [{ workspaceId: "other", path: "/srv/a" }],
+    });
+    const inboxB = runnerInbox();
+    await connectRunner(
+      url,
+      issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" }).credential,
+      inboxB,
+      { runnerId: "runner-b", workspaces: [{ workspaceId: "default", path: "/srv/b" }] },
+    );
+    await waitFor(
+      () =>
+        handle!.runnerGateway.stateOf("runner-a") === "ready" &&
+        handle!.runnerGateway.stateOf("runner-b") === "ready",
+    );
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "default" }),
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { runnerId: string };
+    expect(body.runnerId).toBe("runner-b");
+
+    await waitFor(
+      () =>
+        (inboxB.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n === 1,
+    );
+    expect((inboxA.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("a workspace no runner declared is a bad request with an empty outbox", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "nope" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_workspace");
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("a runner owned by someone else is refused with unknown_runner", async () => {
+    const { db, url, cookie, credential } = await start();
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other-owner", "hash", 1, Date.now());
+    issueRunnerCredential(db, { id: "runner-x", ownerId: "user-2" });
+
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", runnerId: "runner-x" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_runner");
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("a pinned runner that does not declare the workspace is refused with unknown_workspace", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "other", path: "/srv/a" }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "default", runnerId: "runner-a" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_workspace");
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("among runners declaring the workspace, the first ready in creation order wins", async () => {
+    const { db, url, cookie } = await start();
+    const b = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" });
+    // A strict creation order makes the deterministic tie-break observable.
+    db.query("UPDATE runners SET created_at = ? WHERE id = ?").run(1000, "runner-a");
+    db.query("UPDATE runners SET created_at = ? WHERE id = ?").run(2000, "runner-b");
+    // runner-a declares the workspace but is not connected: its last declaration
+    // is what the workspaces table still holds (seeded directly, as storage).
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/a" }]);
+
+    const inboxB = runnerInbox();
+    await connectRunner(url, b.credential, inboxB, {
+      runnerId: "runner-b",
+      workspaces: [{ workspaceId: "default", path: "/srv/b" }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-b") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "default" }),
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { runnerId: string };
+    expect(body.runnerId).toBe("runner-b");
+
+    await waitFor(
+      () =>
+        (inboxB.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n === 1,
+    );
+  });
+
+  test("a revoked runner is never a candidate, even one that declared the workspace", async () => {
+    const { db, url, cookie } = await start();
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/a" }]);
+    db.query("UPDATE runners SET revoked_at = ? WHERE id = ?").run(Date.now(), "runner-a");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "default" }),
+    });
+
+    // Nothing declares "default" anymore — and a revoked declaration must not
+    // resurrect a candidate, so the answer is the 400, not a dispatch.
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("unknown_workspace");
+  });
+
+  test("an absent workspaceId keeps the legacy first-ready dispatch", async () => {
+    const { db, url, cookie, credential } = await start();
+    const b = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" });
+    db.query("UPDATE runners SET created_at = ? WHERE id = ?").run(1000, "runner-a");
+    db.query("UPDATE runners SET created_at = ? WHERE id = ?").run(2000, "runner-b");
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "other", path: "/srv/a" }]);
+
+    const inboxA = runnerInbox();
+    await connectRunner(url, credential, inboxA);
+    const inboxB = runnerInbox();
+    await connectRunner(url, b.credential, inboxB, { runnerId: "runner-b" });
+    await waitFor(
+      () =>
+        handle!.runnerGateway.stateOf("runner-a") === "ready" &&
+        handle!.runnerGateway.stateOf("runner-b") === "ready",
+    );
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { runnerId: string };
+    // Both runners are ready; legacy placement ignores workspaces and the
+    // earliest runner wins.
+    expect(body.runnerId).toBe("runner-a");
+
+    await waitFor(
+      () =>
+        (inboxA.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n === 1,
+    );
+    expect((inboxB.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
   });
 });
 
