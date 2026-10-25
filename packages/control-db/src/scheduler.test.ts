@@ -185,6 +185,44 @@ describe("scheduler", () => {
 
     expect(db.query("SELECT COUNT(*) AS n FROM sessions").get()).toEqual({ n: 0 });
   });
+
+  test("a concurrent dispatch cannot leave the pin on the loser", async () => {
+    const { db, scheduler } = setup();
+    const subtle = globalThis.crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    const releases: Array<() => void> = [];
+    // The outbox fingerprint hashes asynchronously; hold each digest until the
+    // test releases it, so the interleaving of two concurrent dispatches of
+    // one idle session is decided here instead of by the event loop.
+    subtle.digest = ((...args: Parameters<typeof realDigest>) =>
+      new Promise<ArrayBuffer>((resolve) =>
+        releases.push(() => resolve(realDigest(...args))),
+      )) as typeof subtle.digest;
+    try {
+      const loser = scheduler.dispatch(request, capacity({ runnerId: "runner-b" }));
+      await Bun.sleep(2);
+      const winner = scheduler.dispatch(
+        { ...request, runId: "run-2", attemptId: "attempt-2" },
+        capacity(),
+      );
+      await Bun.sleep(2);
+      releases[1]?.();
+      await Bun.sleep(2);
+      releases[0]?.();
+      const decisions = await Promise.all([loser, winner]);
+
+      // The insert race went to runner-a; the pin must name runner-a too. A
+      // pin written before the awaited enqueue could survive on the dispatch
+      // that lost, silently splitting the session forever.
+      expect(decisions[1]).toMatchObject({ ok: true, runnerId: "runner-a" });
+      expect(decisions[0]).toEqual({ ok: false, reason: "session_busy" });
+      expect(db.query("SELECT runner_id FROM sessions WHERE id = ?").get("session-1")).toEqual({
+        runner_id: "runner-a",
+      });
+    } finally {
+      subtle.digest = realDigest;
+    }
+  });
 });
 
 describe("scheduler cancel (§14.2)", () => {

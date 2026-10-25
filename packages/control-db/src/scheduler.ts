@@ -108,17 +108,6 @@ export class Scheduler {
       return { ok: false, reason: "session_busy" };
     }
 
-    // The pin is written only for an accepted dispatch — a refusal must never
-    // relocate a session — and before the enqueue on purpose: a crash between
-    // the two leaves a pinned session with no run, which the operator retries
-    // into the same pin, never the reverse.
-    ensureSessionPin(this.#db, {
-      sessionId: request.sessionId,
-      ownerId: request.ownerId,
-      workspaceId: request.workspaceId,
-      runnerId: capacity.runnerId,
-    });
-
     const commandId = `cmd_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
 
@@ -143,6 +132,22 @@ export class Scheduler {
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
         ...(request.model === undefined ? {} : { model: request.model }),
       },
+    });
+
+    // The pin is written only for an accepted dispatch — a refusal must never
+    // relocate a session — and here, after the awaited enqueue and in the same
+    // synchronous continuation as the active_runs insert, on purpose: the
+    // enqueue hashes asynchronously, so a pin written earlier could survive on
+    // a concurrent dispatch that then lost the session-busy insert race. From
+    // this point the pin writer and the insert winner are the same dispatch by
+    // construction. A crash between pin and insert leaves a pinned session
+    // with an enqueued command and no active row — a retry passes every gate
+    // (duplicate_run reads active_runs) and lands in its own pin.
+    ensureSessionPin(this.#db, {
+      sessionId: request.sessionId,
+      ownerId: request.ownerId,
+      workspaceId: request.workspaceId,
+      runnerId: capacity.runnerId,
     });
 
     try {
