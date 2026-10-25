@@ -39,9 +39,12 @@ export function ensureSessionPin(db: Database, input: EnsureSessionPinInput): vo
 export function sessionPin(db: Database, sessionId: string): SessionPin | undefined {
   const row = db
     .query("SELECT id, owner_id, workspace_id, runner_id FROM sessions WHERE id = ?")
-    .get(sessionId) as
-    | { id: string; owner_id: string; workspace_id: string; runner_id: string }
-    | null;
+    .get(sessionId) as {
+    id: string;
+    owner_id: string;
+    workspace_id: string;
+    runner_id: string;
+  } | null;
   return row === null
     ? undefined
     : {

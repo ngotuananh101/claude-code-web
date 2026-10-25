@@ -57,7 +57,7 @@ async function start() {
     outbox: new CommandOutbox(db),
   });
   const cookie = `cc_session=${await auth.issueAccessToken("user-1")}`;
-  return { db, url: `http://127.0.0.1:${handle.server.port}`, cookie, credential };
+  return { db, url: `http://127.0.0.1:${handle.server.port}`, cookie, credential, auth };
 }
 
 /**
@@ -143,6 +143,7 @@ async function connectRunner(
   return {
     received,
     send: (frame: Record<string, unknown>) => link.send(JSON.stringify(frame)),
+    link,
   };
 }
 
@@ -590,6 +591,287 @@ describe("placement pins the runner through the workspace", () => {
     expect((inboxB.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
       0,
     );
+  });
+});
+
+/**
+ * The session pin (§2.3, ADR-006): the first accepted dispatch records where a
+ * session ran, and every later run of that session rides the pin — never
+ * re-running placement, never failing over. The pin is immutable; a body that
+ * contradicts it is refused with its own code, and another owner's session is
+ * simply not there (404).
+ */
+describe("an existing session rides its pin", () => {
+  /** The terminal event the real daemon reports, so the session frees up. */
+  function finishedEvent(runnerId: string, runId: string, n: number) {
+    return {
+      protocolVersion: 1,
+      eventId: `evt-pin-${n}`,
+      runnerId,
+      bootId: `boot-${runnerId}`,
+      sessionId: "session-1",
+      runId,
+      attemptId: `attempt-pin-${n}`,
+      localSequence: 1,
+      occurredAt: new Date().toISOString(),
+      type: "run.finished",
+      payload: {},
+    };
+  }
+
+  function inboxCount(inbox: Database): number {
+    return (inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n;
+  }
+
+  function payloadWorkspaceIds(inbox: Database): Array<string | undefined> {
+    return (
+      inbox.query("SELECT payload FROM command_inbox ORDER BY rowid").all() as {
+        payload: string;
+      }[]
+    ).map((row) => (JSON.parse(row.payload) as { workspaceId?: string }).workspaceId);
+  }
+
+  test("a session's second run returns to its pinned runner, not the earliest ready one", async () => {
+    const { db, url, cookie, credential } = await start();
+    const credB = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" }).credential;
+    const inbox = runnerInbox();
+    const inboxB = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    const runnerB = await connectRunner(url, credB, inboxB, { runnerId: "runner-b" });
+    await waitFor(
+      () =>
+        handle!.runnerGateway.stateOf("runner-a") === "ready" &&
+        handle!.runnerGateway.stateOf("runner-b") === "ready",
+    );
+
+    // Take runner-a out of the picture for the first dispatch: candidates
+    // exclude revoked runners, so the run lands on runner-b and pins there.
+    db.query("UPDATE runners SET revoked_at = ? WHERE id = ?").run(Date.now(), "runner-a");
+    const firstResponse = await dispatch(url, cookie, "hello");
+    expect(firstResponse.status).toBe(202);
+    const first = (await firstResponse.json()) as { runnerId: string; runId: string };
+    expect(first.runnerId).toBe("runner-b");
+    await waitFor(() => inboxCount(inboxB) === 1);
+
+    // runner-a comes back; the next run of the session must still go to the
+    // pinned runner-b, even though runner-a is the earliest ready candidate.
+    db.query("UPDATE runners SET revoked_at = NULL WHERE id = ?").run("runner-a");
+    runnerB.send({ type: "events", events: [finishedEvent("runner-b", first.runId, 1)] });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    const second = await dispatch(url, cookie, "next");
+    expect(second.status).toBe(202);
+    expect(((await second.json()) as { runnerId: string }).runnerId).toBe("runner-b");
+  });
+
+  test("a prompt-only rerun rides the pinned workspace", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "ws", path: "/srv/a" }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // The pin is born from an explicit workspace choice, not the legacy default.
+    const firstResponse = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", workspaceId: "ws" }),
+    });
+    expect(firstResponse.status).toBe(202);
+    const first = (await firstResponse.json()) as { runId: string };
+    await waitFor(() => inboxCount(inbox) === 1);
+
+    (runner.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    const second = await dispatch(url, cookie, "next");
+    expect(second.status).toBe(202);
+    await waitFor(() => inboxCount(inbox) === 2);
+
+    // Both payloads carry the pinned workspace — a prompt-only rerun must not
+    // silently fall back to "default".
+    expect(payloadWorkspaceIds(inbox)).toEqual(["ws", "ws"]);
+    expect(db.query("SELECT workspace_id FROM sessions WHERE id = ?").get("session-1")).toEqual({
+      workspace_id: "ws",
+    });
+  });
+
+  test("a different workspace than the pin is refused with session_pinned", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox, {
+      workspaces: [{ workspaceId: "ws", path: "/srv/a" }],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+    (runner.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "next", workspaceId: "other" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.text()).toBe("session_pinned");
+    expect(inboxCount(inbox)).toBe(1);
+  });
+
+  test("a different runner than the pin is refused with session_pinned", async () => {
+    const { db, url, cookie, credential } = await start();
+    const credB = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" }).credential;
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await connectRunner(url, credB, runnerInbox(), { runnerId: "runner-b" });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+    (runner.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "next", runnerId: "runner-b" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.text()).toBe("session_pinned");
+  });
+
+  test("a body that matches the pin is accepted", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+    (runner.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "next", runnerId: "runner-a", workspaceId: "default" }),
+    });
+    expect(response.status).toBe(202);
+    expect(((await response.json()) as { runnerId: string }).runnerId).toBe("runner-a");
+  });
+
+  test("an offline pinned runner is refused without failover", async () => {
+    const { db, url, cookie, credential } = await start();
+    const credB = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" }).credential;
+    const inbox = runnerInbox();
+    const runnerA = await connectRunner(url, credential, inbox);
+    await connectRunner(url, credB, runnerInbox(), { runnerId: "runner-b" });
+    await waitFor(
+      () =>
+        handle!.runnerGateway.stateOf("runner-a") === "ready" &&
+        handle!.runnerGateway.stateOf("runner-b") === "ready",
+    );
+
+    const firstResponse = await dispatch(url, cookie, "hello");
+    expect(firstResponse.status).toBe(202);
+    const first = (await firstResponse.json()) as { runnerId: string; runId: string };
+    expect(first.runnerId).toBe("runner-a");
+    await waitFor(() => inboxCount(inbox) === 1);
+    (runnerA.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    // runner-a drops. ADR-006: the session does not migrate — the run waits
+    // for its own runner instead of starting half a conversation elsewhere.
+    runnerA.link.close();
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") !== "ready");
+
+    const second = await dispatch(url, cookie, "next");
+    expect(second.status).toBe(503);
+    expect(await second.text()).toBe("runner_offline");
+  });
+
+  test("another owner's pin is invisible: 404, no dispatch", async () => {
+    const { db, url, cookie, credential, auth } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+
+    // Another user guesses the session id. The 404 comes before any busy
+    // check — existence is not theirs to learn, and nothing is dispatched.
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other-owner", "hash", 1, Date.now());
+    const cookie2 = `cc_session=${await auth.issueAccessToken("user-2")}`;
+    const second = await dispatch(url, cookie2, "next");
+    expect(second.status).toBe(404);
+    expect(inboxCount(inbox)).toBe(1);
+  });
+
+  test("a fresh session dispatches legacy and writes the pin", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = await dispatch(url, cookie, "hello");
+    expect(first.status).toBe(202);
+
+    expect(
+      db
+        .query("SELECT owner_id, workspace_id, runner_id FROM sessions WHERE id = ?")
+        .get("session-1"),
+    ).toEqual({
+      owner_id: "user-1",
+      workspace_id: "default",
+      runner_id: "runner-a",
+    });
+  });
+
+  test("a revoked pinned runner is refused like an offline one", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+    runner.send({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    // The pinned path never consults placement candidates, so revocation
+    // needs its own check — the run must not reach a revoked runner.
+    db.query("UPDATE runners SET revoked_at = ? WHERE id = ?").run(Date.now(), "runner-a");
+    const second = await dispatch(url, cookie, "next");
+    expect(second.status).toBe(503);
+    expect(await second.text()).toBe("runner_offline");
   });
 });
 

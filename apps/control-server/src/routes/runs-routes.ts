@@ -1,4 +1,4 @@
-import type { Scheduler } from "@cc-web/control-db";
+import { type Scheduler, sessionPin } from "@cc-web/control-db";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
@@ -93,18 +93,57 @@ export async function handleDispatchRun(
     model = record.model;
   }
 
-  // §15.1: an explicit runner pin. A non-string is malformed input; a string
-  // that is not the owner's own live runner is refused with its own code —
-  // a run must never silently land somewhere the operator did not pin.
-  let runnerId: string | undefined;
-  if (record.runnerId !== undefined) {
-    if (typeof record.runnerId !== "string") {
-      return new Response("bad request", { status: 400 });
+  // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
+  // (workspace, runner) pair, and every later run rides that pin. The pin is
+  // the placement decision — made once, made durably.
+  const pin = sessionPin(options.db, sessionId);
+  if (pin !== undefined && pin.ownerId !== authorized.userId) {
+    // Existence is not another user's to learn: 404 before any other signal,
+    // including session_busy.
+    return new Response("not found", { status: 404 });
+  }
+  if (pin !== undefined) {
+    // A contradiction between the body and the pin is its own refusal — the
+    // operator is asking to move a session, which §21.6 migration will own.
+    // Absent or blank choices are not contradictions: they ride the pin.
+    if (record.runnerId !== undefined && record.runnerId !== pin.runnerId) {
+      return new Response("session_pinned", { status: 409 });
     }
+    if (
+      typeof record.workspaceId === "string" &&
+      record.workspaceId.trim() !== "" &&
+      record.workspaceId !== pin.workspaceId
+    ) {
+      return new Response("session_pinned", { status: 409 });
+    }
+  }
+
+  // §15.1: an explicit runner pin for a NEW session. A non-string is malformed
+  // input; a string that is not the owner's own live runner is refused with
+  // its own code — a run must never silently land somewhere the operator did
+  // not pin. (A pinned session skips this entirely: its pin was validated
+  // when it was written.)
+  let runnerId: string | undefined;
+  if (typeof record.runnerId !== "string" && record.runnerId !== undefined) {
+    return new Response("bad request", { status: 400 });
+  }
+  if (pin !== undefined) {
+    // Trust the pin, not the declarations: workspace drift must never brick a
+    // resume (ADR-006), so there are no candidate or declaration checks here.
+    // The pinned runner must still be the owner's live one — revoked is as
+    // good as gone, and the session waits rather than failing over.
     const pinned = options.db
+      .query("SELECT revoked_at FROM runners WHERE id = ? AND owner_id = ?")
+      .get(pin.runnerId, authorized.userId) as { revoked_at: number | null } | null;
+    if (pinned === null || pinned.revoked_at !== null) {
+      return new Response("runner_offline", { status: 503 });
+    }
+    runnerId = pin.runnerId;
+  } else if (record.runnerId !== undefined) {
+    const owned = options.db
       .query("SELECT id FROM runners WHERE id = ? AND owner_id = ? AND revoked_at IS NULL")
       .get(record.runnerId, authorized.userId) as { id: string } | null;
-    if (pinned === null) {
+    if (owned === null) {
       return new Response("unknown_runner", { status: 400 });
     }
     runnerId = record.runnerId;
@@ -116,31 +155,37 @@ export async function handleDispatchRun(
     return new Response("session_busy", { status: 409 });
   }
 
-  // Candidates, in creation order. A workspace in the body narrows them to the
-  // runners that declare it (§15.1: the runner is the registration authority) —
-  // a workspaceId nobody declared must never widen into "any ready runner".
-  // The 4xx refusals come before readiness on purpose: a placement that cannot
-  // work is a client error even when a runner happens to be down.
-  let candidates: Array<{ id: string }>;
-  if (typeof record.workspaceId === "string" && record.workspaceId.trim() !== "") {
-    candidates = options.db
-      .query(
-        `SELECT r.id FROM runners r
-         JOIN workspaces w ON w.runner_id = r.id
-         WHERE r.owner_id = ? AND r.revoked_at IS NULL AND w.workspace_id = ?
-         ORDER BY r.created_at`,
-      )
-      .all(authorized.userId, workspaceId) as Array<{ id: string }>;
-    if (candidates.length === 0) {
-      return new Response("unknown_workspace", { status: 400 });
+  // Candidates, in creation order — NEW sessions only. A workspace in the
+  // body narrows them to the runners that declare it (§15.1: the runner is
+  // the registration authority) — a workspaceId nobody declared must never
+  // widen into "any ready runner". The 4xx refusals come before readiness on
+  // purpose: a placement that cannot work is a client error even when a
+  // runner happens to be down. A pinned session never sees this code: its
+  // placement was decided once, at pin time.
+  let candidates: Array<{ id: string }> = [];
+  if (pin === undefined) {
+    if (typeof record.workspaceId === "string" && record.workspaceId.trim() !== "") {
+      candidates = options.db
+        .query(
+          `SELECT r.id FROM runners r
+           JOIN workspaces w ON w.runner_id = r.id
+           WHERE r.owner_id = ? AND r.revoked_at IS NULL AND w.workspace_id = ?
+           ORDER BY r.created_at`,
+        )
+        .all(authorized.userId, workspaceId) as Array<{ id: string }>;
+      if (candidates.length === 0) {
+        return new Response("unknown_workspace", { status: 400 });
+      }
+      if (runnerId !== undefined && !candidates.some((row) => row.id === runnerId)) {
+        return new Response("unknown_workspace", { status: 400 });
+      }
+    } else {
+      candidates = options.db
+        .query(
+          "SELECT id FROM runners WHERE owner_id = ? AND revoked_at IS NULL ORDER BY created_at",
+        )
+        .all(authorized.userId) as Array<{ id: string }>;
     }
-    if (runnerId !== undefined && !candidates.some((row) => row.id === runnerId)) {
-      return new Response("unknown_workspace", { status: 400 });
-    }
-  } else {
-    candidates = options.db
-      .query("SELECT id FROM runners WHERE owner_id = ? AND revoked_at IS NULL ORDER BY created_at")
-      .all(authorized.userId) as Array<{ id: string }>;
   }
 
   let ready: string | undefined;
@@ -168,13 +213,17 @@ export async function handleDispatchRun(
 
   const runId = crypto.randomUUID();
   const attemptId = crypto.randomUUID();
+  // The payload carries the pin's workspace for a pinned session: a
+  // prompt-only rerun must run where the session lives, not where a fresh
+  // session would have landed.
   const decision = await scheduler.dispatch(
     {
       sessionId,
       runId,
       attemptId,
-      workspaceId,
+      workspaceId: pin !== undefined ? pin.workspaceId : workspaceId,
       prompt,
+      ownerId: authorized.userId,
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(model === undefined ? {} : { model }),
     },

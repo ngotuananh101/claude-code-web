@@ -231,6 +231,7 @@ describe("dispatch over a real socket", () => {
         attemptId: "attempt-1",
         workspaceId: "workspace-1",
         prompt: "hello",
+        ownerId: "user-1",
       },
       { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 0 },
     );
