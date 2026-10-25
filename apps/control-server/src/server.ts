@@ -26,10 +26,12 @@ import {
   sessionOwner,
   sessionWatermark,
 } from "@cc-web/control-db";
-import { PROTOCOL_VERSION } from "@cc-web/protocol";
+import { PROTOCOL_VERSION, RunRegistry } from "@cc-web/protocol";
 import type { Server } from "bun";
+import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
+import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
 import { handleCreateRunner, handleListRunners } from "./routes/runners-routes.ts";
@@ -128,7 +130,13 @@ export function createServer(options: ServerOptions): ServerHandle {
     }),
   });
 
+  // The run registry is shared with the ingest hook so approval events can
+  // suspend and resume runs (§13) in the same state the reconcile inventory
+  // reports (§14.3). The gateway would otherwise own a private one.
+  const runs = new RunRegistry();
+
   const runnerGateway = new RunnerGateway({
+    runs,
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,
     onReady: (runnerId) => dispatcher?.drain(runnerId),
@@ -143,6 +151,12 @@ export function createServer(options: ServerOptions): ServerHandle {
         const result = ingestEvent(options.db, event);
         if (result.status === "stored" && result.sessionSequence !== undefined) {
           stored.push({ event, sessionSequence: result.sessionSequence });
+        }
+        // §13.1: the approval projection and the registry transition are
+        // idempotent, so they run for duplicates too — a redelivered event
+        // heals a projection a crash skipped. A conflict projects nothing.
+        if (result.status !== "conflict") {
+          projectApprovalEvent(options.db, runs, event);
         }
       }
 
@@ -255,6 +269,18 @@ export function createServer(options: ServerOptions): ServerHandle {
           browserGateway,
           scheduler,
           decodeURIComponent(cancelMatch[1] ?? ""),
+        );
+      }
+
+      const decisionMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/decision$/);
+      if (decisionMatch && request.method === "POST") {
+        return handleApprovalDecision(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          dispatcher,
+          decodeURIComponent(decisionMatch[1] ?? ""),
         );
       }
 

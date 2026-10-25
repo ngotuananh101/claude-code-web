@@ -110,6 +110,29 @@ export class RunRegistry {
     }
   }
 
+  /**
+   * The runner's gate parked on a tool permission or a user question (§13).
+   * The work is not gone — it cannot be resumed, cancelled mid-gate, or
+   * double-run — but it is no longer making progress, and both the reconcile
+   * inventory and the operator's view should say so.
+   *
+   * A late request for a finished run is ignored: terminal observations are
+   * never retracted (§22.2).
+   */
+  markWaitingForApproval(runId: string, attemptId: string): void {
+    const run = this.#current(runId, attemptId);
+    if (!run) return;
+    if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return;
+    run.observedState = "waiting_for_approval";
+  }
+
+  /** The gate resolved; the attempt is making progress again. */
+  markApprovalResolved(runId: string, attemptId: string): void {
+    const run = this.#current(runId, attemptId);
+    if (run?.observedState !== "waiting_for_approval") return;
+    run.observedState = "running";
+  }
+
   apply(action: ReconcileAction): void {
     switch (action.kind) {
       case "quarantine": {

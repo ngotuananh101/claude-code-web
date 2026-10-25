@@ -266,3 +266,80 @@ describe("reconcile + registry", () => {
     expect(r.activeRunFor("session-1")).toBeUndefined();
   });
 });
+
+describe("approval waiting state (§13)", () => {
+  test("markWaitingForApproval suspends the run the request belongs to", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    r.markWaitingForApproval("run-1", "attempt-1");
+
+    expect(r.get("run-1")?.observedState).toBe("waiting_for_approval");
+    // The run still holds the session: an approval is a pause, not a finish.
+    expect(r.activeRunFor("session-1")?.runId).toBe("run-1");
+  });
+
+  test("markApprovalResolved returns a waiting run to running", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+    r.markWaitingForApproval("run-1", "attempt-1");
+
+    r.markApprovalResolved("run-1", "attempt-1");
+
+    expect(r.get("run-1")?.observedState).toBe("running");
+  });
+
+  test("an approval on a stale attempt is ignored (§14.4)", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    r.markWaitingForApproval("run-1", "attempt-old");
+    r.markApprovalResolved("run-1", "attempt-old");
+
+    expect(r.get("run-1")?.observedState).toBeUndefined();
+  });
+
+  test("a terminal run never re-enters waiting on a late approval event", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+    r.apply({ kind: "adopt_terminal", runId: "run-1", attemptId: "attempt-1", state: "failed" });
+
+    r.markWaitingForApproval("run-1", "attempt-1");
+
+    expect(r.get("run-1")?.observedState).toBe("failed");
+  });
+
+  test("markApprovalResolved leaves a run that was never waiting alone", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    r.markApprovalResolved("run-1", "attempt-1");
+
+    expect(r.get("run-1")?.observedState).toBeUndefined();
+  });
+});

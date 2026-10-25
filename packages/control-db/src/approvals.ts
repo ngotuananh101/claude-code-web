@@ -134,7 +134,9 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
       const exists = db
         .prepare("SELECT 1 FROM approvals WHERE approval_id = ?")
         .get(input.approvalId);
-      return exists === null ? { ok: false, reason: "unknown" } : { ok: false, reason: "not_pending" };
+      return exists === null
+        ? { ok: false, reason: "unknown" }
+        : { ok: false, reason: "not_pending" };
     }
 
     const row = db
@@ -180,7 +182,12 @@ export function recordApprovalDecision(db: Database, input: DecisionInput): Deci
       now,
     );
 
-    return { ok: true, runnerId: row.runner_id, inputHash: row.input_hash, sessionId: row.session_id };
+    return {
+      ok: true,
+      runnerId: row.runner_id,
+      inputHash: row.input_hash,
+      sessionId: row.session_id,
+    };
   });
 
   return tx();

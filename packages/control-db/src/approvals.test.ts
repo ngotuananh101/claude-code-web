@@ -1,13 +1,13 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { migrate } from "./db.ts";
-import { CommandOutbox, fingerprintOf } from "./command-outbox.ts";
 import {
   approvalForSession,
   closeApproval,
   recordApprovalDecision,
   upsertApprovalRequested,
 } from "./approvals.ts";
+import { CommandOutbox, fingerprintOf } from "./command-outbox.ts";
+import { migrate } from "./db.ts";
 
 /**
  * The server-side approvals projection (§13).
@@ -114,9 +114,19 @@ describe("recordApprovalDecision", () => {
 
     const decisions = db
       .prepare("SELECT approval_id, decision, answers_json, decided_at FROM approval_decisions")
-      .all() as Array<{ approval_id: string; decision: string; answers_json: string; decided_at: number }>;
+      .all() as Array<{
+      approval_id: string;
+      decision: string;
+      answers_json: string;
+      decided_at: number;
+    }>;
     expect(decisions).toEqual([
-      { approval_id: "apr-1", decision: "deny", answers_json: '[{"question":"why","answer":"no"}]', decided_at: 1_100 },
+      {
+        approval_id: "apr-1",
+        decision: "deny",
+        answers_json: '[{"question":"why","answer":"no"}]',
+        decided_at: 1_100,
+      },
     ]);
 
     const commands = new CommandOutbox(db).pendingFor("runner-a");

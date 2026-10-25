@@ -6,21 +6,23 @@
  */
 
 export {
-  type CommandKind,
-  CommandOutbox,
-  type DeliveryState,
-  type EnqueueInput,
-  type OutboxCommand,
-} from "./command-outbox.ts";
-export {
-  approvalForSession,
   type ApprovalKind,
   type ApprovalRecord,
+  approvalForSession,
   closeApproval,
   type DecisionOutcome,
   recordApprovalDecision,
   type UpsertApprovalRequestedInput,
+  upsertApprovalRequested,
 } from "./approvals.ts";
+export {
+  type CommandKind,
+  CommandOutbox,
+  type DeliveryState,
+  type EnqueueInput,
+  fingerprintOf,
+  type OutboxCommand,
+} from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
   attemptWatermark,
