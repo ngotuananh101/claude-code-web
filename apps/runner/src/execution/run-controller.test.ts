@@ -919,3 +919,50 @@ describe("approvals", () => {
     ).toEqual({ n: 0 });
   });
 });
+
+describe("workspace preparation (M4)", () => {
+  test("the branch from the payload reaches the gate with the resolved path", async () => {
+    const { db } = setup();
+    const seen: Array<{ workspacePath: string; branch: string | undefined }> = [];
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })(),
+      prepareWorkspace: async (workspacePath, branch) => {
+        seen.push({ workspacePath, branch });
+        return { kind: "ready", checkedOut: true, branch };
+      },
+    });
+
+    await controller.handle({ ...command, payload: { prompt: "hello", branch: "dev" } });
+    await controller.settle();
+
+    expect(seen).toEqual([{ workspacePath: "/home/runner/project", branch: "dev" }]);
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+  });
+
+  test("a gate refusal fails the attempt and releases the workspace", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })(),
+      prepareWorkspace: async () => ({ kind: "refused", reason: "dirty_tree", branch: "dev" }),
+    });
+
+    const receipt = await controller.handle({ ...command, payload: { prompt: "hello", branch: "dev" } });
+    await controller.settle();
+
+    expect(receipt.accepted).toBe(true);
+    expect(attemptState(db, "attempt-1")).toBe("failed");
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+});

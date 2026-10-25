@@ -24,7 +24,7 @@ import {
 import type { RunnerInventoryItem } from "../connection/reconnect-loop.ts";
 import { ApprovalRouter } from "./approvals.ts";
 import { asCommandEnvelope, commandIdOf } from "./envelope.ts";
-import { executeRun, type SdkStream } from "./executor.ts";
+import { executeRun, type ExecuteOptions, type SdkStream } from "./executor.ts";
 
 export type CommandReceipt = {
   commandId: string;
@@ -39,6 +39,12 @@ export type ControllerOptions = {
   /** Resolves a workspace id to its canonical path, or undefined if unregistered. */
   workspacePathFor: (workspaceId: string) => string | undefined;
   sdk: SdkStream;
+  /**
+   * The workspace-preparation gate (M4): threaded to every run under the
+   * workspace lock it already holds. The daemon wires the branch checkout
+   * gate; absent means nothing to prepare.
+   */
+  prepareWorkspace?: ExecuteOptions["prepareWorkspace"];
   /** Injected clock, so expiry is testable without waiting for it. */
   now?: () => number;
   /**
@@ -68,6 +74,7 @@ export class RunController {
   readonly #localRunnerId: string;
   readonly #workspacePathFor: (workspaceId: string) => string | undefined;
   readonly #sdk: SdkStream;
+  readonly #prepareWorkspace: ExecuteOptions["prepareWorkspace"] | undefined;
   readonly #now: () => number;
   readonly #onSettled: ((attemptId: string) => void) | undefined;
   readonly #onApprovalEvent: (() => void) | undefined;
@@ -86,6 +93,7 @@ export class RunController {
     this.#localRunnerId = options.localRunnerId;
     this.#workspacePathFor = options.workspacePathFor;
     this.#sdk = options.sdk;
+    this.#prepareWorkspace = options.prepareWorkspace;
     this.#now = options.now ?? Date.now;
     this.#onSettled = options.onSettled;
     this.#onApprovalEvent = options.onApprovalEvent;
@@ -230,6 +238,9 @@ export class RunController {
       promise: executeRun(this.#db, parsed, {
         workspacePath,
         sdk: this.#sdk,
+        ...(this.#prepareWorkspace === undefined
+          ? {}
+          : { prepareWorkspace: this.#prepareWorkspace }),
         signal: controller.signal,
         router: (append, attempt) => {
           const router = new ApprovalRouter({ db: this.#db, append, now: this.#now });

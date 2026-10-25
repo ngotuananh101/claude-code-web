@@ -244,3 +244,18 @@ describe("the hello frame", () => {
     expect(frame["workspaces"]).toEqual([]);
   });
 });
+
+describe("the hello frame (M4 branches)", () => {
+  test("carries the branches a workspace declares", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+      declaredWorkspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }],
+    });
+    expect(frame).toMatchObject({
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }],
+    });
+  });
+});

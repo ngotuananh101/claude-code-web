@@ -79,9 +79,13 @@ export type ReconnectLoopOptions = {
   inventory: () => RunnerInventoryItem[];
   /**
    * The workspaces this boot serves (§15.1). They ride every reconcile so a
-   * declaration change takes effect on the next reconnect, not the next restart.
+   * declaration change takes effect on the next reconnect, not the next
+   * restart. A thunk is re-evaluated per frame — M4 branch freshness: the
+   * workspace's heads are re-listed on every reconnect.
    */
-  workspaces?: Array<{ workspaceId: string; path: string }>;
+  workspaces?:
+    | Array<{ workspaceId: string; path: string; branches?: string[] }>
+    | (() => Array<{ workspaceId: string; path: string; branches?: string[] }>);
   sleep: (ms: number) => Promise<void>;
   onEvent: (event: LoopEvent) => void;
   /**
@@ -205,7 +209,10 @@ export class ReconnectLoop {
           JSON.stringify({
             type: "reconcile",
             runner: this.#options.inventory(),
-            workspaces: this.#options.workspaces ?? [],
+            workspaces:
+              typeof this.#options.workspaces === "function"
+                ? this.#options.workspaces()
+                : (this.#options.workspaces ?? []),
           }),
         );
         return;

@@ -23,9 +23,25 @@ import { migrateRunnerDb } from "@cc-web/runner-db";
 import { EventPump } from "./connection/event-pump.ts";
 import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
 import { dialWebSocket } from "./connection/websocket-link.ts";
-import type { SdkStream } from "./execution/executor.ts";
+import { prepareBranch } from "./git/checkout.ts";
+import { gitSpawn } from "./git/spawn.ts";
+import type { ExecuteOptions, SdkStream } from "./execution/executor.ts";
 import { RunController } from "./execution/run-controller.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
+
+/**
+ * A declaration is an array, or a thunk producing one. The thunk is how M4
+ * keeps branches fresh: it is re-evaluated every time a hello or reconcile
+ * frame is built, so a reconnect re-lists the workspace's heads instead of
+ * replaying whatever the boot happened to see.
+ */
+export type DeclaredWorkspacesOption = DeclaredWorkspace[] | (() => DeclaredWorkspace[]);
+
+export function resolveDeclaredWorkspaces(
+  option: DeclaredWorkspacesOption | undefined,
+): DeclaredWorkspace[] | undefined {
+  return option === undefined ? undefined : typeof option === "function" ? option() : option;
+}
 
 /**
  * The hello a runner sends after authentication (§6.2), built here so the
@@ -70,10 +86,16 @@ export type DaemonOptions = {
   workspacePathFor?: (workspaceId: string) => string | undefined;
   /**
    * The workspaces this boot serves (§15.1), advertised in the hello and every
-   * reconcile. Derived from the same environment value as `workspacePathFor`,
-   * so what the runner advertises and what it resolves cannot disagree.
+   * reconcile. A thunk is re-evaluated per frame (M4 branch freshness).
    */
-  declaredWorkspaces?: DeclaredWorkspace[];
+  declaredWorkspaces?: DeclaredWorkspacesOption;
+  /**
+   * The workspace-preparation gate (M4). Defaults to the real branch checkout
+   * gate so no composition can forget it; tests override with fakes. A
+   * dispatch without a branch never triggers a spawn, so default-wiring is
+   * inert for every existing test.
+   */
+  prepareWorkspace?: ExecuteOptions["prepareWorkspace"];
   /**
    * The SDK seam. Defaults to the real adapter; tests inject a fake so the whole
    * daemon runs without a model call.
@@ -126,12 +148,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 
   // §10: accepted commands become runs here. The controller owns the inbox →
   // attempt → SDK sequence, including the crash recovery that has to happen
-  // before the first command is accepted.
+  // before the first command is accepted. The preparation gate (M4) runs the
+  // branch checkout under the workspace lock each attempt already holds.
   const runs = new RunController({
     db,
     localRunnerId: identity.runnerId,
     workspacePathFor: options.workspacePathFor ?? (() => undefined),
     sdk: options.sdk ?? ((input) => createSdkStream(input)),
+    prepareWorkspace:
+      options.prepareWorkspace ?? ((path, branch) => prepareBranch(path, branch, gitSpawn)),
     onSettled: () => pump.flush(),
     // §13: a suspended run never settles, so the gate triggers the flush
     // itself — the approval request must ship the moment it is appended.
@@ -151,12 +176,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         runnerVersion: options.runnerVersion,
         sdkVersion: options.sdkVersion,
         bootId: bootId(),
-        ...(options.declaredWorkspaces === undefined
+        ...(resolveDeclaredWorkspaces(options.declaredWorkspaces) === undefined
           ? {}
-          : { declaredWorkspaces: options.declaredWorkspaces }),
+          : { declaredWorkspaces: resolveDeclaredWorkspaces(options.declaredWorkspaces) }),
       }),
     inventory: options.inventory ?? (() => runs.inventory()),
-    ...(options.declaredWorkspaces === undefined ? {} : { workspaces: options.declaredWorkspaces }),
+    ...(resolveDeclaredWorkspaces(options.declaredWorkspaces) === undefined
+      ? {}
+      : { workspaces: options.declaredWorkspaces }),
     sleep: (ms) => Bun.sleep(ms),
     onEvent: (event) => {
       // §12.2: on `ready` the backlog moves. Rows pending from before the

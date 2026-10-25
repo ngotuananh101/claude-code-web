@@ -13,6 +13,7 @@
 
 import { rm, writeFile } from "node:fs/promises";
 import { startDaemon } from "../daemon.ts";
+import { listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
 import { runnerInfo } from "../index.ts";
 import {
@@ -116,9 +117,15 @@ async function start(): Promise<void> {
     sdkVersion: "0.3.309",
     // §11.1 MVP: one directory named in the environment serves the default
     // workspace until the registration surface exists. The declaration and the
-    // resolver read the same value, so they cannot disagree (§15.1).
+    // resolver read the same value, so they cannot disagree (§15.1). The
+    // declaration is a thunk so every reconnect re-lists the workspace's
+    // branches (M4) instead of replaying what the boot saw.
     workspacePathFor: defaultWorkspaceResolver(defaultWorkspaceEnv),
-    declaredWorkspaces: declaredWorkspaces(defaultWorkspaceEnv),
+    declaredWorkspaces: () =>
+      declaredWorkspaces(defaultWorkspaceEnv).map((workspace) => ({
+        ...workspace,
+        branches: listBranches(workspace.path),
+      })),
     onEvent: (event) => {
       // Connection lifecycle only. Never log the credential, and never log
       // command payloads — they can contain prompt text (§19.4).

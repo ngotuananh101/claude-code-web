@@ -556,3 +556,32 @@ describe("declared workspaces on the wire", () => {
     expect(h.link.sent[1]).toMatchObject({ type: "reconcile", workspaces: [] });
   });
 });
+
+describe("declared workspaces on the wire (M4 refresh)", () => {
+  test("a thunk is re-evaluated on every reconnect, so branches refresh", async () => {
+    let call = 0;
+    const declaration = () => {
+      call += 1;
+      return [
+        { workspaceId: "default", path: "/srv/proj", branches: [`b-${call}`] },
+      ];
+    };
+    const h = harness({ workspaces: declaration });
+
+    await h.loop.start();
+    h.link.receive({ type: "hello.ok", generation: 1 });
+    expect(h.link.sent[1]).toMatchObject({
+      type: "reconcile",
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["b-1"] }],
+    });
+
+    h.link.drop();
+    await h.loop.start();
+    h.link.receive({ type: "hello.ok", generation: 2 });
+    expect(h.link.sent[1]).toMatchObject({
+      type: "reconcile",
+      workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["b-2"] }],
+    });
+    await h.loop.stop();
+  });
+});
