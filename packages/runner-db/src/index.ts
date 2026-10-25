@@ -19,6 +19,14 @@ export {
   sdkSessionIdForSession,
   type TerminalState,
 } from "./attempts.ts";
+export {
+  finishApproval,
+  insertPendingApproval,
+  type InsertPendingApprovalInput,
+  type PendingApproval,
+  type PendingApprovalKind,
+  pendingApproval,
+} from "./approvals.ts";
 export { migrateRunnerDb } from "./db.ts";
 export {
   type AppendParams,
