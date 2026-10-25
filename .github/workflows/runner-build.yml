@@ -48,10 +48,16 @@ jobs:
             binary: cc-web-runner-linux-x64
           - target: bun-linux-arm64
             binary: cc-web-runner-linux-arm64
+            install_os: linux
+            install_cpu: arm64
           - target: bun-windows-x64
             binary: cc-web-runner-windows-x64.exe
+            install_os: win32
+            install_cpu: x64
           - target: bun-windows-arm64
             binary: cc-web-runner-windows-arm64.exe
+            install_os: win32
+            install_cpu: arm64
 
     steps:
       - uses: actions/checkout@v7
@@ -62,6 +68,14 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # The SDK's native CLI rides as a per-platform package, and bun skips
+      # platform-mismatched optionals — a cross-compiled binary would otherwise
+      # embed nothing (§20.3). Overriding the platform for this job's install
+      # fetches the target's package; the shim + compile pick it up below.
+      - name: Install the target platform's SDK CLI
+        if: matrix.install_os != ''
+        run: bun install --frozen-lockfile --os=${{ matrix.install_os }} --cpu=${{ matrix.install_cpu }}
 
       # The URL travels into the --define flag below, so it must be a plain
       # http(s) origin: no quotes or backslashes to smuggle shell past. The
@@ -80,11 +94,11 @@ jobs:
         env:
           SERVER_URL: ${{ inputs.server_url }}
         run: |
-          args=(--compile --target="${{ matrix.target }}" --outfile "dist/${{ matrix.binary }}")
+          args=(--target="${{ matrix.target }}" --outfile "dist/${{ matrix.binary }}")
           if [ -n "$SERVER_URL" ]; then
             args+=(--define "CC_WEB_DEFAULT_SERVER:\"$SERVER_URL\"")
           fi
-          bun build apps/runner/src/bootstrap/main.ts "${args[@]}"
+          bun run build:runner "${args[@]}"
           file "dist/${{ matrix.binary }}"
 
       # Only the x64 linux build executes on this runner; the deeper
