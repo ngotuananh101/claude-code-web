@@ -12,6 +12,8 @@
  * reconciliation before dispatch.
  */
 
+import { type DeclaredWorkspace, parseDeclaredWorkspaces } from "./reconcile.ts";
+
 export type ServerPolicy = {
   minProtocolVersion: number;
   maxProtocolVersion: number;
@@ -34,6 +36,8 @@ export type NegotiateResult =
       negotiation: Negotiation;
       /** Always "connected" — reconciliation promotes it to ready. */
       connectionState: "connected";
+      /** Workspaces the runner declares it serves (§15.1); empty for older runners. */
+      workspaces: DeclaredWorkspace[];
     }
   | {
       ok: false;
@@ -102,6 +106,11 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     return fail("malformed", "eventOffsets must be an array");
   }
 
+  const workspaces = parseDeclaredWorkspaces(record["workspaces"]);
+  if (workspaces === undefined) {
+    return fail("malformed", "workspaces must be an array of {workspaceId, path}");
+  }
+
   const clientVersion = record["protocolVersion"];
 
   // Refuse a version the server cannot speak. Silently accepting and ignoring
@@ -116,6 +125,7 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
   return {
     ok: true,
     connectionState: "connected",
+    workspaces,
     negotiation: {
       protocolVersion: policy.maxProtocolVersion,
       policy: {

@@ -67,6 +67,37 @@ describe("hello negotiation", () => {
     });
   });
 
+  test("a hello carrying declared workspaces negotiates and exposes them", () => {
+    const workspaces = [{ workspaceId: "default", path: "/srv/proj" }];
+    const result = negotiateHello(hello({ workspaces }), policy);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.workspaces).toEqual(workspaces);
+  });
+
+  test("a hello without the workspaces field negotiates with an empty list", () => {
+    const result = negotiateHello(hello(), policy);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.workspaces).toEqual([]);
+  });
+
+  test("a hello with malformed workspaces is refused as malformed", () => {
+    expect(negotiateHello(hello({ workspaces: "default" }), policy)).toMatchObject({
+      ok: false,
+      reason: "malformed",
+    });
+    expect(negotiateHello(hello({ workspaces: [{ workspaceId: "default" }] }), policy)).toMatchObject(
+      { ok: false, reason: "malformed" },
+    );
+    expect(
+      negotiateHello(hello({ workspaces: [{ workspaceId: "", path: "/srv/proj" }] }), policy),
+    ).toMatchObject({ ok: false, reason: "malformed" });
+    expect(negotiateHello(hello({ workspaces: [{ workspaceId: "w", path: 42 }] }), policy)).toMatchObject(
+      { ok: false, reason: "malformed" },
+    );
+  });
+
   test("rejects a hello carrying provider secrets or raw environment", () => {
     // §6.2: the hello payload carries no provider keys, raw env or full config.
     // Accepting one would put a credential into the control journal permanently.

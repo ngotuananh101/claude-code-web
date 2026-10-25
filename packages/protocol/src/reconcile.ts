@@ -83,6 +83,39 @@ export type ReconcileResult = {
 
 const TERMINAL: ReadonlySet<RunState> = new Set(["completed", "failed", "cancelled"]);
 
+/**
+ * A workspace the runner declares it is serving (§5.1, §15.1). The runner is
+ * the registration authority: it carries this list in its hello and every
+ * reconcile, and the control plane stores it verbatim.
+ */
+export type DeclaredWorkspace = {
+  workspaceId: string;
+  path: string;
+};
+
+/**
+ * Parse the `workspaces` field of a hello or reconcile message. Absent means
+ * the runner predates the field and declares nothing (§6.4 back-compat);
+ * anything present but outside the shape is malformed — an object that is not
+ * coerced here would register a workspace the runner never vouched for.
+ * `undefined` is the malformed signal; an empty array is a valid declaration.
+ */
+export function parseDeclaredWorkspaces(value: unknown): DeclaredWorkspace[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const workspaces: DeclaredWorkspace[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const record = item as Record<string, unknown>;
+    const workspaceId = record["workspaceId"];
+    const path = record["path"];
+    if (typeof workspaceId !== "string" || workspaceId === "") return undefined;
+    if (typeof path !== "string" || path === "") return undefined;
+    workspaces.push({ workspaceId, path });
+  }
+  return workspaces;
+}
+
 export function reconcile(input: {
   server: ServerRunState[];
   runner: RunnerRunState[];

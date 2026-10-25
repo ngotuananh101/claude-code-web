@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type RunState, reconcile, type ServerRunState } from "./reconcile.ts";
+import {
+  type RunState,
+  parseDeclaredWorkspaces,
+  reconcile,
+  type ServerRunState,
+} from "./reconcile.ts";
 
 /**
  * §14.3 reconciliation and §14.4 conflict matrix.
@@ -289,5 +294,33 @@ describe("reconciliation", () => {
     expect(result.actions).toEqual([
       { kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" },
     ]);
+  });
+});
+
+describe("parseDeclaredWorkspaces", () => {
+  test("an absent field parses to an empty list (older runners stay compatible)", () => {
+    expect(parseDeclaredWorkspaces(undefined)).toEqual([]);
+  });
+
+  test("a well-formed list parses to the typed array", () => {
+    expect(
+      parseDeclaredWorkspaces([
+        { workspaceId: "default", path: "/srv/proj" },
+        { workspaceId: "w-2", path: "/srv/other" },
+      ]),
+    ).toEqual([
+      { workspaceId: "default", path: "/srv/proj" },
+      { workspaceId: "w-2", path: "/srv/other" },
+    ]);
+  });
+
+  test("anything outside the shape is malformed, not coerced", () => {
+    expect(parseDeclaredWorkspaces("default")).toBeUndefined();
+    expect(parseDeclaredWorkspaces([{ workspaceId: "w" }])).toBeUndefined();
+    expect(parseDeclaredWorkspaces([{ workspaceId: "", path: "/srv" }])).toBeUndefined();
+    expect(parseDeclaredWorkspaces([{ workspaceId: "w", path: "" }])).toBeUndefined();
+    expect(parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv" }, "nope"])).toBeUndefined();
+    expect(parseDeclaredWorkspaces(null)).toBeUndefined();
+    expect(parseDeclaredWorkspaces(42)).toBeUndefined();
   });
 });

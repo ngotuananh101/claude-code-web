@@ -214,6 +214,8 @@ export {
 } from "./handshake.ts";
 
 export {
+  type DeclaredWorkspace,
+  parseDeclaredWorkspaces,
   type ReconcileAction,
   type ReconcileResult,
   type RunnerRunState,
