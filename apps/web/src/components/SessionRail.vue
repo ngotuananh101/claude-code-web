@@ -31,6 +31,9 @@ const canGoForward = computed(() => {
   return window.history.state?.forward != null;
 });
 
+// The avatar is the account's first letter; "?" while /api/me is in flight.
+const accountInitial = computed(() => sessions.account?.[0] ?? "?");
+
 // The rail's "5m ago" stays honest on an open page.
 const now = ref(Date.now());
 const ticker = setInterval(() => {
@@ -200,9 +203,9 @@ async function signOut(): Promise<void> {
         <span
           class="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary uppercase"
         >
-          o
+          {{ accountInitial }}
         </span>
-        <span class="flex-1 truncate text-[13px]">owner</span>
+        <span class="flex-1 truncate text-[13px]">{{ sessions.account ?? "—" }}</span>
         <button
           type="button"
           aria-label="Đăng xuất"

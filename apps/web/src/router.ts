@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { loadSessions } from "./stores/sessions.ts";
+import { loadAccount, loadSessions } from "./stores/sessions.ts";
 
 /**
  * The console's pages behind one rail: the usage dashboard (the default
@@ -34,5 +34,9 @@ router.beforeEach(async (to) => {
   // would have the guard redirect to /login from /login, forever.
   if (to.path === "/login") return true;
   const authorized = await loadSessions();
-  return authorized ? true : "/login";
+  if (!authorized) return "/login";
+  // The rail's footer shows the account the cookie belongs to; a fresh boot
+  // and a just-completed login both land here first.
+  void loadAccount();
+  return true;
 });

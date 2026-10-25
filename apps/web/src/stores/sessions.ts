@@ -34,6 +34,8 @@ type SessionsStore = {
   connection: SocketState;
   /** The active session's stream, null before a session is opened. */
   stream: SessionStreamState | null;
+  /** The signed-in account's name (the rail footer), null until /api/me. */
+  account: string | null;
 };
 
 export const sessions = reactive<SessionsStore>({
@@ -42,6 +44,7 @@ export const sessions = reactive<SessionsStore>({
   activeId: null,
   connection: "connecting",
   stream: null,
+  account: null,
 });
 
 let machine: ReturnType<typeof createSessionStream> | null = null;
@@ -56,6 +59,17 @@ export async function loadSessions(): Promise<boolean> {
   sessions.sessions = body.sessions;
   sessions.loaded = true;
   return true;
+}
+
+/**
+ * Reads the signed-in account's name (GET /api/me). The footer must not
+ * hardcode it — the operator seeds whatever username they chose. A failure
+ * keeps whatever we had: the name is cosmetic, not an auth signal.
+ */
+export async function loadAccount(): Promise<void> {
+  const response = await fetch("/api/me");
+  if (!response.ok) return;
+  sessions.account = ((await response.json()) as { username: string }).username;
 }
 
 /**
