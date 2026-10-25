@@ -72,12 +72,15 @@ function parseJsonArray(text: string): unknown[] {
 
 const ui = approvalId === "" ? undefined : approvalUi(approvalId);
 
-// The chosen answer per question: an option label, or the free-text "Khác".
-const answers = reactive<Record<string, string>>({});
-const others = reactive<Record<string, string>>({});
+// The chosen answer per question slot, keyed by INDEX: two questions with
+// identical text must get independent input state (F5a). The outgoing payload
+// in submitAnswers stays keyed by question text — that is the shape the
+// runner and the SDK consume.
+const answers = reactive<Record<number, string>>({});
+const others = reactive<Record<number, string>>({});
 
 const allAnswered = computed(() =>
-  questions.value.every((q) => (answers[q.question] ?? "") !== ""),
+  questions.value.every((_, index) => (answers[index] ?? "") !== ""),
 );
 
 /** Display-side expiry fallback: the row outlived its window with no closing event. */
@@ -105,13 +108,13 @@ const stateLabel = computed(() => {
   return undefined;
 });
 
-function pick(question: string, label: string): void {
-  answers[question] = label;
-  delete others[question];
+function pick(index: number, label: string): void {
+  answers[index] = label;
+  delete others[index];
 }
 
-function answerWithOther(question: string): void {
-  answers[question] = others[question] ?? "";
+function answerWithOther(index: number): void {
+  answers[index] = others[index] ?? "";
 }
 
 async function decide(
@@ -125,7 +128,10 @@ async function decide(
 function submitAnswers(): void {
   if (!allAnswered.value) return;
   const map: Record<string, string> = {};
-  for (const q of questions.value) map[q.question] = answers[q.question] ?? "";
+  for (const [index, q] of questions.value.entries()) {
+    const answer = answers[index] ?? "";
+    if (answer !== "") map[q.question] = answer;
+  }
   void decide("allow", map);
 }
 </script>
@@ -161,7 +167,7 @@ function submitAnswers(): void {
     >
 
     <div v-if="kind === 'user_question'" class="mt-2 space-y-3">
-      <div v-for="q in questions" :key="q.question">
+      <div v-for="(q, index) in questions" :key="index">
         <p class="text-[13px] font-medium text-foreground">
           {{ q.header ? `${q.header}: ${q.question}` : q.question }}
         </p>
@@ -172,9 +178,9 @@ function submitAnswers(): void {
             variant="outline"
             size="sm"
             class="h-auto w-full justify-start py-1.5 text-left text-[13px]"
-            :class="answers[q.question] === option.label ? 'border-primary bg-primary/10' : ''"
+            :class="answers[index] === option.label ? 'border-primary bg-primary/10' : ''"
             :disabled="!interactive"
-            @click="pick(q.question, option.label)"
+            @click="pick(index, option.label)"
           >
             <span class="min-w-0">
               <span class="block font-medium">{{ option.label }}</span>
@@ -188,12 +194,12 @@ function submitAnswers(): void {
         </div>
         <div class="mt-1.5 flex items-center gap-1.5">
           <Input
-            v-model="others[q.question]"
+            v-model="others[index]"
             class="h-7 text-[13px]"
             placeholder="Khác — nhập câu trả lời…"
             :aria-label="`Câu trả lời khác cho: ${q.question}`"
             :disabled="!interactive"
-            @update:model-value="answerWithOther(q.question)"
+            @update:model-value="answerWithOther(index)"
           />
         </div>
       </div>
