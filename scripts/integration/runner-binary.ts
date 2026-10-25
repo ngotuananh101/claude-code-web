@@ -42,15 +42,12 @@ if (useDocker) {
 const repoRoot = new URL("../..", import.meta.url).pathname;
 const binary = join(repoRoot, "dist", "cc-web-runner");
 
-console.log("building dist/cc-web-runner (bun build --compile)…");
-const build = Bun.spawnSync(
-  ["bun", "build", "--compile", "apps/runner/src/bootstrap/main.ts", "--outfile", binary],
-  {
-    cwd: repoRoot,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
-);
+console.log("building dist/cc-web-runner (bun run build:runner)…");
+const build = Bun.spawnSync(["bun", "run", "build:runner", "--outfile", binary], {
+  cwd: repoRoot,
+  stdout: "pipe",
+  stderr: "pipe",
+});
 check(
   "the runner compiles to a single executable",
   build.exitCode === 0,
@@ -125,13 +122,12 @@ if (build.exitCode === 0) {
   const bakedBuild = Bun.spawnSync(
     [
       "bun",
-      "build",
-      "--compile",
-      "--define",
-      'CC_WEB_DEFAULT_SERVER:"https://cc-baked.example.com"',
-      "apps/runner/src/bootstrap/main.ts",
+      "run",
+      "build:runner",
       "--outfile",
       bakedBinary,
+      "--define",
+      'CC_WEB_DEFAULT_SERVER:"https://cc-baked.example.com"',
     ],
     { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
   );
