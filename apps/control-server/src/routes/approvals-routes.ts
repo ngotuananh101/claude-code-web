@@ -74,6 +74,17 @@ export async function handleApprovalDecision(
     return new Response("not found", { status: 404 });
   }
 
+  // A crash-orphaned row can outlive its window without a terminal event (the
+  // runner sweeps silently), so the projection can still say "pending" long
+  // after the gate is gone. Recording a decision then would write an audit
+  // trail the runner never honored — refuse, and let the sweep close the row.
+  // The grace covers clock skew and a decision already in flight at expiry;
+  // the runner's own expiry check stays the boundary authority.
+  const EXPIRY_GRACE_MS = 15_000;
+  if (typeof row.expiresAt === "number" && row.expiresAt + EXPIRY_GRACE_MS < Date.now()) {
+    return new Response("expired", { status: 409 });
+  }
+
   const commandId = crypto.randomUUID();
   const answersJson = decision.answers === undefined ? undefined : JSON.stringify(decision.answers);
   const fingerprint = await fingerprintOf({

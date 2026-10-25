@@ -80,17 +80,18 @@ const allAnswered = computed(() =>
   questions.value.every((q) => (answers[q.question] ?? "") !== ""),
 );
 
-/** Nothing decided yet, by journal or by this browser: the card takes input. */
-const interactive = computed(() => {
-  if (props.terminal !== undefined) return false;
-  if (ui?.deciding || ui?.decision !== undefined) return false;
-  return true;
-});
-
 /** Display-side expiry fallback: the row outlived its window with no closing event. */
 const displayExpired = computed(
   () => props.terminal === undefined && expiresAt !== undefined && expiresAt < Date.now(),
 );
+
+/** Nothing decided yet, by journal or by this browser: the card takes input. */
+const interactive = computed(() => {
+  if (props.terminal !== undefined) return false;
+  if (displayExpired.value) return false;
+  if (ui?.deciding || ui?.decision !== undefined) return false;
+  return true;
+});
 
 const stateLabel = computed(() => {
   if (props.terminal !== undefined) {

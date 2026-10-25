@@ -203,6 +203,34 @@ describe("POST /api/approvals/:id/decision", () => {
     expect(second.status).toBe(409);
   });
 
+  test("a decision past the approval's window answers 409 and writes nothing", async () => {
+    // Crash-orphaned row: the runner swept (or died with) the pending approval
+    // and its terminal event never landed, so the projection still says
+    // "pending". Recording a decision here would write an audit trail the
+    // runner never honored — the runner stays authoritative for the boundary.
+    const { db, url, cookie } = await start();
+    upsertApprovalRequested(db, { ...APPROVAL, expiresAt: Date.now() - 15_001 });
+
+    const response = await decide(url, cookie, "apr-1", { decision: "allow" });
+
+    expect(response.status).toBe(409);
+    expect(
+      db
+        .query("SELECT COUNT(*) AS n FROM command_outbox WHERE kind = 'approval.respond'")
+        .get() as { n: number },
+    ).toEqual({ n: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM approval_decisions").get() as { n: number }).toEqual(
+      { n: 0 },
+    );
+    expect(
+      (
+        db.query("SELECT state FROM approvals WHERE approval_id = 'apr-1'").get() as {
+          state: string;
+        }
+      ).state,
+    ).toBe("pending");
+  });
+
   test("an unknown approval answers 404", async () => {
     const { url, cookie } = await start();
 
