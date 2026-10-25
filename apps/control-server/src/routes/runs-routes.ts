@@ -105,8 +105,10 @@ export async function handleDispatchRun(
   if (pin !== undefined) {
     // A contradiction between the body and the pin is its own refusal — the
     // operator is asking to move a session, which §21.6 migration will own.
-    // Absent or blank choices are not contradictions: they ride the pin.
-    if (record.runnerId !== undefined && record.runnerId !== pin.runnerId) {
+    // Absent or blank choices are not contradictions: they ride the pin. A
+    // non-string runnerId is not a contradiction but malformed input, and the
+    // 400 below reads it as such.
+    if (typeof record.runnerId === "string" && record.runnerId !== pin.runnerId) {
       return new Response("session_pinned", { status: 409 });
     }
     if (

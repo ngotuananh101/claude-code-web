@@ -727,6 +727,33 @@ describe("an existing session rides its pin", () => {
     expect(inboxCount(inbox)).toBe(1);
   });
 
+  test("a malformed runnerId on a pinned session is a 400, not a conflict", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "hello")).json()) as { runId: string };
+    expect(first.runId).toBeTruthy();
+    await waitFor(() => inboxCount(inbox) === 1);
+    (runner.send as (frame: Record<string, unknown>) => void)({
+      type: "events",
+      events: [finishedEvent("runner-a", first.runId, 1)],
+    });
+    await waitFor(() => handle!.scheduler.activeRunFor("session-1") === undefined);
+
+    // A non-string runnerId is malformed input and must read as such — a 409
+    // would tell the operator the session cannot move, which is not the
+    // problem with `42`.
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "next", runnerId: 42 }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("bad request");
+  });
+
   test("a different runner than the pin is refused with session_pinned", async () => {
     const { db, url, cookie, credential } = await start();
     const credB = issueRunnerCredential(db, { id: "runner-b", ownerId: "user-1" }).credential;
