@@ -98,6 +98,29 @@ describe("hello negotiation", () => {
     ).toMatchObject({ ok: false, reason: "malformed" });
   });
 
+  test("an absent capabilities field negotiates as an empty list", () => {
+    // A runner that predates the field declares nothing, which is the honest
+    // reading: the server must not send it an inspection it cannot answer.
+    const result = negotiateHello(hello(), policy);
+    expect(result).toMatchObject({ ok: true, capabilities: [] });
+  });
+
+  test("a runner declaring capabilities has them returned", () => {
+    // `capabilities` is deliberately not one of the forbidden hello fields: it
+    // names features, not secrets. Refusing it would make the field unusable.
+    const result = negotiateHello(hello({ capabilities: ["inspect"] }), policy);
+    expect(result).toMatchObject({ ok: true, capabilities: ["inspect"] });
+  });
+
+  test("capabilities that are not an array of non-empty strings are malformed", () => {
+    for (const bad of ["inspect", [1], [""], {}, null]) {
+      expect(negotiateHello(hello({ capabilities: bad }), policy)).toMatchObject({
+        ok: false,
+        reason: "malformed",
+      });
+    }
+  });
+
   test("rejects a hello carrying provider secrets or raw environment", () => {
     // §6.2: the hello payload carries no provider keys, raw env or full config.
     // Accepting one would put a credential into the control journal permanently.

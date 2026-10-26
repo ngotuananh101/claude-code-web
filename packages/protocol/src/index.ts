@@ -212,6 +212,12 @@ export type RunnerHello = {
   maxConcurrentRuns: number;
   activeRuns: RunInventoryItem[];
   eventOffsets: RunEventOffset[];
+  /**
+   * Optional so an older runner can still say hello (§6.4). Absent and empty
+   * both mean "serves no optional capabilities", which is what the server
+   * gates on before dispatching an inspection.
+   */
+  capabilities?: string[];
 };
 
 export type RunInventoryItem = {
@@ -237,6 +243,7 @@ export {
   type NegotiateResult,
   type Negotiation,
   negotiateHello,
+  parseCapabilities,
   type ServerPolicy,
 } from "./handshake.ts";
 export {

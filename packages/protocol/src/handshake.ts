@@ -38,6 +38,13 @@ export type NegotiateResult =
       connectionState: "connected";
       /** Workspaces the runner declares it serves (§15.1); empty for older runners. */
       workspaces: DeclaredWorkspace[];
+      /**
+       * Features the runner can serve. Empty for a runner that predates the
+       * field, which is the signal not to dispatch work it cannot answer — a
+       * command kind it does not implement would otherwise be delivered and
+       * misread.
+       */
+      capabilities: string[];
     }
   | {
       ok: false;
@@ -111,6 +118,11 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     return fail("malformed", "workspaces must be an array of {workspaceId, path}");
   }
 
+  const capabilities = parseCapabilities(record["capabilities"]);
+  if (capabilities === undefined) {
+    return fail("malformed", "capabilities must be an array of strings");
+  }
+
   const clientVersion = record["protocolVersion"];
 
   // Refuse a version the server cannot speak. Silently accepting and ignoring
@@ -126,6 +138,7 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     ok: true,
     connectionState: "connected",
     workspaces,
+    capabilities,
     negotiation: {
       protocolVersion: policy.maxProtocolVersion,
       policy: {
@@ -140,6 +153,24 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Parse the `capabilities` field of a hello. Absent means the runner predates
+ * the field and serves none of them (§6.4 back-compat) — the same reading as
+ * `parseDeclaredWorkspaces`. Anything present but outside the shape is
+ * malformed: a `capabilities: "inspect"` accepted by coercion would let a
+ * runner advertise a feature by accident of a typo.
+ */
+export function parseCapabilities(value: unknown): string[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const capabilities: string[] = [];
+  for (const entry of value) {
+    if (!isNonEmptyString(entry)) return undefined;
+    if (!capabilities.includes(entry)) capabilities.push(entry);
+  }
+  return capabilities;
 }
 
 function fail(reason: FailureReason, detail: string): NegotiateResult {
