@@ -8,6 +8,7 @@ import {
   highestContiguousAcked,
   pendingEventAttempts,
   pendingEvents,
+  spoolDepth,
 } from "./event-outbox.ts";
 
 function freshDb(): Database {
@@ -212,5 +213,73 @@ describe("pending event limits", () => {
     // The rows returned are the oldest ones: a bounded read that skipped ahead
     // would break the contiguous ACK watermark (§12.2).
     expect(pendingEvents(db, attempt)[0]!.localSequence).toBe(1);
+  });
+});
+
+describe("spool depth", () => {
+  test("counts unacked rows and their stored payload bytes", () => {
+    const db = freshDb();
+    const payload = { text: "x".repeat(100) };
+    appendEvent(db, {
+      eventId: "e1",
+      attemptId: "a1",
+      localSequence: 1,
+      sessionId: "s1",
+      runId: "r1",
+      type: "message.delta",
+      payload,
+      occurredAt: "2026-10-26T00:00:00.000Z",
+    });
+    appendEvent(db, {
+      eventId: "e2",
+      attemptId: "a1",
+      localSequence: 2,
+      sessionId: "s1",
+      runId: "r1",
+      type: "message.delta",
+      payload,
+      occurredAt: "2026-10-26T00:00:00.000Z",
+    });
+    appendEvent(db, {
+      eventId: "e3",
+      attemptId: "a2",
+      localSequence: 1,
+      sessionId: "s1",
+      runId: "r1",
+      type: "message.delta",
+      payload,
+      occurredAt: "2026-10-26T00:00:00.000Z",
+    });
+
+    const perAttempt = spoolDepth(db, "a1");
+    expect(perAttempt.events).toBe(2);
+    // The byte count is the stored JSON payload, not the parsed object: it is
+    // what occupies the disk and what the thresholds are about.
+    expect(perAttempt.bytes).toBe(JSON.stringify(payload).length * 2);
+
+    expect(spoolDepth(db).events).toBe(3);
+    expect(spoolDepth(db).bytes).toBe(JSON.stringify(payload).length * 3);
+  });
+
+  test("an ack shrinks the depth, because it is read from the durable rows", () => {
+    const db = freshDb();
+    append(db, 1);
+    append(db, 2);
+    append(db, 3);
+
+    ackUpTo(db, { attemptId: attempt, sequence: 2 });
+
+    expect(spoolDepth(db, attempt)).toEqual({
+      events: 1,
+      bytes: JSON.stringify({ n: 3 }).length,
+    });
+  });
+
+  test("an empty or unknown spool is zero, not null", () => {
+    // A threshold comparison against `null` would be quietly false, which is
+    // how a critical spool goes unreported.
+    const db = freshDb();
+    expect(spoolDepth(db)).toEqual({ events: 0, bytes: 0 });
+    expect(spoolDepth(db, "nobody")).toEqual({ events: 0, bytes: 0 });
   });
 });

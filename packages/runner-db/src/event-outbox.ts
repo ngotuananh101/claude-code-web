@@ -180,3 +180,27 @@ export function highestContiguousAcked(db: Database, attemptId: string): number 
 
   return row?.max_seq ?? 0;
 }
+
+/**
+ * How much unacknowledged work is sitting in the outbox (§12.6).
+ *
+ * Counted from the durable rows rather than from a running counter, so the
+ * number cannot drift from what a restart would find — a counter and the table
+ * would disagree exactly when the process died, which is the case the spool
+ * thresholds exist for. `bytes` is the stored payload length, the disk cost,
+ * not the parsed size.
+ */
+export function spoolDepth(db: Database, attemptId?: string): { events: number; bytes: number } {
+  const columns = `COUNT(*) AS events, COALESCE(SUM(LENGTH(payload)), 0) AS bytes`;
+  const row = (
+    attemptId === undefined
+      ? db
+          .prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0`)
+          .get()
+      : db
+          .prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0 AND attempt_id = ?`)
+          .get(attemptId)
+  ) as { events: number; bytes: number } | null;
+
+  return { events: row?.events ?? 0, bytes: row?.bytes ?? 0 };
+}

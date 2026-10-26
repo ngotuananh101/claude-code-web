@@ -38,6 +38,7 @@ export {
   type PendingEvent,
   pendingEventAttempts,
   pendingEvents,
+  spoolDepth,
 } from "./event-outbox.ts";
 export {
   type AcceptResult,
