@@ -20,7 +20,20 @@ import {
   PROTOCOL_VERSION,
   type RunnerEvent,
 } from "@cc-web/protocol";
-import { ackUpTo, type PendingEvent, pendingEventAttempts, pendingEvents } from "@cc-web/runner-db";
+import {
+  ackUpTo,
+  type PendingEvent,
+  pendingEventAttempts,
+  pendingEvents,
+  spoolDepth,
+} from "@cc-web/runner-db";
+
+/** How deep one attempt's unacknowledged spool is, at the moment it was read. */
+export type SpoolReport = {
+  attemptId: string;
+  events: number;
+  bytes: number;
+};
 
 export type EventPumpOptions = {
   db: Database;
@@ -33,6 +46,18 @@ export type EventPumpOptions = {
    * exists so a test can drive the retry instead of sleeping through it.
    */
   schedule?: (fn: () => void, ms: number) => unknown;
+  /**
+   * The spool crossed the warning threshold (§12.6). A signal, not an action:
+   * the pump reports and keeps pumping, and whoever owns the run decides
+   * whether the operator should hear about it.
+   */
+  onSpoolWarning?: (report: SpoolReport) => void;
+  /**
+   * The spool crossed the critical threshold (§12.6). The pump still reports
+   * rather than acts — it has no way to stop a run and no sequence to journal a
+   * failure record at — but the expectation is that the receiver stops the run.
+   */
+  onSpoolCritical?: (report: SpoolReport) => void;
 };
 
 export class EventPump {
@@ -51,8 +76,14 @@ export class EventPump {
   readonly #bootId: string;
   readonly #send: (frame: EventBatchFrame) => boolean;
   readonly #schedule: (fn: () => void, ms: number) => unknown;
+  readonly #onSpoolWarning: ((report: SpoolReport) => void) | undefined;
+  readonly #onSpoolCritical: ((report: SpoolReport) => void) | undefined;
   #retryArmed = false;
   #stopped = false;
+  /** Attempts currently believed to be over the warning depth. */
+  readonly #warned = new Set<string>();
+  /** Attempts currently believed to be over the critical depth. */
+  readonly #critical = new Set<string>();
 
   constructor(options: EventPumpOptions) {
     this.#db = options.db;
@@ -60,6 +91,8 @@ export class EventPump {
     this.#bootId = options.bootId;
     this.#send = options.send;
     this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
+    this.#onSpoolWarning = options.onSpoolWarning;
+    this.#onSpoolCritical = options.onSpoolCritical;
   }
 
   /** Events per frame (§12.6). Bounded frames, never one row per socket write
@@ -77,6 +110,24 @@ export class EventPump {
    * still fills by count and pays for no extra frames.
    */
   static readonly BATCH_BYTES_LIMIT = 256 * 1024;
+
+  /**
+   * The offline-spool warning threshold (§12.6): 5,000 unacked events or 16 MiB
+   * of unacked payload, whichever is reached first.
+   *
+   * Both parts are checked because either alone misses a real case — a long
+   * quiet stream of tiny deltas is many events by few bytes, and a handful of
+   * large tool results is many bytes by few events.
+   */
+  static readonly SPOOL_WARNING = { events: 5_000, bytes: 16 * 1024 * 1024 };
+
+  /**
+   * The offline-spool critical threshold (§12.6): 25,000 unacked events or
+   * 64 MiB of unacked payload. Here the run is to be stopped and a minimal
+   * failure record written from a reserved budget, rather than silently
+   * dropping mandatory events and reporting the run as a success.
+   */
+  static readonly SPOOL_CRITICAL = { events: 25_000, bytes: 64 * 1024 * 1024 };
 
   /** Send one bounded batch for every attempt with pending rows. */
   flush(): void {
@@ -126,6 +177,10 @@ export class EventPump {
   }
 
   #flushAttempt(attemptId: string): boolean {
+    // Depth is checked before anything is sent, so a drop back below a
+    // threshold re-arms it even on a flush that has nothing left to send.
+    this.#reportSpoolDepth(attemptId);
+
     const rows = this.#selectBatch(attemptId);
     if (rows.length === 0) return true;
     const carried = this.#send({
@@ -134,6 +189,43 @@ export class EventPump {
     });
     if (!carried) this.#armRetry();
     return carried;
+  }
+
+  /**
+   * Report a spool-depth crossing to the controller (§12.6), at most once per
+   * crossing per attempt.
+   *
+   * The depth is read as one aggregate rather than derived from the batch: the
+   * batch is what a frame carries, and the threshold is about the attempt's
+   * whole backlog, of which a bounded frame may be a small part.
+   *
+   * Nothing here writes, deletes or stops. The pump holds no sequence and owns
+   * no run, so the only thing it can honestly do is say how deep the spool got
+   * and let the controller — which does own both — decide. A warning is
+   * suppressed while the critical threshold is met, because "the spool is
+   * getting deep" is noise once the answer is to stop the run.
+   */
+  #reportSpoolDepth(attemptId: string): void {
+    const { events, bytes } = spoolDepth(this.#db, attemptId);
+    const overCritical =
+      events >= EventPump.SPOOL_CRITICAL.events || bytes >= EventPump.SPOOL_CRITICAL.bytes;
+    const overWarning =
+      events >= EventPump.SPOOL_WARNING.events || bytes >= EventPump.SPOOL_WARNING.bytes;
+
+    if (!overCritical) this.#critical.delete(attemptId);
+    if (!overWarning) this.#warned.delete(attemptId);
+
+    if (overCritical) {
+      if (this.#critical.has(attemptId)) return;
+      this.#critical.add(attemptId);
+      this.#warned.delete(attemptId);
+      this.#onSpoolCritical?.({ attemptId, events, bytes });
+      return;
+    }
+
+    if (!overWarning || this.#warned.has(attemptId)) return;
+    this.#warned.add(attemptId);
+    this.#onSpoolWarning?.({ attemptId, events, bytes });
   }
 
   /**

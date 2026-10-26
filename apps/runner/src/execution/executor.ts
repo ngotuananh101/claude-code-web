@@ -109,6 +109,29 @@ export type ExecuteOptions = {
   /** Called after every `approval.*` append: a suspended run never settles,
    * so the pump must be flushed by the gate itself, not by onSettled. */
   onApprovalEvent?: () => void;
+  /**
+   * Offers the attempt's own sequenced append to the caller, once, as soon as
+   * the run is observable (§12.6).
+   *
+   * The executor owns this attempt's `local_sequence` space in a closure, and
+   * nothing else can write into it: a second writer at a borrowed sequence
+   * collides locally, at a fresh sequence collides with the executor's next
+   * write, and either leaves a hole the ACK watermark stops at (§12.2). So a
+   * component that must journal something *about* this attempt — the spool
+   * warning is the first — borrows this closure instead of writing its own row.
+   */
+  onAppend?: (append: (type: string, payload: unknown) => void) => void;
+  /**
+   * Why the abort happened, read at the moment the run is stopped rather than
+   * captured when the run starts: a cancel arrives after the run is under way,
+   * so a value read at construction time could only ever be `undefined`.
+   *
+   * A reason present means the stop was a policy decision with something to
+   * say about it — the spool critical threshold is the first — and it is
+   * recorded as `run.failed` so the operator learns why. Absent keeps the
+   * deliberate-cancel reading: `run.interrupted`, no reason (§14.2).
+   */
+  abortReason?: () => string | undefined;
 };
 
 /** How long a parked callback stays answerable: 5 minutes unless overridden. */
@@ -219,11 +242,21 @@ export async function executeRun(
   // died is the whole fact.
   const aborted = () => options.signal?.aborted === true;
 
-  // The outcome for a run stopped before any terminal SDK frame. `interrupted`,
-  // not `failed`: §14.2 keeps a deliberate cancel apart from a broken run, and
-  // the payload is a constant — the abort error's text says nothing an operator
-  // can act on, and this row is replayed to the browser and the journal (§12.3).
-  const recordInterrupted = (): void => {
+  // The outcome for a run stopped before any terminal SDK frame. A reason from
+  // `abortReason` means the stop was a policy decision with something to say —
+  // the spool critical threshold is the first — and that reason is the whole
+  // value the operator gets, so it is written as `run.failed` rather than as an
+  // interrupted run with no explanation. Without one, §14.2 keeps a deliberate
+  // cancel apart from a broken run: `interrupted`, with a constant payload,
+  // because the abort error's text says nothing an operator can act on and the
+  // row is replayed to the browser and copied into the journal (§12.3).
+  const recordAborted = (): void => {
+    const reason = options.abortReason?.();
+    if (reason !== undefined && reason !== "") {
+      state = "failed";
+      append("run.failed", { error: reason });
+      return;
+    }
     state = "interrupted";
     append("run.interrupted", { reason: "aborted" });
   };
@@ -235,6 +268,11 @@ export async function executeRun(
     // `finally` — leaving the attempt `starting` and the workspace locked with
     // no owner.
     append("run.started", { commandId: command.commandId });
+
+    // §12.6: the attempt's own append, offered once the run is observable and
+    // before anything that could warn about the spool. The caller may journal
+    // through it — the sequence space stays single-writer — or ignore it.
+    options.onAppend?.(append);
 
     // M4: prepare the workspace (the branch gate) after the run is observable
     // and before the SDK exists — a refusal is the operator's answer, so it is
@@ -346,7 +384,7 @@ export async function executeRun(
     // the iterator returns instead of throwing. Without this check the run
     // would be recorded `finished` with no terminal event at all — the state a
     // crashed process leaves, arrived at on a path that knew better.
-    if (!terminalWritten && aborted()) recordInterrupted();
+    if (!terminalWritten && aborted()) recordAborted();
   } catch (error) {
     // Only a run that has not reported a terminal outcome is a failure. A throw
     // after `run.finished` is a transport problem that happened after the run
@@ -354,7 +392,7 @@ export async function executeRun(
     // disagree with the event that recorded the outcome.
     if (!terminalWritten) {
       if (aborted()) {
-        recordInterrupted();
+        recordAborted();
       } else {
         state = "failed";
         append("run.failed", { error: sanitizeError(error) });

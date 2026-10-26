@@ -139,11 +139,37 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // moment backlog rows can move) and on every ACK, the controller when a run
   // settles and its rows are complete. Its `send` closes over the loop binding
   // and only runs from those triggers, all of which fire after the loop exists.
+  //
+  // The spool callbacks close over `runs` for the same reason: the pump only
+  // reads depth from a flush, and no flush happens before both are constructed.
   const pump = new EventPump({
     db,
     runnerId: identity.runnerId,
     bootId: bootId(),
     send: (frame) => loop.sendFrame(frame),
+    // §12.6 clause 5: the warning is journaled, not just logged, so the
+    // operator's transcript says the spool was deep rather than only the
+    // runner's stderr. It goes through the attempt's own append — the pump has
+    // none (§12.2) — so an attempt with no live run here cannot be journaled;
+    // that report is logged by counts alone, and deliberately without the
+    // attempt's payload, which is never logged (§19.4).
+    onSpoolWarning: (report) => {
+      if (runs.warnSpool(report.attemptId, report)) return;
+      console.warn(
+        `spool warning with no live run: ${report.events} event(s), ${report.bytes} byte(s)`,
+      );
+    },
+    // §12.6 clause 6: the critical threshold stops the run and records a
+    // minimal failure record. The executor writes that record from its own
+    // append when it sees the reason, so the stop is a cancel with a reason.
+    onSpoolCritical: (report) => {
+      const stopped = runs.cancel(report.attemptId, "spool_critical");
+      if (!stopped) {
+        console.warn(
+          `spool critical with no live run: ${report.events} event(s), ${report.bytes} byte(s)`,
+        );
+      }
+    },
   });
 
   // §10: accepted commands become runs here. The controller owns the inbox →

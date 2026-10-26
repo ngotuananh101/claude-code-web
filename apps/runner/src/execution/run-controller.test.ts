@@ -470,6 +470,119 @@ describe("cancelling a run", () => {
   });
 });
 
+describe("the spool seam (§12.6)", () => {
+  /** A stream that holds until its abort signal fires, then throws. */
+  function abortableStream(): SdkStream {
+    return (options) =>
+      (async function* () {
+        await new Promise<never>((_, reject) => {
+          options.abort?.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+            once: true,
+          });
+        });
+      })();
+  }
+
+  /** A stream that stays open until released, so a mid-run call is observable. */
+  function holdable(): { sdk: SdkStream; release(): void } {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sdk: SdkStream = () =>
+      (async function* () {
+        await gate;
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    return { sdk, release };
+  }
+
+  test("warnSpool journals through the attempt's own append", async () => {
+    const { db } = setup();
+    const { sdk, release } = holdable();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk,
+    });
+
+    await controller.handle(command);
+    // Let the executor reach its offer of the append before warning.
+    await Bun.sleep(10);
+
+    expect(controller.warnSpool("attempt-1", { events: 5000, bytes: 123 })).toBe(true);
+
+    release();
+    await controller.settle();
+
+    // The warning is a real row at the attempt's own sequence, inside the
+    // run's event stream — not a borrowed number, not a second writer.
+    const list = db
+      .prepare("SELECT local_sequence, type, payload FROM event_outbox ORDER BY local_sequence")
+      .all() as Array<{ local_sequence: number; type: string; payload: string }>;
+    const warning = list.find((e) => e.type === "spool.warning");
+    expect(warning).toBeDefined();
+    expect(JSON.parse(warning!.payload)).toEqual({ events: 5000, bytes: 123 });
+    // Contiguous from 1: a hole here would stall the ACK watermark (§12.2).
+    expect(list.map((e) => e.local_sequence)).toEqual(list.map((_, i) => i + 1));
+  });
+
+  test("warnSpool for an attempt with no live run writes nothing and says so", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    // No run in flight: there is no sequence owner, so there is nothing to
+    // journal against. False is the honest answer — the daemon logs instead.
+    expect(controller.warnSpool("attempt-nobody", { events: 5000, bytes: 1 })).toBe(false);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM event_outbox").get()).toEqual({ n: 0 });
+  });
+
+  test("cancel with a reason records it as run.failed rather than interrupted", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: abortableStream(),
+    });
+
+    await controller.handle(command);
+    await Bun.sleep(10);
+
+    // §12.6 clause 6: the critical stop is a policy failure with a reason, so
+    // the operator's transcript says why instead of showing a bare abort.
+    expect(controller.cancel("attempt-1", "spool_critical")).toBe(true);
+    await controller.settle();
+
+    expect(attemptState(db, "attempt-1")).toBe("failed");
+    const failed = db
+      .prepare("SELECT payload FROM event_outbox WHERE type = 'run.failed'")
+      .get() as { payload: string } | null;
+    expect(failed && JSON.parse(failed.payload)).toEqual({ error: "spool_critical" });
+  });
+
+  test("cancel for an attempt that already settled reports it stopped nothing", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    await controller.handle(command);
+    await controller.settle();
+
+    expect(controller.cancel("attempt-1", "spool_critical")).toBe(false);
+  });
+});
+
 describe("draining", () => {
   /** A stream that ignores everything, including its abort signal. */
   function zombieStream(): SdkStream {

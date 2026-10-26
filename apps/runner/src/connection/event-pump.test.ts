@@ -6,8 +6,9 @@ import {
   migrateRunnerDb,
   pendingEventAttempts,
   pendingEvents,
+  spoolDepth,
 } from "@cc-web/runner-db";
-import { EventPump } from "./event-pump.ts";
+import { EventPump, type SpoolReport } from "./event-pump.ts";
 
 /**
  * The outbox → server sender (§12.2).
@@ -40,7 +41,10 @@ function setup(send: (frame: EventBatchFrame) => boolean = () => true) {
 
 /**
  * A pump whose deferred work is collected instead of waiting on wall time.
- * A retry tests nothing if the assertion has to sleep for it.
+ * A retry tests nothing if the assertion has to sleep for it. Also collects
+ * the spool reports — the pump's other deferred decision, which it hands to
+ * the controller rather than acting on itself: the pump cannot journal, because
+ * the attempt's `local_sequence` space belongs to the executor alone (§12.2).
  */
 function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => true) {
   const db = new Database(":memory:");
@@ -48,6 +52,8 @@ function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => tru
 
   const frames: EventBatchFrame[] = [];
   const scheduled: Array<() => void> = [];
+  const warnings: SpoolReport[] = [];
+  const criticals: SpoolReport[] = [];
   const pump = new EventPump({
     db,
     runnerId: "runner-a",
@@ -60,9 +66,15 @@ function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => tru
       scheduled.push(fn);
       return undefined;
     },
+    onSpoolWarning: (info) => {
+      warnings.push(info);
+    },
+    onSpoolCritical: (info) => {
+      criticals.push(info);
+    },
   });
 
-  return { db, pump, frames, scheduled };
+  return { db, pump, frames, scheduled, warnings, criticals };
 }
 
 function append(db: Database, sequence: number, attemptId = "attempt-1") {
@@ -255,5 +267,111 @@ describe("acknowledging", () => {
   test("an ack for an unknown attempt is a no-op", () => {
     const { pump } = setup();
     expect(() => pump.handleAck({ attemptId: "attempt-nobody", through: 3 })).not.toThrow();
+  });
+});
+
+describe("spool thresholds (§12.6)", () => {
+  /**
+   * The pump reports the depth; it never journals. The attempt's
+   * `local_sequence` space belongs to the executor alone — a second writer at a
+   * borrowed sequence collides locally, at a fresh sequence collides with the
+   * executor's next write, and either leaves a hole the ACK watermark stops at.
+   * So the row is written by whoever owns the sequence (the controller, through
+   * the executor's append); this unit pins the detection.
+   */
+  test("crossing the warning threshold reports once, not once per flush", () => {
+    const { db, pump, frames, warnings } = setupWithSchedule();
+    // The threshold is on unacked depth, so nothing is acknowledged here.
+    for (let i = 1; i <= EventPump.SPOOL_WARNING.events; i += 1) append(db, i);
+
+    pump.flush();
+    pump.flush();
+    pump.flush();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.attemptId).toBe("attempt-1");
+    expect(warnings[0]!.events).toBeGreaterThanOrEqual(EventPump.SPOOL_WARNING.events);
+    expect(typeof warnings[0]!.bytes).toBe("number");
+
+    // A signal, not a behaviour change: the pump keeps sending and the backlog
+    // is untouched. A threshold that already changed behaviour would just be a
+    // lower critical.
+    expect(frames.length).toBeGreaterThan(0);
+    expect(spoolDepth(db, "attempt-1").events).toBe(EventPump.SPOOL_WARNING.events);
+  });
+
+  test("the warning re-arms once the depth falls back below the threshold", () => {
+    const { db, pump, warnings } = setupWithSchedule();
+    for (let i = 1; i <= EventPump.SPOOL_WARNING.events; i += 1) append(db, i);
+
+    pump.flush();
+    expect(warnings).toHaveLength(1);
+
+    // Everything drains below the threshold, with a flush passing through the
+    // low depth — that is the crossing that re-arms it.
+    pump.handleAck({ attemptId: "attempt-1", through: EventPump.SPOOL_WARNING.events });
+    append(db, EventPump.SPOOL_WARNING.events + 1);
+    pump.flush();
+    expect(warnings).toHaveLength(1);
+
+    for (
+      let i = EventPump.SPOOL_WARNING.events + 2;
+      i <= EventPump.SPOOL_WARNING.events * 2;
+      i += 1
+    ) {
+      append(db, i);
+    }
+    pump.flush();
+    expect(warnings).toHaveLength(2);
+  });
+
+  test("crossing the critical threshold reports the stop once", () => {
+    const { db, pump, frames, criticals } = setupWithSchedule();
+    for (let i = 1; i <= EventPump.SPOOL_CRITICAL.events; i += 1) append(db, i);
+
+    pump.flush();
+    pump.flush();
+    pump.flush();
+
+    // §12.6: the stop is reported to the controller, which owns the run's SDK
+    // work and its sequence. Once per crossing, never per flush.
+    expect(criticals).toHaveLength(1);
+    expect(criticals[0]!.attemptId).toBe("attempt-1");
+    expect(criticals[0]!.events).toBeGreaterThanOrEqual(EventPump.SPOOL_CRITICAL.events);
+
+    // Nothing is deleted, truncated or dropped: the backlog is kept on disk so
+    // the operator replays what the run did, then sees why it stopped (§12.6
+    // clause 3 — the transcript's order is the backlog, then the failure).
+    expect(spoolDepth(db, "attempt-1").events).toBe(EventPump.SPOOL_CRITICAL.events);
+    expect(pendingEventAttempts(db)).toContain("attempt-1");
+
+    // The pump does not fabricate the failure record — it has no sequence to
+    // write one at. Everything it sent is a real outbox row.
+    const fabricated = frames
+      .flatMap((f) => f.events)
+      .filter((e) => e.type === "run.failed" || e.type === "spool.warning");
+    expect(fabricated).toEqual([]);
+  });
+
+  test("at critical depth the warning is suppressed, not also fired", () => {
+    const { db, pump, warnings, criticals } = setupWithSchedule();
+    for (let i = 1; i <= EventPump.SPOOL_CRITICAL.events; i += 1) append(db, i);
+
+    pump.flush();
+
+    // The run is being stopped; a "the spool is getting deep" note is noise.
+    expect(warnings).toHaveLength(0);
+    expect(criticals).toHaveLength(1);
+  });
+
+  test("a shallow spool reports nothing", () => {
+    const { db, pump, warnings, criticals } = setupWithSchedule();
+    append(db, 1);
+    append(db, 2);
+
+    pump.flush();
+
+    expect(warnings).toHaveLength(0);
+    expect(criticals).toHaveLength(0);
   });
 });

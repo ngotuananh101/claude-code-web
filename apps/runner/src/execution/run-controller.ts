@@ -85,6 +85,22 @@ export class RunController {
   /** The attempt's approval gate (§13), registered while its run is in flight. */
   readonly #routers = new Map<string, ApprovalRouter>();
 
+  /**
+   * The attempt's own sequenced append, offered by the executor (§12.6) while
+   * its run is in flight. This is how a spool warning gets journaled: the
+   * executor owns the attempt's `local_sequence` space in a closure, so any
+   * other writer would collide with it and leave a hole the ACK watermark
+   * stops at (§12.2).
+   */
+  readonly #appends = new Map<string, (type: string, payload: unknown) => void>();
+
+  /**
+   * Why an attempt was stopped, for the stop that has a reason (§12.6). A
+   * deliberate cancel leaves no entry, which is how the executor tells the two
+   * apart and records `run.failed` for one and `run.interrupted` for the other.
+   */
+  readonly #cancelReasons = new Map<string, string>();
+
   /** Set the moment draining begins; a draining runner accepts no new work. */
   #draining = false;
 
@@ -160,7 +176,10 @@ export class RunController {
     // execute the cancel as a prompt against a locked workspace.
     if (parsed.kind === "run.cancel") {
       const target = this.#findByAttemptId(parsed.attemptId) ?? this.#findByRunId(parsed.runId);
-      if (target !== undefined) target.controller.abort();
+      // No reason: a server-issued cancel is §14.2's deliberate stop, and the
+      // executor records it as `interrupted`. Only a policy stop — the spool
+      // critical threshold — has something to explain.
+      if (target !== undefined) this.cancel(target.attemptId);
       return receipt(parsed, true);
     }
 
@@ -248,12 +267,23 @@ export class RunController {
           return router;
         },
         onApprovalEvent: () => this.#onApprovalEvent?.(),
+        // §12.6: the executor owns this attempt's sequence space, so it offers
+        // the one closure anything else may journal through. Held only while
+        // the run is in flight, like the router.
+        onAppend: (append) => {
+          this.#appends.set(attemptId, append);
+        },
+        // Read at abort time, not captured now: a cancel or a spool stop
+        // arrives long after this construction.
+        abortReason: () => this.#cancelReasons.get(attemptId),
       })
         .then(() => undefined)
         .catch(() => undefined)
         .finally(() => {
           this.#inFlight.delete(attemptId);
           this.#routers.delete(attemptId);
+          this.#appends.delete(attemptId);
+          this.#cancelReasons.delete(attemptId);
           // Fired after the delete so a synchronous trigger observes a
           // controller that no longer counts this attempt. Advisory: a
           // throwing trigger must not reject the tracked promise, which
@@ -303,6 +333,45 @@ export class RunController {
     while (this.#inFlight.size > 0) {
       await Promise.all([...this.#inFlight.values()].map((run) => run.promise));
     }
+  }
+
+  /**
+   * Journal a spool warning for an attempt (§12.6).
+   *
+   * The row is written through the attempt's own append — the executor's, taken
+   * when it offered the seam — because the attempt's `local_sequence` space has
+   * exactly one writer. Writing a second row from here, at any sequence, either
+   * collides with that writer or leaves a hole the ACK watermark stops at
+   * (§12.2); both are transcript corruption, not a warning.
+   *
+   * False means there is no live run for the attempt: a spool report for an
+   * attempt this process is not running has no sequence owner at all, so it can
+   * only be logged, not journaled.
+   */
+  warnSpool(attemptId: string, info: { events: number; bytes: number }): boolean {
+    const append = this.#appends.get(attemptId);
+    if (append === undefined) return false;
+    append("spool.warning", { events: info.events, bytes: info.bytes });
+    return true;
+  }
+
+  /**
+   * Stop a run and say why (§12.6, §14.2).
+   *
+   * The reason is recorded before the abort because the executor reads it at
+   * abort time — when its stream dies and it decides between `run.failed` and
+   * `run.interrupted`. A stop with no reason keeps §14.2's deliberate cancel
+   * reading: interrupted, with nothing to explain.
+   *
+   * False means nothing was in flight under that attempt id — the run already
+   * settled, and stopping it is not this call's problem.
+   */
+  cancel(attemptId: string, reason?: string): boolean {
+    const target = this.#findByAttemptId(attemptId);
+    if (target === undefined) return false;
+    if (reason !== undefined && reason !== "") this.#cancelReasons.set(attemptId, reason);
+    target.controller.abort();
+    return true;
   }
 
   /**

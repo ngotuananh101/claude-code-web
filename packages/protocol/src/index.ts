@@ -67,6 +67,7 @@ export type EventType =
   | "question.answered"
   | "workspace.changed"
   | "usage.updated"
+  | "spool.warning"
   | "session.updated";
 
 /**
@@ -96,6 +97,7 @@ export const EVENT_TYPES = [
   "question.answered",
   "workspace.changed",
   "usage.updated",
+  "spool.warning",
   "session.updated",
 ] as const satisfies readonly EventType[];
 

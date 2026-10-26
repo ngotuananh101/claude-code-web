@@ -1083,6 +1083,122 @@ describe("an aborted run", () => {
   });
 });
 
+describe("the spool seam (§12.6)", () => {
+  /**
+   * A stream that holds until its abort signal fires, then throws the shape the
+   * real SDK produces on abort. Used for the stops, where the point is the
+   * terminal classification rather than the streaming.
+   */
+  function abortableStream(): SdkStream {
+    return (options) =>
+      (async function* () {
+        await new Promise<never>((_, reject) => {
+          options.abort?.addEventListener("abort", () => reject(new Error("Operation aborted")), {
+            once: true,
+          });
+        });
+      })();
+  }
+
+  test("onAppend hands over the attempt's own sequenced append", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let offered: ((type: string, payload: unknown) => void) | undefined;
+    const sdk: SdkStream = () =>
+      (async function* () {
+        // The seam must be live by the time the SDK is built: a spool warning
+        // during the run has to be journalable.
+        offered?.("spool.warning", { events: 5000, bytes: 1 });
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    const outcome = await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      onAppend: (append) => {
+        offered = append;
+      },
+    });
+
+    expect(outcome.state).toBe("finished");
+    // The warning is a real row at the attempt's own sequence, between the
+    // events the executor wrote — not a borrowed number, not a second writer.
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual(["run.started", "spool.warning", "run.finished"]);
+    expect(list.map((e) => e.local_sequence)).toEqual([1, 2, 3]);
+  });
+
+  test("an abortReason turns an abort into run.failed carrying the reason", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const controller = new AbortController();
+    // The reason is set on the controller *after* construction, exactly as a
+    // spool critical stop does — which is why the option is a thunk and not a
+    // captured value.
+    let reason: string | undefined;
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk: abortableStream(),
+      signal: controller.signal,
+      abortReason: () => reason,
+    });
+
+    await Bun.sleep(10);
+    reason = "spool_critical";
+    controller.abort();
+
+    const outcome = await run;
+
+    // §12.6 clause 6: a stop with a reason is a policy failure, and the record
+    // says why, rather than an unexplained interruption.
+    expect(outcome.state).toBe("failed");
+    expect(attemptState(db, "attempt-1")).toBe("failed");
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual(["run.started", "run.failed"]);
+    const failed = list.find((e) => e.type === "run.failed");
+    expect(failed && JSON.parse(failed.payload)).toEqual({ error: "spool_critical" });
+  });
+
+  test("no abortReason keeps the deliberate-cancel reading", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const controller = new AbortController();
+    const run = executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk: abortableStream(),
+      signal: controller.signal,
+      // Answers undefined at abort time — a cancel with nothing to explain.
+      abortReason: () => undefined,
+    });
+
+    await Bun.sleep(10);
+    controller.abort();
+
+    const outcome = await run;
+
+    expect(outcome.state).toBe("interrupted");
+    expect(events(db).map((e) => e.type)).toEqual(["run.started", "run.interrupted"]);
+  });
+});
+
 describe("the permission mode", () => {
   test("forwards the run's permissionMode into the SDK options", async () => {
     const { db } = setup();
