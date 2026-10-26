@@ -67,7 +67,7 @@ describe("listRunners", () => {
     const db = freshDb();
     const { runnerId, token } = createRunnerToken(db, { ownerId: "owner-1" });
 
-    const runners = listRunners(db);
+    const runners = listRunners(db, "owner-1");
     expect(runners.length).toBe(1);
     expect(runners[0]).toEqual({
       runnerId,
@@ -78,5 +78,17 @@ describe("listRunners", () => {
     const serialized = JSON.stringify(runners);
     expect(serialized).not.toContain(token);
     expect(serialized).not.toContain("secret");
+  });
+
+  test("answers only the owner's own runners", () => {
+    // §17 says the list is "danh sách runner của owner". A runner id is not a
+    // secret, but a registry that leaks another owner's topology is still
+    // wrong: every sibling listing in this package is owner-scoped.
+    const db = freshDb();
+    const mine = createRunnerToken(db, { ownerId: "owner-1" });
+    createRunnerToken(db, { ownerId: "owner-2" });
+
+    const runners = listRunners(db, "owner-1");
+    expect(runners.map((r) => r.runnerId)).toEqual([mine.runnerId]);
   });
 });

@@ -147,6 +147,91 @@ describe("runner registry routes", () => {
     ).toBe(403);
   });
 
+  test("revoking a runner kills its credential, durably", async () => {
+    // §17: "Revoke credential/dispatch". The token was the runner's whole
+    // identity, so revoking has to reach the credential — a runner that
+    // reconnects with the same token must be refused, not just disconnected.
+    const { db, url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string; token: string };
+
+    expect(verifyRunnerCredential(db, minted.token).ok).toBe(true);
+
+    const response = await fetch(`${url}/api/runners/${minted.runnerId}/revoke`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+
+    const after = verifyRunnerCredential(db, minted.token);
+    expect(after.ok).toBe(false);
+    expect(after.ok === false && after.reason).toBe("revoked");
+  });
+
+  test("revoking needs the session cookie and the allowlist", async () => {
+    const { url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string };
+
+    const path = `${url}/api/runners/${minted.runnerId}/revoke`;
+    expect((await fetch(path, { method: "POST", headers: { Origin: origin } })).status).toBe(401);
+    expect(
+      (
+        await fetch(path, {
+          method: "POST",
+          headers: { Origin: "https://evil.example.test", Cookie: cookie },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  test("revoking answers 404 for a runner the owner does not hold", async () => {
+    // The `WHERE owner_id` in revokeRunner makes a foreign id indistinguishable
+    // from a missing one — no oracle for whether another owner's runner exists.
+    const { url, cookie } = await start();
+
+    const response = await fetch(`${url}/api/runners/does-not-exist/revoke`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(404);
+  });
+
+  test("a revoked runner's token cannot authenticate a socket", async () => {
+    const { url, wsUrl, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string; token: string };
+
+    await fetch(`${url}/api/runners/${minted.runnerId}/revoke`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+
+    const socket = new WebSocket(`${wsUrl}/ws/runner`, {
+      headers: { Authorization: `Bearer ${minted.token}` },
+    } as never);
+    const closed = await new Promise<boolean>((resolve) => {
+      socket.addEventListener("close", () => resolve(true));
+      socket.addEventListener("open", () => socket.send('{"type":"hello"}'));
+      socket.addEventListener("error", () => resolve(true));
+      setTimeout(() => resolve(false), 2000);
+    });
+    expect(closed).toBe(true);
+  });
+
   test("a minted token authenticates a runner socket", async () => {
     const { url, wsUrl, cookie } = await start();
     const minted = (await (

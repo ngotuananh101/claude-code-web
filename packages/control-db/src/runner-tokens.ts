@@ -61,10 +61,18 @@ export function createRunnerToken(
   return { runnerId, token };
 }
 
-export function listRunners(db: Database): ListedRunner[] {
+/**
+ * The runners one owner holds (§5.2, §17). Owner-scoped like every other
+ * listing in this package: a runner's existence is not secret material, but a
+ * registry answering another owner's topology is still the wrong answer.
+ */
+export function listRunners(db: Database, ownerId: string): ListedRunner[] {
   return db
-    .prepare("SELECT id, created_at, revoked_at FROM runners ORDER BY created_at DESC")
-    .all()
+    .prepare(
+      `SELECT id, created_at, revoked_at FROM runners
+       WHERE owner_id = ? ORDER BY created_at DESC`,
+    )
+    .all(ownerId)
     .map((row) => {
       const record = row as { id: string; created_at: number; revoked_at: number | null };
       return {

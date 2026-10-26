@@ -20,6 +20,9 @@ type RunnerRow = {
 const runners = ref<RunnerRow[]>([]);
 const minted = ref<{ runnerId: string; token: string } | null>(null);
 const mintBusy = ref(false);
+/** The row awaiting a second click — revocation is not undoable, so it asks. */
+const confirming = ref<string | null>(null);
+const revokeBusy = ref(false);
 const origin = location.origin;
 
 /** The journal's numbering: the newest runner is event 0001. */
@@ -88,6 +91,33 @@ async function copyToken(): Promise<void> {
     // An unfocused window or a clipboard the page may not write. The value
     // stays select-all, so the owner can still copy it by hand.
     toast.error("Không copy được token — chọn và copy thủ công.");
+  }
+}
+
+/**
+ * Revoke a runner (§17). Irreversible — the credential is killed and a
+ * reconnect with the same token fails closed — so the first click only arms
+ * the row and the second performs it.
+ */
+async function revoke(runnerId: string): Promise<void> {
+  if (confirming.value !== runnerId) {
+    confirming.value = runnerId;
+    return;
+  }
+  revokeBusy.value = true;
+  try {
+    const response = await fetch(`/api/runners/${encodeURIComponent(runnerId)}/revoke`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      toast.error(await response.text());
+      return;
+    }
+    toast.success("Đã thu hồi runner");
+    await load();
+  } finally {
+    revokeBusy.value = false;
+    confirming.value = null;
   }
 }
 
@@ -161,12 +191,24 @@ onMounted(() => void load());
         >
           {{ pad(i + 1) }}
         </span>
-        <div class="grid min-w-0 gap-0.5">
-          <span class="break-all font-mono text-[13px]">{{ runner.runnerId }}</span>
-          <span class="font-mono text-xs text-muted-foreground">
-            đã kết nối {{ fmt(runner.createdAt) }}
-            <template v-if="runner.revokedAt !== null"> · đã thu hồi {{ fmt(runner.revokedAt) }}</template>
-          </span>
+        <div class="flex min-w-0 items-center gap-3">
+          <div class="grid min-w-0 flex-1 gap-0.5">
+            <span class="break-all font-mono text-[13px]">{{ runner.runnerId }}</span>
+            <span class="font-mono text-xs text-muted-foreground">
+              đã kết nối {{ fmt(runner.createdAt) }}
+              <template v-if="runner.revokedAt !== null"> · đã thu hồi {{ fmt(runner.revokedAt) }}</template>
+            </span>
+          </div>
+          <Button
+            v-if="runner.revokedAt === null"
+            variant="outline"
+            size="xs"
+            class="shrink-0"
+            :disabled="revokeBusy"
+            @click="revoke(runner.runnerId)"
+          >
+            {{ confirming === runner.runnerId ? "chắc chắn?" : "thu hồi" }}
+          </Button>
         </div>
       </div>
     </div>

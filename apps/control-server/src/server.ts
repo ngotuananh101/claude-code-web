@@ -36,7 +36,11 @@ import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
-import { handleCreateRunner, handleListRunners } from "./routes/runners-routes.ts";
+import {
+  handleCreateRunner,
+  handleListRunners,
+  handleRevokeRunner,
+} from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
 import { handleListSessions } from "./routes/sessions-routes.ts";
 import { handleUsageStats } from "./routes/stats-routes.ts";
@@ -249,6 +253,18 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/runners" && request.method === "GET") {
         return handleListRunners(request, options, allowed, browserGateway);
+      }
+
+      const revokeMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/revoke$/);
+      if (revokeMatch && request.method === "POST") {
+        return handleRevokeRunner(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          decodeURIComponent(revokeMatch[1] ?? ""),
+        );
       }
 
       if (url.pathname === "/api/sessions" && request.method === "GET") {
