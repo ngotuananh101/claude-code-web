@@ -381,13 +381,25 @@ CodeMirror (§16.3 is P3-D):
 
 **Where they live: the session view's secondary panel, not a new route.**
 §16.1's layout already names a "Secondary panel: Files / Changes / Code /
-Diff" beside the conversation, and a session carries the `(workspace, runner)`
-pin (§2.3, ADR-006) — so the composite id is *already in hand* from the
-session, with no new lookup and no new route. `SessionView` gains a tab strip
-in its right column (collapsing to a tabs/stacked layout on narrow screens,
-matching §16.1's mobile guidance). A standalone `/workspaces/...` browser is
+Diff" beside the conversation. `SessionView` gains a tab strip in its right
+column (collapsing to a tabs/stacked layout on narrow screens, matching
+§16.1's mobile guidance). A standalone `/workspaces/...` browser is
 deliberately out of scope: it is the same surfaces with a different entry
-point, and the pin is the honest source of "which workspace am I looking at".
+point, and the session pin is the honest source of "which workspace am I
+looking at".
+
+**The pin is not in the session list today, so P3-A adds it.** A correction
+found while planning: `SessionSummary` (`packages/control-db/src/replay.ts`)
+is derived from `run_events` and `active_runs` and carries no
+`workspaceId`/`runnerId`, so the composite id Ruling 10 needs is *not*
+already in hand. The pin exists in the `sessions` table (§2.3, ADR-006) and
+is readable via `sessionPin(db, sessionId)`; P3-A adds `runnerId` and
+`workspaceId` to `listSessions`'s answer with a `LEFT JOIN sessions`, both
+nullable. Nullable is correct, not defensive: a session dispatched before
+the pin milestone has no row, and the panel then says "workspace unknown for
+this session" rather than guessing. The rail already loads this list, so the
+panel reads the pin from the store it already has — no new request on the
+common path.
 
 Pure mapping/formatting logic — path breadcrumbs, diff line classification,
 size formatting, composite-id encoding — lives in testable

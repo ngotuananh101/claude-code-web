@@ -581,15 +581,13 @@ Expected: FAIL — the run controller begins an attempt for `workspace.inspect`;
 
 `reconnect-loop.ts`: define
 ```ts
-export type CommandOutcome =
-  | { receipt: CommandReceipt }
-  | { receipt: null; results: RpcResultFrame[] };
+export type CommandOutcome = { receipt: CommandReceipt | null; results?: RpcResultFrame[] };
 ```
 Change `CommandHandler` to `(command: unknown) => Promise<CommandOutcome>`. In `#handleCommand`, after awaiting, send `outcome.receipt` when it is not `null`, then `outcome.results` in order. Update the existing error path to produce `{ receipt: { ...refused } }`. The doc comment states Ruling 14's ordering rule and why the seam widened rather than a callback being threaded.
 
 `run-controller.ts`: `handle`'s existing early branches (`run.cancel`, `approval.respond`) stay; the fall-through that assumed "everything else is a start" becomes an explicit check — only `kind === "run.start"` proceeds to the attempt/workspace block, and anything else returns `{ ...receipt(parsed, false), reason: "unsupported_command" }` **before** `beginAttempt`. Keep the existing `unknown_workspace` ordering for `run.start`.
 
-`daemon.ts`: add `inspect?: (command: unknown) => Promise<RpcResultFrame>` to `DaemonOptions`; default it to `createInspectHandler({ workspacePathFor: options.workspacePathFor ?? defaultWorkspaceResolver(...) })` (mirror how `prepareWorkspace` defaults). Change `onCommand` to a pre-switch: `kind` of `workspace.inspect`/`config.inspect` → `{ receipt: null, results: [await inspect(command)] }`; every other kind → `{ receipt: await runs.handle(command) }`. The pre-switch reads `kind` defensively (a non-object command falls through to `runs.handle`, which already refuses malformed).
+`daemon.ts`: add `inspect?: (command: unknown) => Promise<RpcResultFrame>` to `DaemonOptions`; default it to `createInspectHandler({ workspacePathFor: options.workspacePathFor ?? (() => undefined) })` — reusing the daemon's already-resolved `workspacePathFor` (line 191), not re-deriving from `defaultWorkspaceResolver`, so the env→path wiring stays in `main.ts` as its single source of truth. Change `onCommand` to a pre-switch: `kind` of `workspace.inspect`/`config.inspect` → `{ receipt: null, results: [await inspect(command)] }`; every other kind → `{ receipt: await runs.handle(command) }`. The pre-switch reads `kind` defensively (a non-object command falls through to `runs.handle`, which already refuses malformed).
 
 - [ ] **Step 4: Run to verify it passes**
 
