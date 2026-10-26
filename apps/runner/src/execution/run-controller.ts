@@ -218,6 +218,16 @@ export class RunController {
         : { ...receipt(parsed, true), reason: result.reason };
     }
 
+    // Ruling 5: everything that is not a check is a start — but only `run.start`
+    // earns that. Before this check the fall-through treated any unrecognised
+    // kind as a run start, so a command this build does not implement (a newer
+    // server's `workspace.inspect`, say) spawned a bogus SDK run and took the
+    // workspace lock. The refusal names the kind, not the workspace, because
+    // "I do not implement this" is true regardless of which workspace it names.
+    if (parsed.kind !== "run.start") {
+      return { ...receipt(parsed, false), reason: "unsupported_command" };
+    }
+
     const attemptId = parsed.attemptId ?? parsed.commandId;
     const workspacePath =
       parsed.workspaceId === undefined ? undefined : this.#workspacePathFor(parsed.workspaceId);

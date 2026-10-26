@@ -1082,3 +1082,55 @@ describe("workspace preparation (M4)", () => {
     expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
   });
 });
+
+describe("refusing a command it does not implement", () => {
+  test("refuses an inspection kind instead of starting a run", async () => {
+    const { db } = setup();
+    let reached = false;
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => {
+        reached = true;
+        return (async function* () {})();
+      },
+    });
+
+    // Ruling 5: before this check, every unrecognised kind fell through to
+    // `beginAttempt`. An inspection naming a known workspace would have spawned a
+    // bogus SDK run and taken the workspace lock — the exact defect this fixes.
+    const receipt = await controller.handle({
+      ...command,
+      kind: "workspace.inspect",
+      payload: { op: "git.changes" },
+    });
+    await controller.settle();
+
+    expect(receipt).toMatchObject({ accepted: false, reason: "unsupported_command" });
+    expect(reached).toBe(false);
+    // Nothing was begun, so the workspace lock was never taken either.
+    expect(db.query("SELECT COUNT(*) AS n FROM local_attempts").get()).toEqual({ n: 0 });
+    expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  });
+
+  test("refuses an unknown kind that names no workspace, so the refusal is about the kind", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+    });
+
+    const receipt = await controller.handle({
+      ...command,
+      kind: "workspace.file.write",
+      payload: { path: "a.ts", content: "x" },
+    });
+
+    // `unsupported_command`, not `unknown_workspace`: the kind is checked first,
+    // because "I do not implement this" is true regardless of the workspace.
+    expect(receipt).toMatchObject({ accepted: false, reason: "unsupported_command" });
+  });
+});

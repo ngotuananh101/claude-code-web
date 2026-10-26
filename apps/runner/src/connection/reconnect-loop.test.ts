@@ -268,7 +268,7 @@ describe("runner reconnect loop", () => {
       onEvent: () => {},
       onCommand: async (command) => {
         handled.push(command);
-        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+        return { receipt: { commandId: "cmd-1", attemptId: "attempt-1", accepted: true } };
       },
     });
 
@@ -400,7 +400,7 @@ describe("runner reconnect loop", () => {
       onEvent: () => {},
       onCommand: async (command) => {
         handled.push(command);
-        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+        return { receipt: { commandId: "cmd-1", attemptId: "attempt-1", accepted: true } };
       },
     });
 
@@ -427,7 +427,7 @@ describe("runner reconnect loop", () => {
         // Stands in for the inbox transaction. A receipt that overtakes this is
         // a promise of durability the runner has not made yet (§9.3).
         order.push("persisted");
-        return { commandId: "cmd-1", attemptId: "attempt-1", accepted: true };
+        return { receipt: { commandId: "cmd-1", attemptId: "attempt-1", accepted: true } };
       },
     });
 
@@ -454,10 +454,12 @@ describe("runner reconnect loop", () => {
       sleep: async () => {},
       onEvent: () => {},
       onCommand: async () => ({
-        commandId: "cmd-1",
-        attemptId: "attempt-1",
-        accepted: false,
-        reason: "expired",
+        receipt: {
+          commandId: "cmd-1",
+          attemptId: "attempt-1",
+          accepted: false,
+          reason: "expired",
+        },
       }),
     });
 
@@ -487,7 +489,7 @@ describe("runner reconnect loop", () => {
       onEvent: () => {},
       onCommand: async () => {
         calls += 1;
-        return { commandId: "", attemptId: "", accepted: true };
+        return { receipt: { commandId: "", attemptId: "", accepted: true } };
       },
     });
 
@@ -496,6 +498,74 @@ describe("runner reconnect loop", () => {
     await Bun.sleep(10);
 
     expect(calls).toBe(0);
+  });
+
+  test("sends the handler's result frames after the receipt, in order", async () => {
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async () => ({
+        receipt: { commandId: "cmd-1", attemptId: "", accepted: true },
+        results: [
+          {
+            type: "rpc.result",
+            commandId: "cmd-1",
+            ok: true,
+            result: { op: "git.changes", entries: [], truncated: false },
+          },
+        ],
+      }),
+    });
+
+    await loop.start();
+    link.receive({ type: "command", command: { commandId: "cmd-1" } });
+    await Bun.sleep(10);
+
+    // Ruling 14: the receipt is the durable-acknowledgement frame and must be
+    // seen first; the result rides behind it. Reversing them would let a server
+    // observe an answer to a command it has not yet recorded as delivered.
+    // The `hello` frame precedes both — it is the connection's, not the answer's.
+    const types = link.sent.map((frame) => frame["type"]).filter((type) => type !== "hello");
+    expect(types).toEqual(["command.receipt", "rpc.result"]);
+    expect(link.sent.at(-1)).toMatchObject({ type: "rpc.result", commandId: "cmd-1", ok: true });
+  });
+
+  test("sends no receipt when the outcome carries none", async () => {
+    const link = makeLink();
+    const loop = new ReconnectLoop({
+      runnerId: "runner-a",
+      dial: async () => link,
+      inventory: () => [],
+      hello: () => ({ protocolVersion: 1, runnerId: "runner-a" }),
+      sleep: async () => {},
+      onEvent: () => {},
+      onCommand: async () => ({
+        receipt: null,
+        results: [
+          {
+            type: "rpc.result",
+            commandId: "cmd-1",
+            ok: false,
+            error: { code: "PATH_OUTSIDE_WORKSPACE", message: "refused" },
+          },
+        ],
+      }),
+    });
+
+    await loop.start();
+    link.receive({ type: "command", command: { commandId: "cmd-1" } });
+    await Bun.sleep(10);
+
+    // An inspection is not an attempt, so there is no acceptance to report. A
+    // receipt with an empty attemptId would be rejected by the server's gateway
+    // anyway; sending none is the honest encoding.
+    const types = link.sent.map((frame) => frame["type"]).filter((type) => type !== "hello");
+    expect(types).toEqual(["rpc.result"]);
   });
 });
 

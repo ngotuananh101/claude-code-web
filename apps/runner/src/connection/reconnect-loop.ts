@@ -24,6 +24,8 @@
  * `dial` and `sleep` are injected so the backoff can be tested without waiting.
  */
 
+import type { RpcResultFrame } from "@cc-web/protocol";
+
 export type Link = {
   send(payload: string): unknown;
   close(): unknown;
@@ -66,11 +68,31 @@ export type CommandReceipt = {
 };
 
 /**
- * Handles one command. Returning the receipt is what the loop sends back, so an
- * implementation that persists first and returns second cannot accidentally
+ * One command's complete answer.
+ *
+ * `receipt` is null for a command that is not an attempt — an inspection
+ * (§23) — because a receipt with no `attemptId` says nothing a server can use,
+ * and the gateway rejects it outright. `results` carries the frames that are the
+ * real answer: the loop sends the receipt first when there is one (Ruling 14),
+ * then each result in order, so an observer never sees an answer to a command it
+ * has not yet recorded as delivered.
+ *
+ * The seam widened rather than a callback being threaded through: the loop
+ * already owns the only socket a command's answer can travel on, and a
+ * `sendResult` callback would restate the ordering rule at every caller instead
+ * of the one place that can encode it.
+ */
+export type CommandOutcome = {
+  receipt: CommandReceipt | null;
+  results?: RpcResultFrame[];
+};
+
+/**
+ * Handles one command. The outcome is what the loop sends back, so an
+ * implementation that persists first and answers second cannot accidentally
  * acknowledge before it has committed.
  */
-export type CommandHandler = (command: unknown) => Promise<CommandReceipt>;
+export type CommandHandler = (command: unknown) => Promise<CommandOutcome>;
 
 export type ReconnectLoopOptions = {
   runnerId: string;
@@ -283,7 +305,7 @@ export class ReconnectLoop {
   }
 
   /**
-   * Hand a command to the executor and answer with the receipt it returns.
+   * Hand a command to the executor and answer with the outcome it returns.
    *
    * Deliberately not awaited by the message handler: a command that takes
    * seconds to persist must not block the socket's message loop, which also
@@ -302,23 +324,33 @@ export class ReconnectLoop {
     }
 
     void (async () => {
-      let receipt: CommandReceipt;
+      let outcome: CommandOutcome;
       try {
-        receipt = await handler(command);
+        outcome = await handler(command);
       } catch (error) {
         // The executor threw, which means nothing was persisted. Report it as
         // refused so the server retires the command instead of redelivering it
         // into the same crash forever.
         const id = (command as Record<string, unknown>)["commandId"];
-        receipt = {
-          commandId: typeof id === "string" ? id : "",
-          attemptId: "",
-          accepted: false,
-          reason: `handler_error: ${(error as Error).message}`,
+        outcome = {
+          receipt: {
+            commandId: typeof id === "string" ? id : "",
+            attemptId: "",
+            accepted: false,
+            reason: `handler_error: ${(error as Error).message}`,
+          },
         };
       }
 
-      this.#send({ type: "command.receipt", ...receipt });
+      // Ruling 14: the receipt is the durable acknowledgement and goes first. A
+      // null receipt is an inspection, which has no acceptance to report — the
+      // result frame is the whole answer.
+      if (outcome.receipt !== null) {
+        this.#send({ type: "command.receipt", ...outcome.receipt });
+      }
+      for (const result of outcome.results ?? []) {
+        this.#send(result as unknown as Record<string, unknown>);
+      }
     })();
   }
 

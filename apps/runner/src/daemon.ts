@@ -18,16 +18,21 @@
 
 import { Database } from "bun:sqlite";
 import { createSdkStream } from "@cc-web/agent-adapter";
-import { type DeclaredWorkspace, PROTOCOL_VERSION } from "@cc-web/protocol";
+import { type DeclaredWorkspace, PROTOCOL_VERSION, type RpcResultFrame } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { EventPump } from "./connection/event-pump.ts";
-import { ReconnectLoop, type RunnerInventoryItem } from "./connection/reconnect-loop.ts";
+import {
+  type CommandOutcome,
+  ReconnectLoop,
+  type RunnerInventoryItem,
+} from "./connection/reconnect-loop.ts";
 import { dialWebSocket } from "./connection/websocket-link.ts";
 import type { ExecuteOptions, SdkStream } from "./execution/executor.ts";
 import { RunController } from "./execution/run-controller.ts";
 import { prepareBranch } from "./git/checkout.ts";
 import { gitSpawn } from "./git/spawn.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
+import { createInspectHandler, INSPECT_CAPABILITIES } from "./inspection/handler.ts";
 
 /**
  * A declaration is an array, or a thunk producing one. The thunk is how M4
@@ -36,6 +41,20 @@ import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts"
  * replaying whatever the boot happened to see.
  */
 export type DeclaredWorkspacesOption = DeclaredWorkspace[] | (() => DeclaredWorkspace[]);
+
+/** The two read-only command kinds the daemon routes away from the run controller. */
+const INSPECT_KINDS = new Set(["workspace.inspect", "config.inspect"]);
+
+/**
+ * Whether a raw command frame is an inspection. Reads `kind` defensively: a
+ * non-object frame is not an inspection, and falls through to the controller,
+ * which already refuses malformed commands with a receipt.
+ */
+function isInspectKind(command: unknown): boolean {
+  if (typeof command !== "object" || command === null) return false;
+  const kind = (command as Record<string, unknown>)["kind"];
+  return typeof kind === "string" && INSPECT_KINDS.has(kind);
+}
 
 export function resolveDeclaredWorkspaces(
   option: DeclaredWorkspacesOption | undefined,
@@ -67,6 +86,9 @@ export function helloFrame(input: {
     activeRuns: [],
     eventOffsets: [],
     workspaces: input.declaredWorkspaces ?? [],
+    // Ruling 13: the server gates an inspection on this, so a new server never
+    // dispatches one to a runner that would misread the kind as a run start.
+    capabilities: INSPECT_CAPABILITIES,
   };
 }
 
@@ -114,6 +136,12 @@ export type DaemonOptions = {
    * interrupted (§20.4). Default 5000ms each.
    */
   shutdownGraceMs?: number;
+  /**
+   * Answers a read-only inspection (§23). Defaults to the real handler built
+   * from `workspacePathFor`, so the composition and its tests use the same
+   * wiring; tests inject a fake to observe routing without a filesystem.
+   */
+  inspect?: (command: unknown) => Promise<RpcResultFrame>;
   onEvent?: (event: unknown) => void;
 };
 
@@ -124,6 +152,12 @@ export type Daemon = {
   db: Database;
   /** In-flight runs; `stop()` waits for these. */
   runs: RunController;
+  /**
+   * The command pre-switch the loop calls, exposed so the routing itself is
+   * testable without a reachable server: an inspect must reach `inspect` and
+   * never `runs`, which is the structural half of Ruling 15.
+   */
+  dispatch(command: unknown): Promise<CommandOutcome>;
   stop(): Promise<void>;
 };
 
@@ -198,6 +232,23 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     onApprovalEvent: () => pump.flush(),
   });
 
+  // Ruling 11: the handler resolves the workspace path from the runner's own
+  // registration — the same seam `run.start` uses — so the server's `path` is
+  // display metadata and never authoritative. Defaulting from the daemon's
+  // already-resolved `workspacePathFor` keeps the env→path wiring in `main.ts`
+  // as its single source of truth.
+  const inspect =
+    options.inspect ??
+    createInspectHandler({ workspacePathFor: options.workspacePathFor ?? (() => undefined) });
+
+  // Ruling 15's pre-switch. `runs.handle` persists the command before answering
+  // and starts the run after, so the receipt keeps meaning "durable", not
+  // "finished" (§9.4). An inspect never reaches it.
+  const dispatch = (command: unknown): Promise<CommandOutcome> =>
+    isInspectKind(command)
+      ? inspect(command).then((frame) => ({ receipt: null, results: [frame] }))
+      : runs.handle(command).then((receipt) => ({ receipt }));
+
   const loop = new ReconnectLoop({
     runnerId: identity.runnerId,
     dial: () =>
@@ -229,10 +280,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     },
     // An ACK retires rows and self-drives the next bounded batch of its attempt.
     onEventsAcked: (ack) => pump.handleAck(ack),
-    // The controller persists the command, decides whether this is a first
-    // delivery, and starts the run. The receipt is returned before the run is
-    // awaited, so `accepted` keeps meaning "durable", not "finished" (§9.4).
-    onCommand: (command) => runs.handle(command),
+    // Ruling 15: an inspection is dispatched outside the run/attempt machinery.
+    // The pre-switch recognizes exactly the two inspect kinds; everything else
+    // goes to the controller unchanged, including a malformed frame, which the
+    // controller already refuses. Routing an inspect here rather than through
+    // the controller is what makes "no lock, no attempt" structural.
+    onCommand: (command) => dispatch(command),
   });
 
   await loop.start();
@@ -242,6 +295,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     identity,
     db,
     runs,
+    dispatch,
     stop: async () => {
       loop.stop();
       // §20.4: bounded draining. A grace period for runs to finish on their

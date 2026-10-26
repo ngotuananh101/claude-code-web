@@ -84,15 +84,15 @@ function runnerLoop(
       const attemptId = typeof record["attemptId"] === "string" ? record["attemptId"] : "";
 
       if (parsed === undefined) {
-        return { commandId, attemptId, accepted: false, reason: "malformed" };
+        return { receipt: { commandId, attemptId, accepted: false, reason: "malformed" } };
       }
 
       const result = acceptCommand(inbox, parsed, { localRunnerId: "runner-a" });
       if (!result.ok) {
-        return { commandId, attemptId, accepted: false, reason: result.reason };
+        return { receipt: { commandId, attemptId, accepted: false, reason: result.reason } };
       }
       if (!result.duplicate) executed.push(commandId);
-      return { commandId, attemptId, accepted: true };
+      return { receipt: { commandId, attemptId, accepted: true } };
     },
   });
 }

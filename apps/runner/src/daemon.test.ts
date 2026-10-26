@@ -299,3 +299,82 @@ describe("the hello frame (M4 branches)", () => {
     });
   });
 });
+
+describe("dispatching an inspect command", () => {
+  test("routes an inspect to the inspect handler and not to the run controller", async () => {
+    const seen: unknown[] = [];
+    let runControllerCalls = 0;
+    const { daemon, dir } = await setup(() =>
+      (async function* () {
+        // Would run if the inspect reached the controller.
+      })(),
+    );
+    // Count how often the run controller is entered through the real seam.
+    const realHandle = daemon.runs.handle.bind(daemon.runs);
+    daemon.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    // The default handler is the real one built from `workspacePathFor`; a
+    // second daemon with a fake lets us observe routing without a filesystem.
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: (id) => (id === "workspace-1" ? join(dir, "project") : undefined),
+      sdk: () => (async function* () {})(),
+      inspect: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: { op: "git.changes", entries: [], truncated: false },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "workspace.inspect",
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      payload: { op: "git.changes" },
+    });
+
+    // Ruling 15: no receipt (an inspection is not an attempt), and no attempt
+    // row — the routing is what makes that structural, not a promise.
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(withFake.db.query("SELECT COUNT(*) AS n FROM local_attempts").get()).toEqual({ n: 0 });
+    // Silence the unused-daemon binding: it exists to prove the default
+    // composition also builds cleanly.
+    expect(daemon.identity.runnerId).toBe("runner-a");
+    expect(runControllerCalls).toBe(0);
+  });
+
+  test("routes a run.start to the run controller as before", async () => {
+    const { daemon } = await setup(() => (async function* () {})());
+
+    const outcome = await daemon.dispatch(command);
+    await daemon.runs.settle();
+
+    expect(outcome.receipt).toMatchObject({ commandId: "cmd-1", accepted: true });
+    expect(outcome.results).toBeUndefined();
+  });
+
+  test("routes a malformed frame to the controller, which refuses it", async () => {
+    const { daemon } = await setup(() => (async function* () {})());
+
+    const outcome = await daemon.dispatch({ commandId: "cmd-x" });
+
+    // Not an inspect kind, so it falls through; the controller's envelope parse
+    // is what refuses it, and the refusal is still a receipt.
+    expect(outcome.receipt).toMatchObject({ accepted: false, reason: "malformed" });
+  });
+});
