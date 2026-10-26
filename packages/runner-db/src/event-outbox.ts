@@ -187,11 +187,17 @@ export function highestContiguousAcked(db: Database, attemptId: string): number 
  * Counted from the durable rows rather than from a running counter, so the
  * number cannot drift from what a restart would find — a counter and the table
  * would disagree exactly when the process died, which is the case the spool
- * thresholds exist for. `bytes` is the stored payload length, the disk cost,
- * not the parsed size.
+ * thresholds exist for. `bytes` is the stored payload length in UTF-8 bytes,
+ * the disk cost, not the parsed size.
+ *
+ * `LENGTH(payload)` would count characters, and the payload here is the JSON
+ * text of a transcript whose primary locale is Vietnamese: characters under-count
+ * the disk cost by roughly 1.3× for BMP text and more with astral characters, so
+ * a byte threshold guarding disk would fire late. `CAST(... AS BLOB)` measures
+ * the encoded bytes SQLite actually stores.
  */
 export function spoolDepth(db: Database, attemptId?: string): { events: number; bytes: number } {
-  const columns = `COUNT(*) AS events, COALESCE(SUM(LENGTH(payload)), 0) AS bytes`;
+  const columns = `COUNT(*) AS events, COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS bytes`;
   const row = (
     attemptId === undefined
       ? db.prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0`).get()

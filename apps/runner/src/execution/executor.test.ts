@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { MAX_EVENT_PAYLOAD_BYTES } from "@cc-web/protocol";
 import {
   ackUpTo,
   attemptState,
@@ -1586,5 +1587,47 @@ describe("workspace preparation (M4 branch gate)", () => {
     );
 
     expect(seen).toEqual([undefined, undefined]);
+  });
+});
+
+/**
+ * The per-event ceiling (§12.6).
+ *
+ * The transport refuses a frame over `WS_MAX_PAYLOAD_BYTES`, so an event larger
+ * than that can never be delivered — and its durable row is refused on every
+ * replay, so the refusal is permanent rather than transient. The executor is the
+ * single writer for every attempt event, so this is where the bound has to hold:
+ * the pump's "always send one event" guard is only honest if no single event can
+ * outgrow the frame it will be sent in.
+ */
+describe("an oversized event", () => {
+  test("is persisted under the transport ceiling, not above it", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    // A raw SDK frame the executor does not decompose: it lands as one
+    // `message.completed` carrying whatever the SDK emitted. Nothing upstream
+    // caps it — `redactSdkMessage` walks keys, it does not measure bytes.
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "assistant", text: "x".repeat(MAX_EVENT_PAYLOAD_BYTES * 3) };
+      })();
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    const oversized = events(db).filter(
+      (e) => Buffer.byteLength(e.payload) > MAX_EVENT_PAYLOAD_BYTES,
+    );
+    expect(oversized).toHaveLength(0);
+
+    // The event is present, not dropped — §12.6 forbids silently losing a
+    // mandatory event and reporting success.
+    const completed = events(db).find((e) => e.type === "message.completed");
+    expect(completed).toBeDefined();
   });
 });

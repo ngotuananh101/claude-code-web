@@ -197,28 +197,44 @@ Both are checked by the pump, which already walks `pendingEventAttempts` on
 every flush, so the check costs one aggregate query per flush and no new
 timer.
 
-**Critical policy (§12.6's explicit requirement): stop the run and write a
-minimal failure record on reserved budget. Never drop mandatory events and
-report success.**
+**Critical policy (§12.6's explicit requirement): stop the run, record a
+minimal failure record, and report the run failed. Never drop mandatory events
+and report success.**
 
-Concretely, when the critical threshold is crossed:
+The mechanism that satisfies this, and why the "reserved budget" framing from
+an earlier draft was dropped: the pump owns no `local_sequence` for any
+attempt — the attempt's sequence space is single-writer (the executor's private
+closure at `executor.ts:170`), a fact the pump's own doc comment states (the
+pump holds no sequence and owns no run). Writing a `run.failed` row from the
+pump would either collide with the executor's next write or forge a sequence
+the executor's watermark then refuses to advance past. There is no second, in-
+memory, preallocated writer available to the pump, so "emit on a reserved
+budget" is not an operation the pump can perform.
 
-1. The pump **stops** sending new events for the affected attempt and stops
-   the run's SDK work (the existing cancel lane, §14.2 — not a new mechanism).
-2. On a **reserved** budget — in-memory, preallocated, never read back from
-   the outbox — the pump emits a minimal `run.failed` with
-   `error: "spool_critical"` and the counts, appends it, and sends it ahead of
-   the backlog.
-3. The backlog is **kept on disk**. It is not deleted, not truncated, not
+What is in force is the existing single-writer path routed by the controller,
+which *does* own both the sequence closure and the SDK signal:
+
+1. The pump detects the crossing once (the `#critical` set dedupes, and a
+   critical report suppresses any pending warning) and hands the report —
+   counts only, no payload, §19.4 — to `onSpoolCritical`.
+2. The daemon's `onSpoolCritical` calls `runs.cancel(attemptId, "spool_critical")`,
+   which records the reason on the run controller and aborts the run's SDK
+   signal. This is the existing deliberate-cancel lane (§14.2), not a new one.
+3. The executor observes the abort (its own signal firing) and reads
+   `abortReason` at that moment: a reason present means the stop was a policy
+   decision, so `recordAborted()` writes `run.failed { error:
+   "spool_critical", …counts… }` — the minimal failure record — through the
+   attempt's closure, so it lands at the correct next sequence.
+4. The backlog is **kept on disk**. It is not deleted, not truncated, not
    silently dropped. When the link recovers, the remaining events replay in
-   order ahead of the failure record, so the transcript stays truthful: the
-   operator sees what the run did, then why it stopped.
-4. The run is reported **failed**, never successful. There is no path in this
-   design where crossing the critical threshold ends in `run.finished`.
+   order ahead of the failure record (they are unacked and precede it in
+   `local_sequence`), so the transcript stays truthful: the operator sees what
+   the run did, then why it stopped.
+5. The run is reported **failed** — the terminal row `recordAborted` wrote is
+   `run.failed`, and the `finally` below it calls `finishAttempt(..., state)`
+   with `state = "failed"`. There is no path in this design where crossing the
+   critical threshold ends in `run.finished`.
 
-The reserved budget is the piece that makes (2)–(4) possible under the exact
-condition that caused the problem, which is why it is stated as in-memory and
-preallocated rather than "write a row and hope".
 
 ### 7. Warning is a signal, not a behaviour change
 

@@ -102,6 +102,13 @@ export type DaemonOptions = {
    */
   sdk?: SdkStream;
   /**
+   * The pump's retry-timer seams, passed straight through. They exist so a test
+   * can observe that `stop()` reaches `pump.stop()` and cancels an armed retry,
+   * rather than only trusting that it does.
+   */
+  pumpSchedule?: (fn: () => void, ms: number) => unknown;
+  pumpUnschedule?: (handle: unknown) => void;
+  /**
    * How long `stop()` waits for in-flight runs, first to finish on their own
    * and then to observe the deliberate cancel, before abandoning them as
    * interrupted (§20.4). Default 5000ms each.
@@ -147,6 +154,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     runnerId: identity.runnerId,
     bootId: bootId(),
     send: (frame) => loop.sendFrame(frame),
+    ...(options.pumpSchedule === undefined ? {} : { schedule: options.pumpSchedule }),
+    ...(options.pumpUnschedule === undefined ? {} : { unschedule: options.pumpUnschedule }),
     // §12.6 clause 5: the warning is journaled, not just logged, so the
     // operator's transcript says the spool was deep rather than only the
     // runner's stderr. It goes through the attempt's own append — the pump has

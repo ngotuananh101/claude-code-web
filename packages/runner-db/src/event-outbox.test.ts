@@ -261,6 +261,30 @@ describe("spool depth", () => {
     expect(spoolDepth(db).bytes).toBe(JSON.stringify(payload).length * 3);
   });
 
+  test("counts stored bytes, not characters, for multibyte payloads (§12.6)", () => {
+    // The thresholds are byte thresholds over a spool whose primary content is
+    // Vietnamese — SQLite `LENGTH(text)` counts characters, so a diacritic-heavy
+    // transcript would under-report its disk cost by ~1.3× and the critical
+    // threshold would fire after the disk it guards was already full.
+    const db = freshDb();
+    const payload = { text: "Xin chào, đây là bản dịch tiếng Việt có dấu — 100% thật." };
+    appendEvent(db, {
+      eventId: "e1",
+      attemptId: "a1",
+      localSequence: 1,
+      sessionId: "s1",
+      runId: "r1",
+      type: "message.delta",
+      payload,
+      occurredAt: "2026-10-26T00:00:00.000Z",
+    });
+
+    const serialized = JSON.stringify(payload);
+    // The fixture is only meaningful if characters and bytes actually differ.
+    expect(serialized.length).toBeLessThan(Buffer.byteLength(serialized));
+    expect(spoolDepth(db, "a1").bytes).toBe(Buffer.byteLength(serialized));
+  });
+
   test("an ack shrinks the depth, because it is read from the durable rows", () => {
     const db = freshDb();
     append(db, 1);

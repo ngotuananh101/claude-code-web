@@ -52,6 +52,7 @@ function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => tru
 
   const frames: EventBatchFrame[] = [];
   const scheduled: Array<() => void> = [];
+  const cancelled: unknown[] = [];
   const warnings: SpoolReport[] = [];
   const criticals: SpoolReport[] = [];
   const pump = new EventPump({
@@ -64,7 +65,11 @@ function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => tru
     },
     schedule: (fn) => {
       scheduled.push(fn);
-      return undefined;
+      // A live handle, so `unschedule` can be observed cancelling it.
+      return fn;
+    },
+    unschedule: (handle) => {
+      cancelled.push(handle);
     },
     onSpoolWarning: (info) => {
       warnings.push(info);
@@ -74,7 +79,7 @@ function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => tru
     },
   });
 
-  return { db, pump, frames, scheduled, warnings, criticals };
+  return { db, pump, frames, scheduled, cancelled, warnings, criticals };
 }
 
 function append(db: Database, sequence: number, attemptId = "attempt-1") {
@@ -101,6 +106,26 @@ function appendBig(db: Database, sequence: number, bytes: number) {
     runId: "run-1",
     type: "message.completed",
     payload: { text: "x".repeat(bytes) },
+    occurredAt: "2026-10-24T00:00:00.000Z",
+  });
+  if (!result.ok) throw new Error("append failed in test setup");
+}
+
+/**
+ * An event whose serialized wire form is `chars` multibyte characters long.
+ * Used to pin that the byte ceiling counts bytes: for Vietnamese text the
+ * encoded bytes exceed the code units by ~1.3×, so a code-unit measurement
+ * would let a frame past the ceiling.
+ */
+function appendVietnamese(db: Database, sequence: number, chars: number) {
+  const result = appendEvent(db, {
+    eventId: `evt-vn-${sequence}`,
+    attemptId: "attempt-1",
+    localSequence: sequence,
+    sessionId: "session-1",
+    runId: "run-1",
+    type: "message.completed",
+    payload: { text: "đ".repeat(chars) },
     occurredAt: "2026-10-24T00:00:00.000Z",
   });
   if (!result.ok) throw new Error("append failed in test setup");
@@ -170,6 +195,23 @@ describe("flushing", () => {
     const { pump, frames } = setup();
     pump.flush();
     expect(frames).toHaveLength(0);
+  });
+
+  test("the byte ceiling counts UTF-8 bytes, not UTF-16 code units (§12.6)", () => {
+    const { db, pump, frames } = setup();
+    // Multibyte content — the repo's primary locale. Sized so the batch fits
+    // under the ceiling by code units but not by the bytes actually on the
+    // wire, which is what the ceiling's own doc promises to bound.
+    const chars = Math.floor(EventPump.BATCH_BYTES_LIMIT / 2.6);
+    for (let i = 1; i <= 8; i += 1) appendVietnamese(db, i, chars);
+
+    pump.flush();
+
+    const frame = frames[0]!;
+    // The framed batch, measured the way the transport does.
+    expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThanOrEqual(
+      EventPump.BATCH_BYTES_LIMIT,
+    );
   });
 
   test("a frame is bounded in bytes, not only in events", () => {
@@ -249,6 +291,26 @@ describe("flushing", () => {
     pump.flush();
 
     expect(scheduled).toHaveLength(1);
+  });
+
+  test("stop cancels a pending retry timer instead of orphaning it", () => {
+    // A refused flush arms a real timer. `stop()` that only sets a flag leaves
+    // that timer live, and a live timer keeps the event loop alive after the
+    // daemon has closed its database — a clean shutdown becomes a process that
+    // will not exit.
+    const { db, pump, scheduled, cancelled } = setupWithSchedule(() => false);
+    append(db, 1);
+
+    pump.flush();
+    expect(scheduled).toHaveLength(1);
+    expect(cancelled).toHaveLength(0);
+
+    pump.stop();
+
+    // The armed timer was handed back for cancellation, and firing it is inert:
+    // the pump is stopped, so nothing is sent.
+    expect(cancelled).toEqual(scheduled);
+    scheduled.shift()!();
   });
 });
 

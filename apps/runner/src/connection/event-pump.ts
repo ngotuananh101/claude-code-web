@@ -47,6 +47,13 @@ export type EventPumpOptions = {
    */
   schedule?: (fn: () => void, ms: number) => unknown;
   /**
+   * Cancel a scheduled retry, paired with `schedule`. Defaults to
+   * `clearTimeout`. The seam exists because a scheduled retry is a live timer:
+   * one left behind keeps the event loop alive, so `stop()` has to cancel it
+   * rather than only mark itself stopped.
+   */
+  unschedule?: (handle: unknown) => void;
+  /**
    * The spool crossed the warning threshold (§12.6). A signal, not an action:
    * the pump reports and keeps pumping, and whoever owns the run decides
    * whether the operator should hear about it.
@@ -76,10 +83,13 @@ export class EventPump {
   readonly #bootId: string;
   readonly #send: (frame: EventBatchFrame) => boolean;
   readonly #schedule: (fn: () => void, ms: number) => unknown;
+  readonly #unschedule: (handle: unknown) => void;
   readonly #onSpoolWarning: ((report: SpoolReport) => void) | undefined;
   readonly #onSpoolCritical: ((report: SpoolReport) => void) | undefined;
   #retryArmed = false;
   #stopped = false;
+  /** The live retry timer, so `stop()` can cancel it rather than orphan it. */
+  #retryTimer: unknown;
   /** Attempts currently believed to be over the warning depth. */
   readonly #warned = new Set<string>();
   /** Attempts currently believed to be over the critical depth. */
@@ -91,6 +101,8 @@ export class EventPump {
     this.#bootId = options.bootId;
     this.#send = options.send;
     this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
+    this.#unschedule =
+      options.unschedule ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.#onSpoolWarning = options.onSpoolWarning;
     this.#onSpoolCritical = options.onSpoolCritical;
   }
@@ -157,6 +169,13 @@ export class EventPump {
   stop(): void {
     this.#stopped = true;
     this.#retryArmed = false;
+    // Marking stopped is not enough: a timer armed before the stop is still
+    // live, and a live timer keeps the event loop alive past the point the
+    // daemon closed its database. Cancel it explicitly.
+    if (this.#retryTimer !== undefined) {
+      this.#unschedule(this.#retryTimer);
+      this.#retryTimer = undefined;
+    }
   }
 
   /**
@@ -170,7 +189,8 @@ export class EventPump {
   #armRetry(): void {
     if (this.#retryArmed || this.#stopped) return;
     this.#retryArmed = true;
-    this.#schedule(() => {
+    this.#retryTimer = this.#schedule(() => {
+      this.#retryTimer = undefined;
       this.#retryArmed = false;
       this.flush();
     }, EventPump.LINGER_MS);
@@ -232,9 +252,12 @@ export class EventPump {
    * The rows for one frame: at most `BATCH_LIMIT` events and at most
    * `BATCH_BYTES_LIMIT` serialized bytes, always at least one row.
    *
-   * Sizing is done on the serialized wire event because that is what the
-   * transport buffers; counting payload bytes would under-count the measured
-   * 359 B/event of envelope by roughly 30% on a delta-heavy stream.
+   * Sizing is done in UTF-8 bytes over the framed batch, because that is what
+   * the transport buffers. Two things make this more than a nicety: the content
+   * is largely Vietnamese, so `JSON.stringify(...).length` (UTF-16 code units)
+   * under-counts the wire by ~1.3×, and the frame envelope
+   * (`{"type":"events","events":[…]}`) is itself ~24 B the code units do not see.
+   * Counting payload bytes instead would miss the measured 359 B/event envelope.
    */
   #selectBatch(attemptId: string): PendingEvent[] {
     const rows = pendingEvents(this.#db, attemptId, { limit: EventPump.BATCH_LIMIT });
@@ -243,10 +266,13 @@ export class EventPump {
 
     for (const row of rows) {
       const event = this.#toWireEvent(row);
-      const size = JSON.stringify(event).length;
-      // The first row is always taken, however large: a single oversized event
-      // is bounded by the per-event caps elsewhere in the pipeline, and
-      // refusing it here would be the silent drop §12.6 forbids.
+      // The separator plus the event, so the count matches the comma-joined
+      // array the frame actually carries.
+      const size = Buffer.byteLength((selected.length === 0 ? "" : ",") + JSON.stringify(event));
+      // The first row is always taken, however large: the per-event byte cap
+      // (§12.6, enforced at append time in the executor) keeps a single event
+      // under the transport ceiling, so it is always deliverable on its own
+      // frame. Refusing it would be the silent drop §12.6 forbids.
       if (selected.length > 0 && bytes + size > EventPump.BATCH_BYTES_LIMIT) break;
       selected.push(row);
       bytes += size;

@@ -24,6 +24,7 @@ import {
   sdkSessionIdForSession,
 } from "@cc-web/runner-db";
 import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
+import { boundEventPayload } from "./payload-bound.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 import { createStreamNormalizer } from "./stream-normalizer.ts";
 import { isToolResultFrame, toolCompletionsOf } from "./tool-results.ts";
@@ -173,6 +174,9 @@ export async function executeRun(
     // stops at the first hole (§12.2) — every later event for this attempt would
     // then be re-sent forever, or never acknowledged at all.
     const next = sequence + 1;
+    // §12.6: the row must fit the frame it will be sent in. A durable event
+    // above the transport ceiling could never be delivered — every replay is
+    // refused the same way — so it is bounded here, before it is persisted.
     const result = appendEvent(db, {
       eventId: `evt_${attemptId}_${next}`,
       attemptId,
@@ -180,7 +184,7 @@ export async function executeRun(
       sessionId,
       runId,
       type,
-      payload,
+      payload: boundEventPayload(payload),
       occurredAt: now(),
     });
     if (!result.ok) {

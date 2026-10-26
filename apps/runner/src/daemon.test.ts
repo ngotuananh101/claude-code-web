@@ -27,7 +27,11 @@ const daemons: Daemon[] = [];
 
 async function setup(
   sdk: SdkStream,
-  extra?: { shutdownGraceMs?: number },
+  extra?: {
+    shutdownGraceMs?: number;
+    pumpSchedule?: (fn: () => void, ms: number) => unknown;
+    pumpUnschedule?: (handle: unknown) => void;
+  },
 ): Promise<{ daemon: Daemon; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
   dirs.push(dir);
@@ -45,6 +49,8 @@ async function setup(
     workspacePathFor: (id) => (id === "workspace-1" ? join(dir, "project") : undefined),
     sdk,
     ...(extra?.shutdownGraceMs === undefined ? {} : { shutdownGraceMs: extra.shutdownGraceMs }),
+    ...(extra?.pumpSchedule === undefined ? {} : { pumpSchedule: extra.pumpSchedule }),
+    ...(extra?.pumpUnschedule === undefined ? {} : { pumpUnschedule: extra.pumpUnschedule }),
   });
   daemons.push(daemon);
 
@@ -96,19 +102,36 @@ describe("starting the daemon", () => {
     ).rejects.toThrow(/identity missing/);
   });
 
-  test("stop leaves no pump retry timer behind", async () => {
-    // The refused frames here are real: nothing listens on the dial target, so
-    // every flush is refused and the pump arms its linger timer. A timer that
-    // survives stop() keeps the event loop alive and turns a clean shutdown into
-    // a process that will not exit.
-    const { daemon } = await setup(() => (async function* () {})());
+  test("stop cancels the pump's live retry timer", async () => {
+    // Nothing listens on the dial target, so the run's flush is refused and the
+    // pump arms its linger timer for real. A timer that survives stop() keeps
+    // the event loop alive and turns a clean shutdown into a process that will
+    // not exit — so stop() must reach the pump and cancel it.
+    //
+    // This observes the timer through the pump's own seams, not through a count
+    // of pending handles: a bare `Bun.peek.status.length` is the arity of that
+    // function and reads the same whatever the pump did.
+    const scheduled: unknown[] = [];
+    const cancelled: unknown[] = [];
+    const { daemon } = await setup(() => (async function* () {})(), {
+      pumpSchedule: (fn) => {
+        scheduled.push(fn);
+        return fn;
+      },
+      pumpUnschedule: (handle) => {
+        cancelled.push(handle);
+      },
+    });
     expect((await daemon.runs.handle(command)).accepted).toBe(true);
+    // The run is asynchronous; its settle is what flushes the outbox. The link
+    // is down, so that flush is refused and a retry is armed.
+    await daemon.runs.settle();
+    expect(scheduled.length).toBeGreaterThan(0);
+
     await daemon.stop();
 
-    const timers = setTimeout(() => {}, 10_000);
-    // Nothing else was armed: the pending timer count back to just this one.
-    expect(Bun.peek.status.length).toBeGreaterThan(0);
-    clearTimeout(timers);
+    // Every armed retry was handed back for cancellation.
+    expect(cancelled).toEqual(scheduled);
   });
 });
 

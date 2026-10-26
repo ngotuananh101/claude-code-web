@@ -18,6 +18,21 @@ export type ProtocolVersion = typeof PROTOCOL_VERSION;
  */
 export const WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 
+/**
+ * The largest serialized payload one event may carry (§12.6).
+ *
+ * The transport ceiling above rejects an oversized frame, so a single event
+ * larger than it can never be delivered — and because the row is durable, a
+ * replayed event is refused on every attempt: a livelock, not a slow send. The
+ * sender therefore bounds each event before it is persisted, leaving headroom
+ * under the transport ceiling for the frame envelope and the ACK that follows.
+ *
+ * 1 MiB is ~128× the largest measured legitimate event (8,240 bytes, a
+ * `message.completed` carrying a Write tool result), so it is a backstop for a
+ * pathological message rather than a routine truncation.
+ */
+export const MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024;
+
 export type RunnerCommand = {
   protocolVersion: ProtocolVersion;
   commandId: string;
