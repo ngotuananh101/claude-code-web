@@ -52,6 +52,21 @@ function append(db: Database, sequence: number, attemptId = "attempt-1") {
   if (!result.ok) throw new Error("append failed in test setup");
 }
 
+/** An event whose serialized wire form is roughly `bytes` long. */
+function appendBig(db: Database, sequence: number, bytes: number) {
+  const result = appendEvent(db, {
+    eventId: `evt-big-${sequence}`,
+    attemptId: "attempt-1",
+    localSequence: sequence,
+    sessionId: "session-1",
+    runId: "run-1",
+    type: "message.completed",
+    payload: { text: "x".repeat(bytes) },
+    occurredAt: "2026-10-24T00:00:00.000Z",
+  });
+  if (!result.ok) throw new Error("append failed in test setup");
+}
+
 describe("flushing", () => {
   test("sends one frame per attempt with the wire identity attached", () => {
     const { db, pump, frames } = setup();
@@ -116,6 +131,46 @@ describe("flushing", () => {
     const { pump, frames } = setup();
     pump.flush();
     expect(frames).toHaveLength(0);
+  });
+
+  test("a frame is bounded in bytes, not only in events", () => {
+    const { db, pump, frames } = setup();
+    // 64 events at ~8 KiB each serialize to ~558 KiB, measured. The count
+    // ceiling alone would put all of them in one frame.
+    for (let i = 1; i <= 64; i += 1) appendBig(db, i, 8 * 1024);
+
+    pump.flush();
+
+    const frame = frames[0]!;
+    const bytes = JSON.stringify(frame).length;
+    expect(bytes).toBeLessThanOrEqual(EventPump.BATCH_BYTES_LIMIT);
+    // Bounded, but not by refusing to send: the frame is a full one.
+    expect(frame.events.length).toBeGreaterThan(1);
+    expect(frame.events.length).toBeLessThan(EventPump.BATCH_LIMIT);
+    // Order is preserved and the remainder is still owed.
+    expect(frame.events[0]!.localSequence).toBe(1);
+    expect(pendingEvents(db, "attempt-1").length).toBe(64);
+  });
+
+  test("an event too large for the byte ceiling still ships, alone", () => {
+    const { db, pump, frames } = setup();
+    appendBig(db, 1, EventPump.BATCH_BYTES_LIMIT + 4096);
+    append(db, 2);
+
+    pump.flush();
+
+    // Refusing it would be the drop the spec forbids; splitting it would break
+    // the event atomicity the server dedupes on. It goes alone, on a frame of
+    // its own — and it does not stall the stream behind it.
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events).toHaveLength(1);
+    expect(frames[0]!.events[0]!.localSequence).toBe(1);
+
+    // The next trigger carries what the oversized frame left behind; the
+    // oversized event costs one extra frame, not a stuck queue.
+    pump.handleAck({ attemptId: "attempt-1", through: 1 });
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events[0]!.localSequence).toBe(2);
   });
 });
 

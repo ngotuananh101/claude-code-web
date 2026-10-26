@@ -194,9 +194,7 @@ export function spoolDepth(db: Database, attemptId?: string): { events: number; 
   const columns = `COUNT(*) AS events, COALESCE(SUM(LENGTH(payload)), 0) AS bytes`;
   const row = (
     attemptId === undefined
-      ? db
-          .prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0`)
-          .get()
+      ? db.prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0`).get()
       : db
           .prepare(`SELECT ${columns} FROM event_outbox WHERE acknowledged = 0 AND attempt_id = ?`)
           .get(attemptId)

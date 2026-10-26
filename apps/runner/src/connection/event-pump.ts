@@ -48,6 +48,17 @@ export class EventPump {
    * dies of memory rather than of bandwidth. */
   static readonly BATCH_LIMIT = 64;
 
+  /**
+   * Bytes per frame, measured over the serialized frame — the same bytes Bun
+   * buffers and compares against its own `backpressureLimit` (16 MiB default).
+   *
+   * The measured worst case at the event ceiling is 558 KiB (64 events each
+   * carrying an 8 KiB tool input). 256 KiB keeps a frame far below Bun's limit
+   * while staying above the realistic 46–53 KiB frame, so ordinary traffic
+   * still fills by count and pays for no extra frames.
+   */
+  static readonly BATCH_BYTES_LIMIT = 256 * 1024;
+
   /** Send one bounded batch for every attempt with pending rows. */
   flush(): void {
     for (const attemptId of pendingEventAttempts(this.#db)) {
@@ -67,12 +78,39 @@ export class EventPump {
   }
 
   #flushAttempt(attemptId: string): boolean {
-    const pending = pendingEvents(this.#db, attemptId).slice(0, EventPump.BATCH_LIMIT);
+    const pending = this.#selectBatch(attemptId);
     if (pending.length === 0) return true;
     return this.#send({
       type: "events",
       events: pending.map((row) => this.#toWireEvent(row)),
     });
+  }
+
+  /**
+   * The rows for one frame: at most `BATCH_LIMIT` events and at most
+   * `BATCH_BYTES_LIMIT` serialized bytes, always at least one row.
+   *
+   * Sizing is done on the serialized wire event because that is what the
+   * transport buffers; counting payload bytes would under-count the measured
+   * 359 B/event of envelope by roughly 30% on a delta-heavy stream.
+   */
+  #selectBatch(attemptId: string): PendingEvent[] {
+    const rows = pendingEvents(this.#db, attemptId, { limit: EventPump.BATCH_LIMIT });
+    const selected: PendingEvent[] = [];
+    let bytes = 0;
+
+    for (const row of rows) {
+      const event = this.#toWireEvent(row);
+      const size = JSON.stringify(event).length;
+      // The first row is always taken, however large: a single oversized event
+      // is bounded by the per-event caps elsewhere in the pipeline, and
+      // refusing it here would be the silent drop §12.6 forbids.
+      if (selected.length > 0 && bytes + size > EventPump.BATCH_BYTES_LIMIT) break;
+      selected.push(row);
+      bytes += size;
+    }
+
+    return selected;
   }
 
   /**
