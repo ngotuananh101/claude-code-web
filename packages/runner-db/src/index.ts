@@ -33,6 +33,7 @@ export {
   type AppendResult,
   ackUpTo,
   appendEvent,
+  DEFAULT_PENDING_LIMIT,
   highestContiguousAcked,
   type PendingEvent,
   pendingEventAttempts,

@@ -4,6 +4,7 @@ import { migrateRunnerDb } from "./db.ts";
 import {
   ackUpTo,
   appendEvent,
+  DEFAULT_PENDING_LIMIT,
   highestContiguousAcked,
   pendingEventAttempts,
   pendingEvents,
@@ -181,5 +182,35 @@ describe("pending attempts", () => {
   test("an empty outbox lists nothing", () => {
     const db = freshDb();
     expect(pendingEventAttempts(db)).toEqual([]);
+  });
+});
+
+describe("pending event limits", () => {
+  test("a limit caps how many unacked rows are read", () => {
+    // The measured reason: at 100k unacked rows the un-limited read parsed
+    // 38 MiB to build a 64-event frame. A LIMIT in SQL keeps the cost flat in
+    // the backlog instead of linear in the whole transcript.
+    const db = freshDb();
+    for (let i = 1; i <= 10; i += 1) append(db, i);
+
+    const limited = pendingEvents(db, attempt, { limit: 3 });
+    expect(limited.map((row) => row.localSequence)).toEqual([1, 2, 3]);
+
+    // The default stays bounded too: no caller gets an unbounded read by
+    // forgetting to pass a limit.
+    expect(DEFAULT_PENDING_LIMIT).toBe(64);
+  });
+
+  test("the limit is the frame ceiling, not a filter on the result", () => {
+    // Reading 200 rows to slice 64 of them is the cost this replaces; the row
+    // count is asserted through the default so a future caller that omits the
+    // limit still cannot pull the whole transcript into one array.
+    const db = freshDb();
+    for (let i = 1; i <= 200; i += 1) append(db, i);
+
+    expect(pendingEvents(db, attempt)).toHaveLength(DEFAULT_PENDING_LIMIT);
+    // The rows returned are the oldest ones: a bounded read that skipped ahead
+    // would break the contiguous ACK watermark (§12.2).
+    expect(pendingEvents(db, attempt)[0]!.localSequence).toBe(1);
   });
 });

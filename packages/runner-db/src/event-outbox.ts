@@ -71,15 +71,27 @@ export function appendEvent(db: Database, params: AppendParams): AppendResult {
   return { ok: true };
 }
 
-export function pendingEvents(db: Database, attemptId: string): PendingEvent[] {
+/**
+ * How many unacknowledged rows one `pendingEvents` call reads when the caller
+ * does not say. The pump's frame ceiling is the number that matters; this
+ * default only exists so the floor below is never an unbounded read.
+ */
+export const DEFAULT_PENDING_LIMIT = 64;
+
+export function pendingEvents(
+  db: Database,
+  attemptId: string,
+  params: { limit?: number } = {},
+): PendingEvent[] {
   const rows = db
     .prepare(
       `SELECT event_id, attempt_id, local_sequence, session_id, run_id, type, payload, occurred_at
        FROM event_outbox
        WHERE attempt_id = ? AND acknowledged = 0
-       ORDER BY local_sequence ASC`,
+       ORDER BY local_sequence ASC
+       LIMIT ?`,
     )
-    .all(attemptId) as Array<{
+    .all(attemptId, params.limit ?? DEFAULT_PENDING_LIMIT) as Array<{
     event_id: string;
     attempt_id: string;
     local_sequence: number;
