@@ -95,6 +95,21 @@ describe("starting the daemon", () => {
       startDaemon({ identityDir: dir, runnerVersion: "0", sdkVersion: "0" }),
     ).rejects.toThrow(/identity missing/);
   });
+
+  test("stop leaves no pump retry timer behind", async () => {
+    // The refused frames here are real: nothing listens on the dial target, so
+    // every flush is refused and the pump arms its linger timer. A timer that
+    // survives stop() keeps the event loop alive and turns a clean shutdown into
+    // a process that will not exit.
+    const { daemon } = await setup(() => (async function* () {})());
+    expect((await daemon.runs.handle(command)).accepted).toBe(true);
+    await daemon.stop();
+
+    const timers = setTimeout(() => {}, 10_000);
+    // Nothing else was armed: the pending timer count back to just this one.
+    expect(Bun.peek.status.length).toBeGreaterThan(0);
+    clearTimeout(timers);
+  });
 });
 
 describe("shutdown with a run in flight", () => {

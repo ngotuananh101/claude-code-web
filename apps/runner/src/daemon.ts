@@ -219,6 +219,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // payload logging, not ids — §20.6 asks for exactly these).
         console.warn(`shutdown abandoned ${abandoned.length} attempt(s): ${abandoned.join(", ")}`);
       }
+      // After the drain, so the final rows still get their flush; before the
+      // close, so no retry timer outlives the process it belongs to. Rows left
+      // pending are durable and the next boot resends them.
+      pump.stop();
       db.close();
     },
   };

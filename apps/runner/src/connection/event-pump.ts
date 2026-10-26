@@ -28,19 +28,38 @@ export type EventPumpOptions = {
   bootId: string;
   /** Hand a frame to the transport; false means it was not carried. */
   send: (frame: EventBatchFrame) => boolean;
+  /**
+   * Defer the retry of a refused send. Defaults to `setTimeout`; the seam
+   * exists so a test can drive the retry instead of sleeping through it.
+   */
+  schedule?: (fn: () => void, ms: number) => unknown;
 };
 
 export class EventPump {
+  /**
+   * How long to wait before retrying a refused frame (§12.6).
+   *
+   * Long enough to be a backoff rather than a spin — a refused frame that is
+   * retried immediately is a busy loop against a link that is down — and short
+   * enough that a recovering link is not held up by it. Reconnection itself
+   * flushes too; this timer is only what covers the quiet run.
+   */
+  static readonly LINGER_MS = 50;
+
   readonly #db: Database;
   readonly #runnerId: string;
   readonly #bootId: string;
   readonly #send: (frame: EventBatchFrame) => boolean;
+  readonly #schedule: (fn: () => void, ms: number) => unknown;
+  #retryArmed = false;
+  #stopped = false;
 
   constructor(options: EventPumpOptions) {
     this.#db = options.db;
     this.#runnerId = options.runnerId;
     this.#bootId = options.bootId;
     this.#send = options.send;
+    this.#schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
   }
 
   /** Events per frame (§12.6). Bounded frames, never one row per socket write
@@ -61,6 +80,7 @@ export class EventPump {
 
   /** Send one bounded batch for every attempt with pending rows. */
   flush(): void {
+    if (this.#stopped) return;
     for (const attemptId of pendingEventAttempts(this.#db)) {
       // A refused send means the link is down; every later attempt would be
       // refused too, and the rows stay pending for the next ready flush.
@@ -73,17 +93,47 @@ export class EventPump {
    * ack of one bounded batch is the trigger to send the next.
    */
   handleAck(ack: { attemptId: string; through: number }): void {
+    if (this.#stopped) return;
     ackUpTo(this.#db, { attemptId: ack.attemptId, sequence: ack.through });
     this.#flushAttempt(ack.attemptId);
   }
 
+  /**
+   * Stop pumping. Nothing already in the outbox is lost — it is durable, and a
+   * restarted process resends it — but the retry timer must not outlive the
+   * daemon and turn a clean shutdown into a pending-handle exit.
+   */
+  stop(): void {
+    this.#stopped = true;
+    this.#retryArmed = false;
+  }
+
+  /**
+   * A refused frame is the pump's problem to retry, not the next event's.
+   *
+   * One timer per pump, not one per flush: an outage produces a refusal on
+   * every flush, and a timer per refusal would grow the queue with the event
+   * rate — the opposite of backpressure. The flag is cleared when the timer
+   * fires, so a refusal after the retry arms a new one.
+   */
+  #armRetry(): void {
+    if (this.#retryArmed || this.#stopped) return;
+    this.#retryArmed = true;
+    this.#schedule(() => {
+      this.#retryArmed = false;
+      this.flush();
+    }, EventPump.LINGER_MS);
+  }
+
   #flushAttempt(attemptId: string): boolean {
-    const pending = this.#selectBatch(attemptId);
-    if (pending.length === 0) return true;
-    return this.#send({
+    const rows = this.#selectBatch(attemptId);
+    if (rows.length === 0) return true;
+    const carried = this.#send({
       type: "events",
-      events: pending.map((row) => this.#toWireEvent(row)),
+      events: rows.map((row) => this.#toWireEvent(row)),
     });
+    if (!carried) this.#armRetry();
+    return carried;
   }
 
   /**

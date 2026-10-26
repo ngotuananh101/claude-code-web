@@ -38,6 +38,33 @@ function setup(send: (frame: EventBatchFrame) => boolean = () => true) {
   return { db, pump, frames };
 }
 
+/**
+ * A pump whose deferred work is collected instead of waiting on wall time.
+ * A retry tests nothing if the assertion has to sleep for it.
+ */
+function setupWithSchedule(send: (frame: EventBatchFrame) => boolean = () => true) {
+  const db = new Database(":memory:");
+  migrateRunnerDb(db);
+
+  const frames: EventBatchFrame[] = [];
+  const scheduled: Array<() => void> = [];
+  const pump = new EventPump({
+    db,
+    runnerId: "runner-a",
+    bootId: "boot-1",
+    send: (frame) => {
+      frames.push(frame);
+      return send(frame);
+    },
+    schedule: (fn) => {
+      scheduled.push(fn);
+      return undefined;
+    },
+  });
+
+  return { db, pump, frames, scheduled };
+}
+
 function append(db: Database, sequence: number, attemptId = "attempt-1") {
   const result = appendEvent(db, {
     eventId: `evt-${attemptId}-${sequence}`,
@@ -171,6 +198,45 @@ describe("flushing", () => {
     pump.handleAck({ attemptId: "attempt-1", through: 1 });
     expect(frames).toHaveLength(2);
     expect(frames[1]!.events[0]!.localSequence).toBe(2);
+  });
+
+  test("a refused send is retried without waiting for another event", () => {
+    let accept = false;
+    const { db, pump, frames, scheduled } = setupWithSchedule(() => accept);
+    append(db, 1);
+
+    // A run that goes quiet — the SDK thinking, a long tool call — appends
+    // nothing more, so nothing would ever retry a refused frame. The retry has
+    // to be the pump's own, on the link's terms, not the next event's.
+    pump.flush();
+    expect(frames).toHaveLength(1);
+    expect(scheduled).toHaveLength(1);
+
+    // The link comes back. The timer fires and the row ships, with no new event
+    // and no reconnect in between.
+    accept = true;
+    scheduled.shift()!();
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events[0]!.localSequence).toBe(1);
+
+    // A successful flush arms nothing: the timer exists for refusals, so the
+    // ordinary path pays no added latency.
+    expect(scheduled).toHaveLength(0);
+  });
+
+  test("a refusal arms one retry, not one per flush", () => {
+    // Three refused flushes inside one linger window are still one outage. One
+    // pending timer per pump is enough to cover it, and a timer per flush would
+    // grow the queue with the event rate — the opposite of backpressure.
+    const { db, pump, scheduled } = setupWithSchedule(() => false);
+    append(db, 1);
+    append(db, 2);
+
+    pump.flush();
+    pump.flush();
+    pump.flush();
+
+    expect(scheduled).toHaveLength(1);
   });
 });
 
