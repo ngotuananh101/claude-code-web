@@ -8,6 +8,16 @@
 export const PROTOCOL_VERSION = 1 as const;
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
+/**
+ * The largest single WebSocket message either endpoint accepts (§12.6).
+ *
+ * Bun's default is 16 MiB, which is roughly 30× the largest measured legitimate
+ * frame (558 KiB — 64 events each carrying an 8 KiB tool input). An inbound
+ * limit is free to tighten, and stating it turns "a 16 MiB message occupies the
+ * peer until it is parsed" from a default into a decision.
+ */
+export const WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+
 export type RunnerCommand = {
   protocolVersion: ProtocolVersion;
   commandId: string;

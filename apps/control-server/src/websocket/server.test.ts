@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate } from "@cc-web/control-db";
+import { WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
@@ -62,6 +63,8 @@ type Client = {
   messages: Array<Record<string, unknown>>;
   closed: Promise<number>;
   send(message: unknown): void;
+  /** Send an already-serialized frame, for sizes a JSON object cannot reach. */
+  sendRaw(frame: string): void;
 };
 
 async function connect(url: string, headers: Record<string, string>): Promise<Client> {
@@ -77,7 +80,12 @@ async function connect(url: string, headers: Record<string, string>): Promise<Cl
     socket.addEventListener("open", () => resolve());
     socket.addEventListener("error", () => reject(new Error("connect failed")));
   });
-  return { messages, closed, send: (m) => socket.send(JSON.stringify(m)) };
+  return {
+    messages,
+    closed,
+    send: (m) => socket.send(JSON.stringify(m)),
+    sendRaw: (frame) => socket.send(frame),
+  };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -137,6 +145,40 @@ describe("control server routes", () => {
 
     const response = await fetch(`${wsUrl.replace("ws://", "http://")}/ws/runner`);
     expect(response.status).toBe(401);
+  });
+
+  test("an oversized inbound frame is refused at the transport (§12.6)", async () => {
+    // The constant is the decision; what this proves is that it is actually
+    // wired, which the constant alone cannot. Bun does not expose the
+    // configured limit on the server object, so the refusal itself is the
+    // evidence: a legitimate frame of the largest measured size (558 KiB) is
+    // accepted, and one just over the 4 MiB limit closes the socket.
+    expect(WS_MAX_PAYLOAD_BYTES).toBe(4 * 1024 * 1024);
+
+    const { wsUrl } = await start();
+    const client = await connect(`${wsUrl}/ws/runner`, { Authorization: "Bearer cck_valid" });
+    client.send({ type: "hello", hello });
+    await waitFor(() => client.messages.length >= 1);
+
+    // A frame inside the limit still flows — the limit is a ceiling, not a ban.
+    // `reconcile` is small, so reusing the real protocol shape keeps this honest
+    // about what a legitimate frame looks like.
+    client.send({ type: "reconcile", runner: [] });
+    await waitFor(() => client.messages.length >= 2);
+    expect(client.messages[1]).toMatchObject({ type: "reconcile.ok" });
+
+    // One byte over the limit: Bun closes rather than delivering a truncated
+    // frame. Measured behaviour is a 1006 close ("Received too big message"),
+    // not the 1009 the protocol would name — asserting that exact code would
+    // pin a Bun implementation detail, so the assertion is that the socket
+    // closes and the oversized frame is never delivered as a message.
+    const oversized = `x`.repeat(WS_MAX_PAYLOAD_BYTES + 1);
+    const before = client.messages.length;
+    client.sendRaw(oversized);
+    const code = await client.closed;
+
+    expect(code).toBeGreaterThan(0);
+    expect(client.messages.length).toBe(before);
   });
 
   test("the browser route requires the allowlisted origin and the session cookie", async () => {

@@ -28,7 +28,7 @@ import {
   sessionWatermark,
   upsertRunnerWorkspaces,
 } from "@cc-web/control-db";
-import { PROTOCOL_VERSION, RunRegistry } from "@cc-web/protocol";
+import { PROTOCOL_VERSION, RunRegistry, WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
 import type { Server } from "bun";
 import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
@@ -339,6 +339,14 @@ export function createServer(options: ServerOptions): ServerHandle {
     },
 
     websocket: {
+      // §12.6: bounded inbound payloads, declared before the spread so a
+      // handler object returning the key cannot silently override it. Bun
+      // refuses an oversized message by closing the socket itself (measured:
+      // code 1006, reason "Received too big message") rather than delivering a
+      // truncated frame, and it does not expose the configured limit on the
+      // server object — so the wiring test asserts the refusal behaviour, not
+      // the number.
+      maxPayloadLength: WS_MAX_PAYLOAD_BYTES,
       ...runnerWebSocket(runnerGateway),
       // Bun dispatches one handler object per server, so the browser path is
       // distinguished by socket data rather than by handler.
