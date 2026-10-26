@@ -182,4 +182,46 @@ describe("resolveInsideWorkspace", () => {
       code: "PATH_OUTSIDE_WORKSPACE",
     });
   });
+
+  describe("allowMissing", () => {
+    test("resolves a deleted leaf inside the root", async () => {
+      const root = await makeRoot();
+      await mkdir(join(root, "src"));
+      const realRoot = await realpath(root);
+
+      expect(await resolveInsideWorkspace(root, "src/gone.ts", {}, { allowMissing: true })).toEqual(
+        {
+          ok: true,
+          absolutePath: join(realRoot, "src", "gone.ts"),
+        },
+      );
+    });
+
+    test("still refuses traversal, absolute paths and credential names", async () => {
+      const root = await makeRoot();
+
+      expect(await resolveInsideWorkspace(root, "../gone.ts", {}, { allowMissing: true })).toEqual({
+        ok: false,
+        code: "PATH_OUTSIDE_WORKSPACE",
+      });
+      expect(await resolveInsideWorkspace(root, "/etc/gone", {}, { allowMissing: true })).toEqual({
+        ok: false,
+        code: "PATH_OUTSIDE_WORKSPACE",
+      });
+      expect(await resolveInsideWorkspace(root, "gone/.env", {}, { allowMissing: true })).toEqual({
+        ok: false,
+        code: "CREDENTIAL_FILE_REFUSED",
+      });
+    });
+
+    test("still refuses a missing leaf under a symlink that leaves the root", async () => {
+      const root = await makeRoot();
+      const outside = await makeRoot();
+      await symlink(outside, join(root, "escape"));
+
+      expect(
+        await resolveInsideWorkspace(root, "escape/gone.ts", {}, { allowMissing: true }),
+      ).toEqual({ ok: false, code: "PATH_OUTSIDE_WORKSPACE" });
+    });
+  });
 });

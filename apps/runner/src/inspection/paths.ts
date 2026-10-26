@@ -75,11 +75,20 @@ export type PathDeps = {
  * An empty `relative` resolves to the root itself: whether a directory is an
  * acceptable answer is the op's business (a listing takes one, a read does not),
  * not the resolver's.
+ *
+ * `allowMissing` exists for `git.diff`, which legitimately names a path that is
+ * no longer on disk — a deleted file is exactly the change an operator wants to
+ * see. The containment rules are unchanged: the *parent* is still realpath'd, so
+ * a missing leaf cannot be smuggled through a symlinked directory, and the
+ * credential check still applies because the path is still named. Only the final
+ * existence requirement is lifted, and the returned path is the composed
+ * candidate rather than a realpath'd one, since there is nothing to resolve.
  */
 export async function resolveInsideWorkspace(
   root: string,
   relative: string,
   deps: PathDeps = {},
+  options: { allowMissing?: boolean } = {},
 ): Promise<ResolvedPath> {
   const realpathOf = deps.realpath ?? defaultRealpath;
   const statOf = deps.stat ?? defaultStat;
@@ -96,7 +105,11 @@ export async function resolveInsideWorkspace(
 
   const candidate = resolve(join(root, relative));
   const real = await realpathOf(candidate);
-  if (real === null) return refuse("FILE_NOT_FOUND");
+
+  if (real === null) {
+    if (options.allowMissing === true) return resolveMissing(realRoot, candidate, relative, deps);
+    return refuse("FILE_NOT_FOUND");
+  }
 
   if (!isInside(realRoot, real)) return refuse("PATH_OUTSIDE_WORKSPACE");
 
@@ -114,6 +127,41 @@ export async function resolveInsideWorkspace(
   return { ok: true, absolutePath: real };
 }
 
+/**
+ * The `allowMissing` path: the leaf is gone, so containment is proven against
+ * the nearest existing ancestor instead. That keeps the guarantee that matters
+ * — the candidate cannot sit outside the root by way of a symlinked *directory*
+ * — while permitting the deleted leaf a diff may legitimately name.
+ */
+async function resolveMissing(
+  realRoot: string,
+  candidate: string,
+  relative: string,
+  deps: PathDeps,
+): Promise<ResolvedPath> {
+  const realpathOf = deps.realpath ?? defaultRealpath;
+
+  if (isRefusedCredentialBasename(basename(candidate))) return refuse("CREDENTIAL_FILE_REFUSED");
+
+  let ancestor = candidate;
+  for (;;) {
+    ancestor = resolve(ancestor, "..");
+    if (!isInside(realRoot, ancestor) && ancestor !== realRoot) {
+      return refuse("PATH_OUTSIDE_WORKSPACE");
+    }
+    const realAncestor = await realpathOf(ancestor);
+    if (realAncestor !== null) {
+      if (!isInside(realRoot, realAncestor)) return refuse("PATH_OUTSIDE_WORKSPACE");
+      break;
+    }
+    if (ancestor === realRoot) return refuse("FILE_NOT_FOUND");
+  }
+
+  // The relative shape is re-checked so the caller still gets a refusal rather
+  // than a path that only looks contained.
+  if (relative === "") return refuse("FILE_NOT_FOUND");
+  return { ok: true, absolutePath: candidate };
+}
 /**
  * Whether `candidate` is `root` itself or lies beneath it. Compares against a
  * trailing separator so a sibling sharing the prefix (`/srv/proj2` against
