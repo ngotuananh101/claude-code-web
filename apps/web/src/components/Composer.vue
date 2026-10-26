@@ -122,7 +122,10 @@ const projectOptions = computed<ProjectOption[]>(() => {
     workspaceId: w.workspaceId,
     runnerId: w.runnerId,
     path: w.path,
-    branches: w.branches,
+    // A control server older than M4 serves this row without the field, and
+    // the select only ever has an empty list to offer — never an undefined
+    // that the template would try to iterate.
+    branches: w.branches ?? [],
   }));
 });
 
@@ -158,7 +161,7 @@ watch(project, () => {
 // declarations arriving late) drops a picked branch the new project does not
 // declare, back to the honest "current HEAD" default rather than a guess.
 watch(selectedProject, (option) => {
-  if (branch.value !== "current" && !option.branches.includes(branch.value)) {
+  if (branch.value !== "current" && !(option.branches ?? []).includes(branch.value)) {
     branch.value = "current";
   }
 });
