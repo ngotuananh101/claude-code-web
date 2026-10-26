@@ -239,6 +239,28 @@ export {
   negotiateHello,
   type ServerPolicy,
 } from "./handshake.ts";
+export {
+  BINARY_SNIFF_BYTES,
+  type ChangeStatus,
+  type ConfigInspectRequest,
+  type DiagnosticsReport,
+  type DiagnosticsResult,
+  type FileListResult,
+  type FileReadResult,
+  type GitChangesResult,
+  type GitDiffResult,
+  INSPECT_CAPABILITY,
+  type InspectRequest,
+  type InspectResult,
+  MAX_CHANGE_ENTRIES,
+  MAX_DIFF_BYTES,
+  MAX_FILE_BYTES,
+  MAX_LISTING_ENTRIES,
+  parseInspectRequest,
+  parseRpcResultFrame,
+  type RpcResultFrame,
+  type WorkspaceInspectRequest,
+} from "./inspection.ts";
 export { MODEL_IDS, type ModelId } from "./models.ts";
 export {
   type DeclaredWorkspace,
