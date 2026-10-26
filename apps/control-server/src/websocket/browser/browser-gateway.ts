@@ -38,7 +38,12 @@ export type BrowserSocketData = {
 
 export type BrowserSocket = {
   readonly data: BrowserSocketData;
-  send(payload: string): unknown;
+  /**
+   * Bun's send status: `-1` queued under backpressure, `0` dropped (the
+   * connection is closed, or it is already over `backpressureLimit`), `1+`
+   * bytes written. A `0` is a delivery that did not happen.
+   */
+  send(payload: string): number;
   close(code?: number): unknown;
 };
 
@@ -66,6 +71,13 @@ export type BrowserGatewayOptions = {
 
 const CLOSE_POLICY = 1008;
 const CLOSE_REVOKED = 4001;
+/**
+ * The connection could not take the frame Bun was asked to send. Distinct from
+ * `CLOSE_REVOKED` so the client can tell "your login ended" from "you were too
+ * far behind to keep up"; both are recovered the same way, by reconnecting and
+ * replaying the gap from the journal (§12.5).
+ */
+export const CLOSE_BACKPRESSURE = 4002;
 
 export class BrowserGateway {
   static readonly REPLAY_BATCH_LIMIT = 200;
@@ -294,6 +306,49 @@ export class BrowserGateway {
     return this.#sockets.get(userId)?.size ?? 0;
   }
 
+  /** Subscribed-socket count for one session, across every user. */
+  socketCountForSession(sessionId: string): number {
+    let count = 0;
+    for (const sockets of this.#sockets.values()) {
+      for (const socket of sockets) {
+        if (socket.data.subscriptions.has(sessionId)) count += 1;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * One frame to one socket.
+   *
+   * The return value is the point of this method. Bun answers `-1` when the
+   * bytes were queued under backpressure — a success, the socket is merely
+   * behind — and `0` when the message was dropped because the connection is
+   * closed or already past `backpressureLimit`. Reading that `0` as success is
+   * the silent loss §12.6 forbids, so the socket is disconnected instead: the
+   * event is already durable in the journal, and the client's reconnect replays
+   * the gap. There is deliberately no buffer here; Bun's own is bounded, and a
+   * second one would only hide the same problem behind more memory.
+   */
+  #send(socket: BrowserSocket, payload: Record<string, unknown>): void {
+    let status: number;
+    try {
+      status = socket.send(JSON.stringify(payload));
+    } catch {
+      // A throw is a failed delivery too.
+      status = 0;
+    }
+    if (status === 0) this.#disconnect(socket);
+  }
+
+  #disconnect(socket: BrowserSocket): void {
+    this.handleClose(socket);
+    try {
+      socket.close(CLOSE_BACKPRESSURE);
+    } catch {
+      // Already gone; dropping it from the registry is what mattered.
+    }
+  }
+
   #reject(socket: BrowserSocket, reason: string, code: number): void {
     try {
       socket.send(JSON.stringify({ type: "error", reason }));
@@ -304,14 +359,6 @@ export class BrowserGateway {
       socket.close(code);
     } catch {
       // Idempotent from the caller's point of view.
-    }
-  }
-
-  #send(socket: BrowserSocket, payload: Record<string, unknown>): void {
-    try {
-      socket.send(JSON.stringify(payload));
-    } catch {
-      // A failed send surfaces as a close.
     }
   }
 }

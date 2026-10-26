@@ -30,7 +30,7 @@ import {
 
 const origin = "https://cc.example.test";
 
-function makeSocket() {
+function makeSocket(sendStatus: number | (() => number) = 1) {
   const sent: Array<Record<string, unknown>> = [];
   const closed: number[] = [];
   const socket = {
@@ -40,8 +40,13 @@ function makeSocket() {
       subscriptions: new Set<string>(),
     } as BrowserSocketData,
     send(payload: string) {
-      sent.push(JSON.parse(String(payload)) as Record<string, unknown>);
-      return 1;
+      // Bun answers 0 when the connection is closed or already over
+      // `backpressureLimit`: the frame was dropped, not queued. A socket that
+      // records nothing for a dropped send is the honest fake — the delivery
+      // never happened.
+      const status = typeof sendStatus === "function" ? sendStatus() : sendStatus;
+      if (status !== 0) sent.push(JSON.parse(String(payload)) as Record<string, unknown>);
+      return status;
     },
     close(code?: number) {
       closed.push(code ?? 1000);
@@ -245,8 +250,9 @@ describe("session subscription and replay", () => {
     cookie: string,
     sessionId: string,
     after?: number,
+    sendStatus: number | (() => number) = 1,
   ) {
-    const made = makeSocket();
+    const made = makeSocket(sendStatus);
     await gateway.attach(made.socket, { origin, cookie });
     made.sent.length = 0;
     gateway.handleMessage(
@@ -310,6 +316,59 @@ describe("session subscription and replay", () => {
       through: 3,
       events: [expect.objectContaining({ sessionSequence: 3 })],
     });
+  });
+
+  test("a send Bun reports as dropped disconnects the socket", async () => {
+    // Bun answers -1 for "queued under backpressure" and 0 for "dropped"
+    // (closed, or past `backpressureLimit`). Reading 0 as success is exactly the
+    // silent loss §12.6 forbids: the server would consider the frame delivered
+    // while the browser never saw it, and nothing would replay the gap.
+    const { gateway, cookie, userId } = await setup({
+      replay: { events: [replayEvent(1)] },
+    });
+
+    const { socket, sent, closed } = await subscribe(gateway, cookie, "session-1", undefined, 0);
+
+    // The whole subscription happened on a dead link, so nothing was delivered
+    // and the socket is closed rather than left registered.
+    expect(sent).toHaveLength(0);
+    expect(closed).toContain(4002);
+    // Dropped from the registry: no later publish pays for this socket again,
+    // and the client's own reconnect + replay (§12.5) is the recovery.
+    expect(gateway.socketCount(userId)).toBe(0);
+    expect(gateway.socketCountForSession("session-1")).toBe(0);
+    expect(socket.data.subscriptions.has("session-1")).toBe(true);
+  });
+
+  test("a publish that cannot be delivered drops only the socket it failed on", async () => {
+    const { gateway, cookie, userId } = await setup();
+
+    // The broken socket subscribes on a link that already refuses frames, so it
+    // is gone before the publish happens — the healthy one is what the loop
+    // must not lose.
+    const broken = await subscribe(gateway, cookie, "session-1", undefined, 0);
+    const healthy = await subscribe(gateway, cookie, "session-1");
+    expect(gateway.socketCountForSession("session-1")).toBe(1);
+    expect(gateway.socketCount(userId)).toBe(1);
+
+    gateway.publish({ sessionId: "session-1", ...replayEvent(1) });
+
+    expect(healthy.sent.at(-1)).toMatchObject({ type: "session.events", live: true });
+    expect(broken.sent).toHaveLength(0);
+    expect(healthy.closed).toHaveLength(0);
+    expect(gateway.socketCount(userId)).toBe(1);
+  });
+
+  test("a send Bun reports as queued under backpressure is not a drop", async () => {
+    const { gateway, cookie, userId } = await setup();
+
+    const { closed } = await subscribe(gateway, cookie, "session-1", undefined, -1);
+
+    // -1 is a success: the bytes are buffered and will be written. Closing here
+    // would disconnect a browser that is merely behind, which is the opposite
+    // of what backpressure handling is for.
+    expect(closed).toHaveLength(0);
+    expect(gateway.socketCount(userId)).toBe(1);
   });
 
   test("a session the user does not own is refused identically to an unknown one", async () => {
