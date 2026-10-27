@@ -171,27 +171,37 @@ async function computeStatus(
   }
 
   // Build current hashes for regular files in the collected-now set. Symlinks
-  // and non-regular files are already in collected.excluded; read the rest.
+  // and non-regular files are already in collected.excluded in the common case;
+  // the lstat/re-read here is a race guard and also catches oversize/binary
+  // files that the collector admits (it only filters by name, not content).
   const currentHashes = new Map<string, { hash: string; size: number; mode: number }>();
+  const currentExcluded = new Map<string, string>();
   for (const rel of collected.paths) {
     const absolute = join(root, rel);
     const info = await lstat(absolute).catch(() => null);
     // The file may have vanished between collection and hashing.
     if (info === null) continue;
-    if (info.isSymbolicLink() || !info.isFile()) continue;
+    if (info.isSymbolicLink() || !info.isFile()) {
+      currentExcluded.set(rel, "non_regular");
+      continue;
+    }
     if (info.size > MAX_SNAPSHOT_FILE_BYTES) {
-      // Oversize files are excluded on the status side too, with a reason.
+      currentExcluded.set(rel, "oversize");
       continue;
     }
     let bytes: Buffer;
     try {
       bytes = await readFile(absolute);
     } catch {
+      currentExcluded.set(rel, "unreadable");
       continue;
     }
     // Binary sniff: a NUL byte in the first sniff window excludes the file.
     const sniff = bytes.subarray(0, BINARY_SNIFF_BYTES);
-    if (sniff.includes(0)) continue;
+    if (sniff.includes(0)) {
+      currentExcluded.set(rel, "binary");
+      continue;
+    }
     currentHashes.set(rel, {
       hash: sha256(bytes),
       size: info.size,
@@ -213,10 +223,25 @@ async function computeStatus(
     }
     const b = baseline.get(path);
     const c = currentHashes.get(path);
+    const excReason = currentExcluded.get(path);
 
     if (b === undefined && c === undefined) {
-      // An excluded-from-collection path (symlink/non-regular) not in the
-      // baseline. The collector reported it in `excluded`; surface it.
+      // Not in baseline and not hashable now. Two possibilities:
+      // (a) the collector flagged it (symlink / credential / non-regular); or
+      // (b) the status layer excluded it (oversize / binary / unreadable /
+      //     non_regular race). Either way it is `excluded`, never `created`.
+      if (excReason !== undefined) {
+        entries.push({
+          path,
+          status: "excluded",
+          snapshotHash: null,
+          currentHash: null,
+          size: null,
+          revertable: false,
+          reason: excReason,
+        });
+        continue;
+      }
       const exc = collected.excluded.find((e) => e.path === path);
       if (exc !== undefined) {
         entries.push({
@@ -246,7 +271,10 @@ async function computeStatus(
     }
 
     if (c === undefined) {
-      // In baseline, not on disk now -> deleted (if kept) or excluded (if excluded).
+      // In baseline, not hashable now. Baseline reasons win first (existing
+      // tests pin the "excluded from baseline" reason), then the status-layer
+      // exclusion reasons (oversize / binary / unreadable / non_regular), then
+      // the remaining baseline entry is a genuine deletion.
       const entry: SnapshotEntry = {
         path,
         status: b.state === "excluded" ? "excluded" : "deleted",
@@ -255,7 +283,15 @@ async function computeStatus(
         size: b.size,
         revertable: b.state === "kept" && b.hash !== null,
       };
-      if (b.state === "excluded") entry.reason = b.reason ?? "excluded from baseline";
+      if (b.state === "excluded") {
+        entry.reason = b.reason ?? "excluded from baseline";
+      } else if (excReason !== undefined) {
+        // The file is still on disk but excluded now (oversize/binary/etc.);
+        // it must not be reported as deleted nor offered for restore.
+        entry.status = "excluded";
+        entry.revertable = false;
+        entry.reason = excReason;
+      }
       entries.push(entry);
       continue;
     }

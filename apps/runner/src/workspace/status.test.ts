@@ -264,3 +264,87 @@ test("truncation nullifies the digest", async () => {
   expect(out.result.truncated).toBe(true);
   expect(out.result.digest).toBeNull();
 });
+
+test("an oversize current file kept in the baseline is excluded, not deleted", async () => {
+  const root = await workspace();
+  const db = freshDb();
+  const smallHash = sha("small\n");
+  recordSnapshot(db, {
+    attemptId: "a1",
+    workspacePath: root,
+    collector: "walk",
+    capturedAt: 1_000,
+    partial: false,
+    entries: [{ path: "big.txt", state: "kept", hash: smallHash, size: 6, mode: 0o644 }],
+  });
+  await writeFile(join(root, "big.txt"), "x".repeat(2_000_000));
+
+  const status = createSnapshotStatus({ db, spawn: noGit });
+  const out = await status(root);
+  expect(out.ok).toBe(true);
+  if (!out.ok) throw new Error("expected ok");
+
+  const bigEntry = out.result.entries.find((e) => e.path === "big.txt");
+  expect(bigEntry).toBeDefined();
+  expect(bigEntry!.status).toBe("excluded");
+  expect(bigEntry!.reason).toBe("oversize");
+  expect(bigEntry!.revertable).toBe(false);
+  expect(bigEntry!.currentHash).toBeNull();
+  expect(out.result.counts).toEqual({ modified: 0, created: 0, deleted: 0, excluded: 1 });
+});
+
+test("a binary file created during the run is excluded, not dropped", async () => {
+  const root = await workspace();
+  const db = freshDb();
+  const prevHash = sha("prev\n");
+  recordSnapshot(db, {
+    attemptId: "a1",
+    workspacePath: root,
+    collector: "walk",
+    capturedAt: 1_000,
+    partial: false,
+    entries: [{ path: "a.txt", state: "kept", hash: prevHash, size: 5, mode: 0o644 }],
+  });
+  await writeFile(join(root, "a.txt"), "prev\n");
+  await writeFile(join(root, "bin.dat"), Buffer.from([0x61, 0x00, 0x62]));
+
+  const status = createSnapshotStatus({ db, spawn: noGit });
+  const out = await status(root);
+  expect(out.ok).toBe(true);
+  if (!out.ok) throw new Error("expected ok");
+
+  const binEntry = out.result.entries.find((e) => e.path === "bin.dat");
+  expect(binEntry).toBeDefined();
+  expect(binEntry!.status).toBe("excluded");
+  expect(binEntry!.reason).toBe("binary");
+  expect(binEntry!.revertable).toBe(false);
+  expect(out.result.counts).toEqual({ modified: 0, created: 0, deleted: 0, excluded: 1 });
+});
+
+test("an oversize file created during the run is excluded, not dropped", async () => {
+  const root = await workspace();
+  const db = freshDb();
+  const prevHash = sha("prev\n");
+  recordSnapshot(db, {
+    attemptId: "a1",
+    workspacePath: root,
+    collector: "walk",
+    capturedAt: 1_000,
+    partial: false,
+    entries: [{ path: "a.txt", state: "kept", hash: prevHash, size: 5, mode: 0o644 }],
+  });
+  await writeFile(join(root, "a.txt"), "prev\n");
+  await writeFile(join(root, "big-new.txt"), "x".repeat(2_000_000));
+
+  const status = createSnapshotStatus({ db, spawn: noGit });
+  const out = await status(root);
+  expect(out.ok).toBe(true);
+  if (!out.ok) throw new Error("expected ok");
+
+  const bigEntry = out.result.entries.find((e) => e.path === "big-new.txt");
+  expect(bigEntry).toBeDefined();
+  expect(bigEntry!.status).toBe("excluded");
+  expect(bigEntry!.reason).toBe("oversize");
+  expect(bigEntry!.revertable).toBe(false);
+  expect(out.result.counts).toEqual({ modified: 0, created: 0, deleted: 0, excluded: 1 });
+});
