@@ -51,7 +51,7 @@ const activeSession = computed(() =>
 /** One encoded path segment, or null when the session has no pin. */
 const workspace = computed(() => {
   const row = activeSession.value;
-  if (row?.runnerId === null || row?.workspaceId === null || row === undefined) return null;
+  if (row === undefined || row.runnerId === null || row.workspaceId === null) return null;
   return compositeId(row.runnerId, row.workspaceId);
 });
 
@@ -68,14 +68,40 @@ const changesError = ref<string | null>(null);
 const changesLoading = ref(false);
 const diff = ref<GitDiffResult | null>(null);
 const diffPath = ref<string | null>(null);
+const diffError = ref<string | null>(null);
+const diffLoading = ref(false);
 
 // Diagnostics
 const diagnostics = ref<DiagnosticsResult | null>(null);
 const diagnosticsError = ref<string | null>(null);
 const diagnosticsLoading = ref(false);
 
+/**
+ * Every load bumps this; a response whose epoch is stale is dropped instead of
+ * written into a panel that has since moved to another directory, tab or
+ * session. Without it, switching sessions mid-fetch painted the previous
+ * workspace's listing under the new session's header.
+ */
+let epoch = 0;
+
 const crumbs = computed(() => breadcrumbs(directory.value));
-const diffLines = computed(() => (diff.value === null ? [] : classifyDiffLines(diff.value.diff)));
+
+// The runner is trusted to be well-behaved, not to be bug-free: a wrongly typed
+// result must not tear down the whole panel's render.
+const entries = computed(() => {
+  const value = listing.value?.entries;
+  return Array.isArray(value) ? value : [];
+});
+
+const changeEntries = computed(() => {
+  const value = changes.value?.entries;
+  return Array.isArray(value) ? value : [];
+});
+
+const diffLines = computed(() => {
+  const text = diff.value?.diff;
+  return typeof text === "string" ? classifyDiffLines(text) : [];
+});
 
 const STATUS_LABELS: Record<string, string> = {
   added: "thêm",
@@ -91,10 +117,12 @@ const STATUS_LABELS: Record<string, string> = {
 async function loadFiles(dir: string): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
+  const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
   viewer.value = null;
   const outcome = await listFiles(id, dir);
+  if (current !== epoch) return;
   filesLoading.value = false;
   if (!outcome.ok) {
     filesError.value = outcome.message;
@@ -108,11 +136,14 @@ async function loadFiles(dir: string): Promise<void> {
 async function loadChanges(): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
+  const current = ++epoch;
   changesLoading.value = true;
   changesError.value = null;
   diff.value = null;
   diffPath.value = null;
+  diffError.value = null;
   const outcome = await fetchChanges(id);
+  if (current !== epoch) return;
   changesLoading.value = false;
   if (!outcome.ok) {
     changesError.value = outcome.message;
@@ -125,9 +156,11 @@ async function loadChanges(): Promise<void> {
 async function loadDiagnostics(): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
+  const current = ++epoch;
   diagnosticsLoading.value = true;
   diagnosticsError.value = null;
   const outcome = await fetchDiagnostics(id);
+  if (current !== epoch) return;
   diagnosticsLoading.value = false;
   if (!outcome.ok) {
     diagnosticsError.value = outcome.message;
@@ -147,9 +180,11 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
   }
   if (kind !== "file") return;
 
+  const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
   const outcome = await readFile(id, path);
+  if (current !== epoch) return;
   filesLoading.value = false;
   if (!outcome.ok) {
     filesError.value = outcome.message;
@@ -162,9 +197,16 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
 async function openDiff(path: string): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
+  const current = ++epoch;
+  diffLoading.value = true;
+  diffError.value = null;
   const outcome = await fetchDiff(id, path);
+  if (current !== epoch) return;
+  diffLoading.value = false;
   if (!outcome.ok) {
-    changesError.value = outcome.message;
+    // The changes list stays; only the diff failed, and the operator can pick
+    // another file without losing the list they were reading.
+    diffError.value = outcome.message;
     return;
   }
   diff.value = outcome.value;
@@ -183,16 +225,24 @@ function goUp(): void {
 watch(
   () => `${props.sessionId}\u0000${workspace.value ?? ""}`,
   () => {
+    // Cancel whatever was in flight: its response belongs to the previous
+    // session's workspace and must not land in this one's panel.
+    epoch += 1;
     directory.value = "";
     listing.value = null;
     viewer.value = null;
     filesError.value = null;
+    filesLoading.value = false;
     changes.value = null;
     changesError.value = null;
+    changesLoading.value = false;
     diff.value = null;
     diffPath.value = null;
+    diffError.value = null;
+    diffLoading.value = false;
     diagnostics.value = null;
     diagnosticsError.value = null;
+    diagnosticsLoading.value = false;
     if (workspace.value !== null) void loadFiles("");
   },
   { immediate: true },
@@ -283,7 +333,7 @@ watch(tab, (next) => {
 
         <template v-else-if="listing !== null">
           <div class="mb-1.5 flex items-center justify-between gap-2 text-muted-foreground">
-            <span>{{ listing.entries.length }} mục</span>
+            <span>{{ entries.length }} mục</span>
             <button
               v-if="directory !== ''"
               type="button"
@@ -300,7 +350,7 @@ watch(tab, (next) => {
             Danh sách đã được rút gọn — hiển thị 2000 mục đầu tiên.
           </p>
           <ul class="grid gap-0.5">
-            <li v-for="entry in listing.entries" :key="entry.name">
+            <li v-for="entry in entries" :key="entry.name">
               <button
                 type="button"
                 class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
@@ -318,7 +368,7 @@ watch(tab, (next) => {
               </button>
             </li>
           </ul>
-          <p v-if="listing.entries.length === 0" class="text-muted-foreground">
+          <p v-if="entries.length === 0" class="text-muted-foreground">
             Thư mục trống.
           </p>
         </template>
@@ -327,7 +377,7 @@ watch(tab, (next) => {
       <!-- Changes -->
       <template v-else-if="tab === 'changes'">
         <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
-          <span>{{ changes?.entries.length ?? 0 }} thay đổi</span>
+          <span>{{ changeEntries.length }} thay đổi</span>
           <button type="button" class="text-primary hover:underline" @click="loadChanges">
             làm mới
           </button>
@@ -368,6 +418,10 @@ watch(tab, (next) => {
         </template>
 
         <template v-else-if="changes !== null">
+          <!-- A failed diff keeps the list: only the diff failed, and the
+               operator can pick another file without losing their place. -->
+          <p v-if="diffLoading" class="mb-1.5 text-muted-foreground">Đang tải diff…</p>
+          <p v-else-if="diffError !== null" class="mb-1.5 text-destructive">{{ diffError }}</p>
           <p
             v-if="changes.truncated"
             class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
@@ -375,7 +429,7 @@ watch(tab, (next) => {
             Danh sách đã được rút gọn — hiển thị 2000 thay đổi đầu tiên.
           </p>
           <ul class="grid gap-0.5">
-            <li v-for="entry in changes.entries" :key="entry.path">
+            <li v-for="entry in changeEntries" :key="entry.path">
               <button
                 type="button"
                 class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
@@ -391,7 +445,7 @@ watch(tab, (next) => {
               </button>
             </li>
           </ul>
-          <p v-if="changes.entries.length === 0" class="text-muted-foreground">
+          <p v-if="changeEntries.length === 0" class="text-muted-foreground">
             Working tree sạch — không có thay đổi nào.
           </p>
         </template>

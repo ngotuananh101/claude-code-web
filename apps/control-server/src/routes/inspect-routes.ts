@@ -48,15 +48,23 @@ export function parseCompositeId(
 }
 
 /**
+ * The only code in this surface that a retry can repair: the runner was not
+ * ready, or did not answer in time. Every other refusal is a fact about the
+ * path, the workspace or the request — retrying it changes nothing, whatever
+ * status class it carries. Deriving the flag from the status told an operator
+ * to retry a 502 `NOT_A_FILE` forever.
+ */
+const RETRYABLE_CODES: ReadonlySet<string> = new Set(["RUNNER_UNAVAILABLE"]);
+
+/**
  * §17.3's `ApiError`, exactly: the code lives under `error` so the web service
  * (T11) parses one shape for every domain failure, and `requestId` is what an
- * operator quotes in a bug report. `retryable` follows the status: a 5xx may
- * work on a retry, a refusal will not.
+ * operator quotes in a bug report. `retryable` follows the code (see above).
  */
 function jsonError(code: string, message: string, status: number): Response {
   return new Response(
     JSON.stringify({
-      error: { code, message, retryable: status >= 500, details: undefined },
+      error: { code, message, retryable: RETRYABLE_CODES.has(code), details: undefined },
       requestId: crypto.randomUUID(),
     }),
     {

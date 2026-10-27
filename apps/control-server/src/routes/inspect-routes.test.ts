@@ -342,6 +342,33 @@ describe("GET /api/workspaces/:id/files", () => {
     );
   });
 
+  test("a 502 refusal is not advertised as retryable", async () => {
+    const { db, url, cookie, credential } = await start();
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
+    // NOT_A_FILE is a client-shape refusal: retrying it changes nothing. The
+    // flag must follow the code, not the 5xx class of its status (§17.3).
+    await connectInspectRunner(url, credential, runnerInbox(), {
+      answer: (command) => ({
+        type: "rpc.result",
+        commandId: command["commandId"] as string,
+        ok: false,
+        error: { code: "NOT_A_FILE", message: "path is not a regular file" },
+      }),
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/workspaces/${composite}/file?path=src`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "NOT_A_FILE", retryable: false }),
+      }),
+    );
+  });
+
   test("the outbox row is retired when the runner answers", async () => {
     const { db, url, cookie, credential } = await start();
     upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);

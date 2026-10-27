@@ -45,6 +45,7 @@ const MESSAGES: Record<string, string> = {
   CREDENTIAL_FILE_REFUSED: "Không được phép đọc tệp chứa thông tin đăng nhập.",
   NOT_A_DIRECTORY: "Đường dẫn không phải thư mục.",
   NOT_A_FILE: "Đường dẫn không phải tệp.",
+  UNSUPPORTED_COMMAND: "Runner không hỗ trợ yêu cầu này.",
   DIAGNOSTICS_UNAVAILABLE: "Không lấy được chẩn đoán cấu hình.",
 };
 
