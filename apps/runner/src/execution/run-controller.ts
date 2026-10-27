@@ -45,6 +45,11 @@ export type ControllerOptions = {
    * gate; absent means nothing to prepare.
    */
   prepareWorkspace?: ExecuteOptions["prepareWorkspace"];
+  /**
+   * The run-start baseline capture (P3-B): threaded to every run under the
+   * workspace lock it already holds. Absent means no baseline is captured.
+   */
+  captureBaseline?: ExecuteOptions["captureBaseline"];
   /** Injected clock, so expiry is testable without waiting for it. */
   now?: () => number;
   /**
@@ -75,6 +80,7 @@ export class RunController {
   readonly #workspacePathFor: (workspaceId: string) => string | undefined;
   readonly #sdk: SdkStream;
   readonly #prepareWorkspace: ExecuteOptions["prepareWorkspace"] | undefined;
+  readonly #captureBaseline: ExecuteOptions["captureBaseline"] | undefined;
   readonly #now: () => number;
   readonly #onSettled: ((attemptId: string) => void) | undefined;
   readonly #onApprovalEvent: (() => void) | undefined;
@@ -110,6 +116,7 @@ export class RunController {
     this.#workspacePathFor = options.workspacePathFor;
     this.#sdk = options.sdk;
     this.#prepareWorkspace = options.prepareWorkspace;
+    this.#captureBaseline = options.captureBaseline;
     this.#now = options.now ?? Date.now;
     this.#onSettled = options.onSettled;
     this.#onApprovalEvent = options.onApprovalEvent;
@@ -270,6 +277,7 @@ export class RunController {
         ...(this.#prepareWorkspace === undefined
           ? {}
           : { prepareWorkspace: this.#prepareWorkspace }),
+        ...(this.#captureBaseline === undefined ? {} : { captureBaseline: this.#captureBaseline }),
         signal: controller.signal,
         router: (append, attempt) => {
           const router = new ApprovalRouter({ db: this.#db, append, now: this.#now });

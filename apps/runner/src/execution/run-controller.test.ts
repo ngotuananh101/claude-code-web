@@ -1033,6 +1033,32 @@ describe("approvals", () => {
   });
 });
 
+describe("run-start baseline capture (P3-B)", () => {
+  test("a capture failure releases the workspace lock", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      captureBaseline: async () => ({ ok: false, reason: "boom" }),
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })(),
+    });
+
+    await controller.handle(command);
+    await controller.settle();
+
+    expect(db.query("SELECT COUNT(*) AS n FROM workspace_locks").get()).toEqual({ n: 0 });
+    expect(
+      db.query("SELECT state FROM local_attempts WHERE attempt_id = 'attempt-1'").get(),
+    ).toEqual({
+      state: "failed",
+    });
+  });
+});
+
 describe("workspace preparation (M4)", () => {
   test("the branch from the payload reaches the gate with the resolved path", async () => {
     const { db } = setup();

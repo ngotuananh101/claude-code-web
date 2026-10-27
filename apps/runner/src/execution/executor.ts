@@ -101,6 +101,17 @@ export type ExecuteOptions = {
     branch: string | undefined,
   ) => Promise<PrepareWorkspaceResult>;
   /**
+   * The run-start baseline capture (P3-B): runs after the branch gate and
+   * before the SDK starts, under the workspace lock the caller already holds.
+   * A refusal fails the run with `snapshot_failed` and releases the lock.
+   * Absent means no baseline is captured.
+   */
+  captureBaseline?: (
+    workspacePath: string,
+    attemptId: string,
+    sessionId: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
    * Builds the attempt's approval gate from the executor's own append closure
    * (§13) — the gate's events must share the attempt's sequence. Optional:
    * tests of non-approval paths omit it, and the production controller always
@@ -299,6 +310,19 @@ export async function executeRun(
           action: "checkout",
           ...(prepared.branch === undefined ? {} : { branch: prepared.branch }),
         });
+      }
+    }
+
+    // P3-B: capture the run-start baseline after the branch gate and before the
+    // SDK starts. A refusal fails the run with `snapshot_failed` and releases the
+    // workspace lock — the `finally` below owns both the attempt and the lock.
+    if (options.captureBaseline !== undefined) {
+      const captured = await options.captureBaseline(options.workspacePath, attemptId, sessionId);
+      if (!captured.ok) {
+        state = "failed";
+        terminalWritten = true;
+        append("run.failed", { error: "snapshot_failed", reason: captured.reason });
+        return { state: "failed" };
       }
     }
 

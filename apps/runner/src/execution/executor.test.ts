@@ -1451,6 +1451,108 @@ describe("the approval gate", () => {
   });
 });
 
+describe("run-start baseline capture (P3-B)", () => {
+  test("captures the baseline after the branch gate and before the SDK", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "a-1",
+      sessionId: "s-1",
+      runId: "run-1",
+      workspacePath: "/w",
+    });
+
+    const order: string[] = [];
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, attemptId: "a-1", sessionId: "s-1" },
+      {
+        workspacePath: "/w",
+        prepareWorkspace: async () => {
+          order.push("prepare");
+          return { kind: "ready", checkedOut: false };
+        },
+        captureBaseline: async (_path, attemptId) => {
+          order.push(`capture:${attemptId}`);
+          return { ok: true };
+        },
+        sdk: () =>
+          (async function* () {
+            order.push("sdk");
+            yield { type: "result", subtype: "success", result: "ok" };
+          })(),
+      },
+    );
+
+    expect(outcome.state).toBe("finished");
+    expect(order).toEqual(["prepare", "capture:a-1", "sdk"]);
+  });
+
+  test("a refused branch gate never captures", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "a-2",
+      sessionId: "s-2",
+      runId: "run-2",
+      workspacePath: "/w",
+    });
+
+    const seen: string[] = [];
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, attemptId: "a-2", sessionId: "s-2" },
+      {
+        workspacePath: "/w",
+        prepareWorkspace: async () => ({ kind: "refused", reason: "dirty_tree" }),
+        captureBaseline: async () => {
+          seen.push("capture");
+          return { ok: true };
+        },
+        sdk: () =>
+          (async function* () {
+            yield { type: "result", subtype: "success", result: "ok" };
+          })(),
+      },
+    );
+
+    expect(outcome.state).toBe("failed");
+    expect(seen).toEqual([]);
+  });
+
+  test("a failed capture fails the run with snapshot_failed", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "a-3",
+      sessionId: "s-3",
+      runId: "run-3",
+      workspacePath: "/w",
+    });
+
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, attemptId: "a-3", sessionId: "s-3" },
+      {
+        workspacePath: "/w",
+        captureBaseline: async () => ({ ok: false, reason: "disk full" }),
+        sdk: failingStream(new Error("must not start")),
+      },
+    );
+
+    expect(outcome.state).toBe("failed");
+    const types = db
+      .query(
+        "SELECT type, payload FROM event_outbox WHERE attempt_id = 'a-3' ORDER BY local_sequence",
+      )
+      .all() as Array<{ type: string; payload: string }>;
+    expect(types).toContainEqual({
+      type: "run.failed",
+      payload: JSON.stringify({ error: "snapshot_failed", reason: "disk full" }),
+    });
+    // A failed capture must release the workspace lock, just like other failures.
+    expect(lockHolder(db, "/w")).toBeUndefined();
+    expect(attemptState(db, "a-3")).toBe("failed");
+  });
+});
+
 describe("workspace preparation (M4 branch gate)", () => {
   const finishingSdk: SdkStream = () =>
     (async function* () {
