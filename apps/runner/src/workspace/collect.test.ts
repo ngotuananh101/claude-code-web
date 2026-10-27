@@ -60,3 +60,18 @@ test("crossing the entry cap truncates instead of silently shrinking", async () 
   expect(collected.truncated).toBe(true);
   expect(collected.paths).toHaveLength(3);
 });
+
+test("a cap-stop with exclusions still reports truncation", async () => {
+  // Two symlinks (excluded) plus five regular files in the same directory.
+  // With maxEntries 3 the walk hits the combined cap (collected + excluded
+  // reaching limit-of-4) before visiting all entries. Regardless of readdir
+  // order, the cap-stop must surface as truncated so a later bulk revert
+  // refuses rather than deleting unseen files.
+  const root = await workspace();
+  await symlink(join(root, "f-0.ts"), join(root, "link0.ts"));
+  await symlink(join(root, "f-1.ts"), join(root, "link1.ts"));
+  for (let i = 0; i < 5; i++) await writeFile(join(root, `f-${i}.ts`), "x");
+  const collected = await collectWorkspaceFiles(root, { spawn: noGit.spawn, maxEntries: 3 });
+  expect(collected.truncated).toBe(true);
+  expect(collected.paths).toHaveLength(3);
+});

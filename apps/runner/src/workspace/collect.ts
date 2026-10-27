@@ -59,8 +59,13 @@ export async function collectWorkspaceFiles(
   // missing `git` binary must not prevent a baseline from being captured.
   const collected: string[] = [];
   const excluded: Collected["excluded"] = [];
-  await walk(root, "", collected, excluded, maxEntries + 1);
-  const truncated = collected.length > maxEntries;
+  const stoppedAtLimit = await walk(root, "", collected, excluded, maxEntries + 1);
+  // A cap-stop for any reason — collected or excluded entries hitting the limit
+  // — must surface as truncation. Otherwise a tree full of excluded entries
+  // (symlinks / credential names) could halt the walk before real files are
+  // visited, yet report `truncated: false`; a later bulk revert would then
+  // treat those unseen files as run-created and delete them (§15.2, Ruling 7).
+  const truncated = stoppedAtLimit || collected.length > maxEntries;
   return {
     mode: "walk",
     paths: collected.sort().slice(0, maxEntries),
@@ -96,18 +101,20 @@ async function walk(
   collected: string[],
   excluded: Collected["excluded"],
   limit: number,
-): Promise<void> {
-  if (collected.length + excluded.length >= limit) return;
+): Promise<boolean> {
+  if (collected.length + excluded.length >= limit) return true;
 
   const dir = join(root, relative || ".");
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return;
+    return false;
   }
 
+  let stoppedAtLimit = false;
   for (const entry of entries) {
+    if (stoppedAtLimit) return true;
     if (IGNORED_DIRS.has(entry.name)) continue;
 
     const entryPath = relative === "" ? entry.name : `${relative}/${entry.name}`;
@@ -118,28 +125,33 @@ async function walk(
     // Never follow a symlink: it is excluded by the link itself, not its target.
     if (info.isSymbolicLink()) {
       excluded.push({ path: entryPath, reason: "symlink" });
+      if (collected.length + excluded.length >= limit) stoppedAtLimit = true;
       continue;
     }
 
     // Directories descend; anything that is neither a symlink nor a directory
     // is a socket, fifo or device and is excluded as non-regular.
     if (info.isDirectory()) {
-      await walk(root, entryPath, collected, excluded, limit);
+      const childStopped = await walk(root, entryPath, collected, excluded, limit);
+      if (childStopped) stoppedAtLimit = true;
       continue;
     }
 
     if (!info.isFile()) {
       excluded.push({ path: entryPath, reason: "non_regular" });
+      if (collected.length + excluded.length >= limit) stoppedAtLimit = true;
       continue;
     }
 
     // A regular file: check the credential basename before admitting it.
     if (isRefusedCredentialBasename(entry.name)) {
       excluded.push({ path: entryPath, reason: "credential" });
+      if (collected.length + excluded.length >= limit) stoppedAtLimit = true;
       continue;
     }
 
     collected.push(entryPath);
-    if (collected.length >= limit) return;
+    if (collected.length >= limit) stoppedAtLimit = true;
   }
+  return stoppedAtLimit;
 }
