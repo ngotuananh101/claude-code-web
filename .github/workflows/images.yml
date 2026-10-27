@@ -1,0 +1,169 @@
+name: Docker images
+
+# Publishes the two production images to GHCR whenever their inputs change on
+# main. Each architecture is built natively — amd64 on ubuntu-latest, arm64 on
+# GitHub's arm64 runner — and the per-arch digests are merged into one
+# multi-arch manifest per image at the end. No QEMU: an emulated Bun install is
+# slow and can resolve the wrong native optional dependency.
+#
+# Packaging, not judging: the test gate stays in CI, which runs on the same
+# push. PRs do not publish — a fork's token cannot write here, and an image
+# built from a pull request is not something a deployment should pull.
+on:
+  push:
+    branches: [main]
+    paths:
+      # The two apps and everything they import. `packages/**` covers the
+      # workspace packages both images resolve at runtime; `scripts/**` covers
+      # the seed script that ships inside the control image.
+      - "apps/web/**"
+      - "apps/control-server/**"
+      - "packages/**"
+      - "scripts/**"
+      - "package.json"
+      - "bun.lock"
+      - "infra/docker/Dockerfile.control"
+      - "infra/docker/Dockerfile.web"
+      - "infra/docker/Caddyfile"
+      - ".dockerignore"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The workflow's own token writes the packages; no PAT or extra secret.
+  packages: write
+
+jobs:
+  build:
+    name: ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: control
+            dockerfile: infra/docker/Dockerfile.control
+          - name: web
+            dockerfile: infra/docker/Dockerfile.web
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Labels only: each arch is pushed by digest, and the merge job owns the
+      # tags that point at the final manifest list.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image.name }}
+          tags: |
+            type=sha,format=short
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          # One cache per (image, arch): the layers differ by architecture, and
+          # the Bun install layer is the expensive one.
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+
+      # One small file per (image, arch). Its content is the full digest the
+      # merge job references; the file name carries the pairing.
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          echo "${{ steps.build.outputs.digest }}" > \
+            "${{ runner.temp }}/digests/${{ matrix.image.name }}-${{ matrix.platform.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # `needs: build` means a manifest is only assembled when every architecture
+  # succeeded — no `latest` pointing at half an image.
+  merge:
+    name: merge ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [control, web]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.image }}-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The tags live here, not in the per-arch builds: `latest` follows the
+      # default branch, every build also carries its short commit sha. Both
+      # point at the merged manifest list, so a pull on either architecture
+      # resolves to the native image.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+        run: |
+          shopt -s nullglob
+          sources=()
+          for digest_file in "${{ matrix.image }}-"*; do
+            sources+=("${IMAGE}@$(cat "${digest_file}")")
+          done
+
+          if [ "${#sources[@]}" -ne 2 ]; then
+            echo "expected 2 per-arch digests, found ${#sources[@]}: ${sources[*]:-none}" >&2
+            exit 1
+          fi
+
+          tag_args=()
+          while IFS= read -r tag; do
+            tag_args+=("-t" "${tag}")
+          done < <(jq -r '.tags[]' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
