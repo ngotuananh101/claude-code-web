@@ -1,25 +1,34 @@
-# Production deployment: Control Server + Web behind the operator's TLS proxy.
+# Production deployment: one image, one container, one volume.
 #
 # Manual deploy from a checkout:
 #
 #   cp infra/docker/.env.example infra/docker/.env     # fill in the secrets
 #   docker compose -f infra/docker/compose.prod.yml up -d --build
 #
-# Topology (§20.1, §20.3): the control server is never published; only the web
-# container is, on loopback by default, so an existing reverse proxy on this
-# host can terminate TLS. Runners stay host-native — they need the operator's
-# Claude config and provider credentials, which a container does not have.
+# Deploy the image CI published instead of building here — add the GHCR
+# override as a second `-f`:
+#
+#   docker compose -f infra/docker/compose.prod.yml \
+#                  -f infra/docker/compose.ghcr.yml pull
+#   docker compose -f infra/docker/compose.prod.yml \
+#                  -f infra/docker/compose.ghcr.yml up -d
+#
+# Topology (§20.1, §20.3): the image holds Caddy (SPA + reverse proxy) and the
+# control server. Only Caddy's port is published, on loopback by default, so an
+# existing reverse proxy on this host can terminate TLS. Runners stay
+# host-native — they need the operator's Claude config and provider credentials,
+# which a container does not have.
 #
 # The test harness lives in compose.runners.yml and is unrelated to this file.
 
 name: cc-web
 
 services:
-  control:
+  app:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.control
-    image: cc-web-control:prod
+      dockerfile: infra/docker/Dockerfile
+    image: cc-web:prod
     restart: unless-stopped
     # CC_WEB_JWT_SECRET and CC_WEB_ALLOWED_ORIGINS come from this file and are
     # required: the server refuses to start without them.
@@ -32,44 +41,12 @@ services:
       # Named volume, not a bind mount: the SQLite database (with its WAL and
       # SHM files) is container state and must survive `up --build`.
       - control-data:/data
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "fetch('http://127.0.0.1:8787/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-    # No `ports`: the control server is reachable only on the compose network.
-    networks:
-      - internal
-
-  web:
-    build:
-      context: ../..
-      dockerfile: infra/docker/Dockerfile.web
-    image: cc-web-web:prod
-    restart: unless-stopped
-    depends_on:
-      control:
-        condition: service_healthy
-    environment:
-      # `:80` keeps Caddy plain-HTTP for an external TLS proxy. A bare domain
-      # makes Caddy obtain certificates itself (publish 80/443 in that case).
-      CC_WEB_SITE_ADDRESS: ${CC_WEB_SITE_ADDRESS:-:80}
+    # The image's healthcheck probes both processes (control on 8787, Caddy's
+    # admin API on 2019), so it is not duplicated here.
     ports:
       # Loopback by default: the host's existing proxy fronts this. Use
       # 0.0.0.0 only for direct LAN access.
       - "${CC_WEB_BIND_ADDR:-127.0.0.1}:${CC_WEB_HTTP_PORT:-8080}:80"
-    networks:
-      - internal
 
 volumes:
   control-data:
-
-networks:
-  internal:

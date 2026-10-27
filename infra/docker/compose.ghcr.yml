@@ -1,0 +1,27 @@
+# Deploy the prebuilt image from GHCR instead of building on this host.
+#
+# This is an override for compose.prod.yml, not a stack of its own. Use it as
+# the second `-f` in every command:
+#
+#   docker compose -f infra/docker/compose.prod.yml \
+#                  -f infra/docker/compose.ghcr.yml pull
+#   docker compose -f infra/docker/compose.prod.yml \
+#                  -f infra/docker/compose.ghcr.yml up -d
+#
+# .github/workflows/images.yml publishes the image on every push to main that
+# touches an app, a workspace package, the seed script or the Docker inputs.
+# Each tag is a multi-arch manifest (linux/amd64 + linux/arm64), so the host
+# pulls its own architecture — no platform flag needed.
+#
+# CC_WEB_IMAGE_TAG picks the release: `latest` follows main, `sha-<short>` pins
+# one commit. Set it in .env (see .env.example).
+#
+# `build: !reset null` removes the build context inherited from compose.prod.yml:
+# a deploy host never falls back to building from source, and `up` cannot
+# silently produce an image that differs from what CI tested. Requires Compose
+# 2.24 or newer.
+
+services:
+  app:
+    image: ghcr.io/ngotuananh101/claude-code-web:${CC_WEB_IMAGE_TAG:-latest}
+    build: !reset null

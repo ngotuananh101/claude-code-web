@@ -1,11 +1,12 @@
-# Single-origin front door for the compose stack (§20.1).
+# Front door of the single production container (§20.1).
 #
 # Default is plain HTTP on port 80 inside the container: the operator's existing
 # TLS proxy publishes it (compose.prod.yml binds it to loopback). Set
 # CC_WEB_SITE_ADDRESS to a bare domain to let Caddy own TLS instead — then
 # publish 80/443 and drop the loopback binding.
 #
-# One origin is what keeps the cc_session cookie and the Origin allowlist
+# The control server runs beside Caddy in the same container, on loopback. One
+# origin is what keeps the cc_session cookie and the Origin allowlist
 # unchanged: the browser talks to Caddy for everything.
 
 {$CC_WEB_SITE_ADDRESS::80} {
@@ -15,16 +16,16 @@
 	# upgrades WebSocket connections transparently, so /ws/runner and
 	# /ws/browser need no special configuration.
 	handle /api/* {
-		reverse_proxy control:8787
+		reverse_proxy 127.0.0.1:8787
 	}
 	handle /auth/* {
-		reverse_proxy control:8787
+		reverse_proxy 127.0.0.1:8787
 	}
 	handle /ws/* {
-		reverse_proxy control:8787
+		reverse_proxy 127.0.0.1:8787
 	}
 	handle /healthz {
-		reverse_proxy control:8787
+		reverse_proxy 127.0.0.1:8787
 	}
 
 	# The SPA. Missing assets stay 404s instead of answering HTML to a script

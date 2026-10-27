@@ -1,10 +1,14 @@
-name: Docker images
+name: Docker image
 
-# Publishes the two production images to GHCR whenever their inputs change on
+# Publishes the single production image to GHCR whenever its inputs change on
 # main. Each architecture is built natively — amd64 on ubuntu-latest, arm64 on
 # GitHub's arm64 runner — and the per-arch digests are merged into one
-# multi-arch manifest per image at the end. No QEMU: an emulated Bun install is
-# slow and can resolve the wrong native optional dependency.
+# multi-arch manifest at the end. No QEMU: an emulated Bun install is slow and
+# can resolve the wrong native optional dependency.
+#
+# One image holds both planes: Caddy serves the built SPA and proxies /api,
+# /auth, /ws and /healthz to the control server running beside it. Two
+# processes, one container to deploy.
 #
 # Packaging, not judging: the test gate stays in CI, which runs on the same
 # push. PRs do not publish — a fork's token cannot write here, and an image
@@ -14,17 +18,17 @@ on:
     branches: [main]
     paths:
       # The two apps and everything they import. `packages/**` covers the
-      # workspace packages both images resolve at runtime; `scripts/**` covers
-      # the seed script that ships inside the control image.
+      # workspace packages both processes resolve at runtime; `scripts/**`
+      # covers the seed script that ships inside the image.
       - "apps/web/**"
       - "apps/control-server/**"
       - "packages/**"
       - "scripts/**"
       - "package.json"
       - "bun.lock"
-      - "infra/docker/Dockerfile.control"
-      - "infra/docker/Dockerfile.web"
+      - "infra/docker/Dockerfile"
       - "infra/docker/Caddyfile"
+      - "infra/docker/entrypoint.sh"
       - ".dockerignore"
       - ".github/workflows/images.yml"
   workflow_dispatch:
@@ -35,23 +39,18 @@ concurrency:
 
 permissions:
   contents: read
-  # The workflow's own token writes the packages; no PAT or extra secret.
+  # The workflow's own token writes the package; no PAT or extra secret.
   packages: write
 
 jobs:
   build:
-    name: ${{ matrix.image.name }} (${{ matrix.platform.arch }})
-    runs-on: ${{ matrix.platform.runner }}
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - name: control
-            dockerfile: infra/docker/Dockerfile.control
-          - name: web
-            dockerfile: infra/docker/Dockerfile.web
-        platform:
+        include:
           - arch: amd64
             runner: ubuntu-latest
           - arch: arm64
@@ -74,7 +73,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/${{ matrix.image.name }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=sha,format=short
 
@@ -83,26 +82,26 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.image.dockerfile }}
-          platforms: linux/${{ matrix.platform.arch }}
+          file: infra/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=ghcr.io/${{ github.repository }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
-          # One cache per (image, arch): the layers differ by architecture, and
-          # the Bun install layer is the expensive one.
-          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          # One cache per architecture: the layers differ by arch, and the Bun
+          # install layer is the expensive one.
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.arch }}
 
-      # One small file per (image, arch). Its content is the full digest the
+      # One small file per architecture. Its content is the full digest the
       # merge job references; the file name carries the pairing.
       - name: Export digest
         run: |
           mkdir -p "${{ runner.temp }}/digests"
           echo "${{ steps.build.outputs.digest }}" > \
-            "${{ runner.temp }}/digests/${{ matrix.image.name }}-${{ matrix.platform.arch }}"
+            "${{ runner.temp }}/digests/${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          name: digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -110,19 +109,15 @@ jobs:
   # `needs: build` means a manifest is only assembled when every architecture
   # succeeded — no `latest` pointing at half an image.
   merge:
-    name: merge ${{ matrix.image }}
+    name: merge
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        image: [control, web]
 
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: digests-${{ matrix.image }}-*
+          pattern: digest-*
           path: ${{ runner.temp }}/digests
           merge-multiple: true
 
@@ -140,7 +135,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
@@ -148,11 +143,11 @@ jobs:
       - name: Create multi-arch manifest
         working-directory: ${{ runner.temp }}/digests
         env:
-          IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          IMAGE: ghcr.io/${{ github.repository }}
         run: |
           shopt -s nullglob
           sources=()
-          for digest_file in "${{ matrix.image }}-"*; do
+          for digest_file in *; do
             sources+=("${IMAGE}@$(cat "${digest_file}")")
           done
 
