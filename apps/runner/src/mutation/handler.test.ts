@@ -14,8 +14,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateRunnerDb, recordSnapshot } from "@cc-web/runner-db";
+import { acquireWorkspaceLock, migrateRunnerDb, recordSnapshot } from "@cc-web/runner-db";
 import { createMutationHandler } from "./handler.ts";
+import { computeSnapshotPlan } from "../workspace/status.ts";
 
 const roots: string[] = [];
 async function workspace(): Promise<string> {
@@ -30,16 +31,16 @@ const sha = (s: string) => createHash("sha256").update(Buffer.from(s)).digest("h
 
 const noGit = async () => ({ exitCode: 1, stdout: "" });
 
-function setup(root: string) {
+function setup(root: string, homeDir: string = root) {
   const db = new Database(":memory:");
   migrateRunnerDb(db);
   const handler = createMutationHandler({
     db,
     workspacePathFor: (id) => (id === "default" ? root : undefined),
-    homeDir: root,
+    homeDir,
     spawn: noGit,
   });
-  return { db, handler };
+  return { db, handler, homeDir };
 }
 
 const write = (commandId: string, path: string, content: string, expectedHash: string) => ({
@@ -56,6 +57,7 @@ async function seedBaseline(
   root: string,
   attemptId: string,
   files: Record<string, string | null>,
+  homeDir: string = root,
 ) {
   const entries = [];
   for (const [path, content] of Object.entries(files)) {
@@ -71,8 +73,9 @@ async function seedBaseline(
       continue;
     }
     const hash = sha(content);
-    await mkdir(join(root, "snapshots", "blobs"), { recursive: true });
-    await Bun.write(join(root, "snapshots", "blobs", hash), content);
+    const blobsDir = join(homeDir, "snapshots", "blobs");
+    await mkdir(blobsDir, { recursive: true });
+    await Bun.write(join(blobsDir, hash), content);
     entries.push({
       path,
       state: "kept" as const,
@@ -271,4 +274,143 @@ test("nested never-collected paths (sub/node_modules) are refused", async () => 
     "FILE_UNSUPPORTED",
   );
   expect(await readFile(join(root, "sub", "node_modules", "x.js"), "utf8")).toBe("dep");
+});
+
+const apply = (commandId: string, planDigest: string) => ({
+  protocolVersion: 1,
+  commandId,
+  runnerId: "runner-a",
+  workspaceId: "default",
+  kind: "workspace.revert",
+  payload: { op: "workspace.revert", planDigest },
+});
+
+async function planDigestFor(db: Database, root: string) {
+  const computed = await computeSnapshotPlan({ db, spawn: noGit }, root);
+  if ("code" in computed) throw new Error(computed.code);
+  return computed.plan.digest!;
+}
+
+/** A separate runner home dir so content-addressed blobs live outside the workspace root. */
+async function homeDirFor(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "cc-web-home-"));
+  roots.push(dir);
+  return dir;
+}
+
+test("applies a matching plan: restores what changed, deletes what was created", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  await writeFile(join(root, "a.txt"), "next\n");
+  await writeFile(join(root, "created.txt"), "new\n");
+  const digest = await planDigestFor(db, root);
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(true);
+  expect(frame.result).toEqual({
+    op: "workspace.revert",
+    planDigest: digest,
+    restored: 1,
+    deleted: 1,
+    failed: null,
+  });
+  expect(await readFile(join(root, "a.txt"), "utf8")).toBe("prev\n");
+  await expect(readFile(join(root, "created.txt"), "utf8")).rejects.toThrow();
+  // Lock released.
+  expect((await import("@cc-web/runner-db")).lockHolder(db, root)).toBeUndefined();
+});
+
+test("a stale plan applies nothing", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  await writeFile(join(root, "a.txt"), "next\n");
+  const digest = await planDigestFor(db, root);
+  // Diverge the tree after the digest was computed.
+  await writeFile(join(root, "a.txt"), "changed\n");
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  expect(frame.error?.code).toBe("REVERT_STALE");
+  expect(await readFile(join(root, "a.txt"), "utf8")).toBe("changed\n");
+});
+
+test("a partial baseline refuses the bulk revert", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  // Seed a snapshot marked partial via recordSnapshot's partial flag. The manifest
+  // mode is null to exercise the 0o644 default path (Ruling 1).
+  const prevHash = sha("prev\n");
+  await mkdir(join(homeDir, "snapshots", "blobs"), { recursive: true });
+  await Bun.write(join(homeDir, "snapshots", "blobs", prevHash), "prev\n");
+  recordSnapshot(db, {
+    attemptId: "a-1",
+    workspacePath: root,
+    collector: "walk",
+    capturedAt: 1,
+    partial: true,
+    entries: [{ path: "a.txt", state: "kept" as const, hash: prevHash, size: 5, mode: null }],
+  });
+  await writeFile(join(root, "a.txt"), "next\n");
+  const digest = await planDigestFor(db, root);
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  expect(frame.error?.code).toBe("SNAPSHOT_PARTIAL");
+});
+
+test("a plan over the file budget refuses", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  for (let i = 0; i < 301; i++) await writeFile(join(root, `f${i}.txt`), "new\n");
+  const digest = await planDigestFor(db, root);
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  expect(frame.error?.code).toBe("PLAN_TOO_LARGE");
+});
+
+test("a held lock refuses the apply and names the holder", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  await writeFile(join(root, "a.txt"), "next\n");
+  const digest = await planDigestFor(db, root);
+  acquireWorkspaceLock(db, root, "revert:holder-x");
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  expect(frame.error?.code).toBe("WORKSPACE_BUSY");
+  expect(frame.error?.message).toMatch(/holder-x/);
+});
+
+test("files the collector excludes are never deleted", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  await writeFile(join(root, "a.txt"), "next\n");
+  await writeFile(join(root, ".env"), "SECRET=1");
+  await mkdir(join(root, "node_modules"), { recursive: true });
+  await writeFile(join(root, "node_modules", "x.js"), "dep");
+  const digest = await planDigestFor(db, root);
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(true);
+  expect(frame.result).toEqual({
+    op: "workspace.revert",
+    planDigest: digest,
+    restored: 1,
+    deleted: 0,
+    failed: null,
+  });
+  expect(await readFile(join(root, ".env"), "utf8")).toBe("SECRET=1");
+  expect(await readFile(join(root, "node_modules", "x.js"), "utf8")).toBe("dep");
 });

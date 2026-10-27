@@ -12,18 +12,24 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
-import { chmod, lstat, open, readFile, rename, rm } from "node:fs/promises";
+import { chmod, lstat, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   BINARY_SNIFF_BYTES,
+  MAX_REVERT_BYTES,
+  MAX_REVERT_FILES,
   MAX_SNAPSHOT_FILE_BYTES,
   type MutationRequest,
   type MutationResult,
   parseMutationRequest,
   type RpcResultFrame,
+  type WorkspaceRevertResult,
   WRITE_CAPABILITY,
 } from "@cc-web/protocol";
-import { latestSnapshot, lockHolder } from "@cc-web/runner-db";
+import { acquireWorkspaceLock, latestSnapshot, lockHolder, releaseAttempt } from "@cc-web/runner-db";
+import { type GitSpawn } from "../git/spawn.ts";
+import type { SnapshotStatusResult } from "../workspace/status.ts";
+import { computeSnapshotPlan } from "../workspace/status.ts";
 import { redactErrorText } from "../execution/redact.ts";
 import { isNeverCollectedPath } from "../workspace/collect.ts";
 import { resolveInsideWorkspace } from "../workspace/paths.ts";
@@ -102,11 +108,7 @@ export function createMutationHandler(
       case "file.revert":
         return fileRevert(commandId, root, homeDir, db, request);
       case "workspace.revert":
-        return refuse(
-          commandId,
-          "UNSUPPORTED_COMMAND",
-          "workspace.revert is not implemented in this runner",
-        );
+        return workspaceRevert(commandId, root, homeDir ?? root, db, request, _spawn as GitSpawn | undefined);
     }
   }
 }
@@ -379,4 +381,217 @@ async function fileRevert(
     ok: true,
     result: { op: "file.revert", path: request.path, action: "restored", hash, size: bytes.length },
   };
+}
+
+/**
+ * `workspace.revert`: apply a previewed whole-workspace revert.
+ *
+ * §7.8 two-phase flow: the operator reviewed a `snapshot.status` preview with its
+ * digest, and the apply supplies that digest. The runner recomputes the plan and
+ * refuses unless the world still matches.
+ *
+ * Rulings applied from the task brief:
+ *  - restore mode comes from the manifest; restored files default to 0o644 when the
+ *    manifest's mode is null (SnapshotEntry carries no mode — protocol shape unchanged);
+ *  - MAX_REVERT_FILES counts the entries the apply acts on (modified + deleted +
+ *    created; excluded untouched and uncounted); MAX_REVERT_BYTES sums the restore
+ *    payload sizes for entries needing a blob read (modified + deleted; created is 0);
+ *  - a null digest means the plan is unplannable -> PLAN_TOO_LARGE;
+ *  - sentinels lock: acquireWorkspaceLock(db, root, `revert:<commandId>`);
+ *  - a second digest mismatch under the lock is REVERT_STALE;
+ *  - a per-file re-verify mismatch mid-apply yields a best-effort
+ *    `{ planDigest, restored, deleted, failed: { path, code } }` result.
+ */
+async function workspaceRevert(
+  commandId: string,
+  root: string,
+  homeDir: string,
+  db: import("bun:sqlite").Database,
+  request: { op: "workspace.revert"; planDigest: string },
+  spawn?: GitSpawn,
+): Promise<RpcResultFrame> {
+  function refuse(code: string, message: string): RpcResultFrame {
+    return { type: "rpc.result", commandId, ok: false, error: { code, message } };
+  }
+
+  // 1. NO_SNAPSHOT / SNAPSHOT_INCOMPARABLE: there must be a baseline to revert to,
+  //    and the collector mode must be reproducible.
+  const snapshot = latestSnapshot(db, root);
+  if (snapshot === undefined) return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
+
+  const planOptions = spawn === undefined ? { db } : { db, spawn };
+  const computed = await computeSnapshotPlan(planOptions, root);
+  if ("code" in computed) {
+    // computeSnapshotPlan only returns NO_SNAPSHOT/SNAPSHOT_INCOMPARABLE; NO_SNAPSHOT
+    // is already asserted above, but keep the guard for completeness.
+    return refuse(computed.code, "cannot build a revert plan for this workspace");
+  }
+  const plan: SnapshotStatusResult = computed.plan;
+  // computeSnapshotPlan returns a plan only when a baseline exists, so baseline is
+  // non-null here; assert it for the type checker.
+  if (plan.baseline === null) return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
+
+  // 2. A partial baseline leaves the delete set unknowable: bulk revert is unsafe.
+  if (plan.baseline.partial) return refuse("SNAPSHOT_PARTIAL", "baseline was truncated; bulk revert is unsafe");
+
+  // 3. Truncated status, or a null (unplannable) digest -> PLAN_TOO_LARGE.
+  if (plan.truncated || plan.digest === null)
+    return refuse("PLAN_TOO_LARGE", "plan is truncated or unplannable");
+
+  // 4. The caller's digest must match the freshly computed plan. A preview that no
+  //    longer matches the tree is refused before any mutation.
+  if (plan.digest !== request.planDigest)
+    return refuse("REVERT_STALE", "workspace state changed since the plan was previewed");
+
+  // 5. Budget check before taking the lock: the apply only acts on revertable entries.
+  const actable = plan.entries.filter((e) => e.revertable);
+  if (actable.length > MAX_REVERT_FILES)
+    return refuse("PLAN_TOO_LARGE", "plan exceeds the per-revert file budget");
+
+  // Restore payload size = the baseline blob size for modified/deleted (entries needing a
+  // blob read); created entries contribute 0 (no blob). Stat the blobs on disk — the
+  // content-addressed blob size equals the manifest size.
+  let restoreBytes = 0;
+  for (const e of actable) {
+    if (e.status === "created") continue; // no blob read, size 0 for the sum.
+    const blob = blobPath(homeDir, e.snapshotHash!);
+    let info: { size: number };
+    try {
+      info = await stat(blob);
+    } catch {
+      return refuse("PLAN_TOO_LARGE", "baseline blob for plan size is missing");
+    }
+    restoreBytes += info.size;
+  }
+  if (restoreBytes > MAX_REVERT_BYTES)
+    return refuse("PLAN_TOO_LARGE", "plan exceeds the per-revert byte budget");
+
+  // 6. Sentinel lock. A run start during the apply observes this holder and is
+  //    answered WORKSPACE_BUSY through the existing lock translation; re-issuing
+  //    the same holder id is a no-op so a retry lands cleanly.
+  const holderId = `revert:${commandId}`;
+  if (!acquireWorkspaceLock(db, root, holderId)) {
+    const holder = lockHolder(db, root);
+    return refuse("WORKSPACE_BUSY", `workspace is currently locked by ${holder ?? "a holder"}`);
+  }
+
+  try {
+    // 7. Re-verify under the lock: a second digest mismatch is REVERT_STALE. The
+    //    preview -> apply race is the one this recompute closes.
+    const recheckOptions = spawn === undefined ? { db } : { db, spawn };
+    const rechecked = await computeSnapshotPlan(recheckOptions, root);
+    if (!("code" in rechecked)) {
+      const recheckPlan = rechecked.plan;
+      if (recheckPlan.digest !== null && recheckPlan.digest !== request.planDigest)
+        return refuse("REVERT_STALE", "workspace state changed during revert");
+    }
+
+    // 8. Apply in sorted order: restores/deletes first (blob reads), then creates
+    //    (no blob), excluded untouched. Sort keeps the ordering deterministic and
+    //    the result attributable to a single file when one fails.
+    const sorted = [...actable].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+    let restored = 0;
+    let deleted = 0;
+    let failed: { path: string; code: string } | null = null;
+
+    for (const entry of sorted) {
+      if (entry.status === "deleted") {
+        // In baseline, absent now: restore the baseline blob for this path.
+        const baselineEntry = snapshot.entries.find(
+          (e) => e.path === entry.path && e.state === "kept",
+        );
+        if (baselineEntry === undefined) {
+          // No kept baseline row but the plan says it should be restored: the
+          // manifest is inconsistent with the plan. Treat as a per-file conflict.
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        const blob = blobPath(homeDir, baselineEntry.hash!);
+        let bytes: Buffer;
+        try {
+          bytes = await readFile(blob);
+        } catch {
+          if (failed === null) failed = { path: entry.path, code: "FILE_UNWRITABLE" };
+          break;
+        }
+        // Re-verify the current state immediately before writing: the file must
+        // still be absent (a second writer could have created it).
+        const current = await readCurrent(join(root, entry.path));
+        if (current.kind !== "absent") {
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        const mode = baselineEntry.mode ?? 0o644;
+        await writeAtomic(join(root, entry.path), bytes, mode);
+        restored++;
+      } else if (entry.status === "modified") {
+        // Present now and in baseline: restore the baseline blob, re-verifying
+        // the current hash matches the previewed currentHash first.
+        const baselineEntry = snapshot.entries.find(
+          (e) => e.path === entry.path && e.state === "kept",
+        );
+        if (baselineEntry === undefined) {
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        const blob = blobPath(homeDir, baselineEntry.hash!);
+        let bytes: Buffer;
+        try {
+          bytes = await readFile(blob);
+        } catch {
+          if (failed === null) failed = { path: entry.path, code: "FILE_UNWRITABLE" };
+          break;
+        }
+        const current = await readCurrent(join(root, entry.path));
+        if (current.kind !== "present" || current.hash !== entry.currentHash) {
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        const mode = baselineEntry.mode ?? 0o644;
+        await writeAtomic(join(root, entry.path), bytes, mode);
+        restored++;
+      } else if (entry.status === "created") {
+        // Present now and not in baseline: delete the regular file only. Re-verify
+        // the current state immediately before acting.
+        const current = await readCurrent(join(root, entry.path));
+        if (current.kind === "absent") {
+          // The file vanished between preview and apply: conflict, stop.
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        if (current.kind === "refused") {
+          // Symlink / binary / oversize: the collector should not have listed it as
+          // created, but a manifest inconsistency must not delete a non-regular file.
+          if (failed === null) failed = { path: entry.path, code: current.code };
+          break;
+        }
+        if (current.hash !== entry.currentHash) {
+          if (failed === null) failed = { path: entry.path, code: "FILE_CONFLICT" };
+          break;
+        }
+        // Guard never-collected paths: a created entry comes from the plan, and the
+        // plan already excludes never-collected paths (the collector skips them), but
+        // keep the guard so a manifest inconsistency cannot delete e.g. .git/config.
+        if (isNeverCollectedPath(entry.path)) {
+          if (failed === null) failed = { path: entry.path, code: "FILE_UNSUPPORTED" };
+          break;
+        }
+        await rm(join(root, entry.path));
+        deleted++;
+      }
+      // Excluded entries never reach here: they are filtered out of `actable`.
+    }
+
+    const result: WorkspaceRevertResult = {
+      op: "workspace.revert",
+      planDigest: request.planDigest,
+      restored,
+      deleted,
+      failed,
+    };
+    return { type: "rpc.result", commandId, ok: true, result };
+  } finally {
+    releaseAttempt(db, `revert:${commandId}`);
+  }
 }
