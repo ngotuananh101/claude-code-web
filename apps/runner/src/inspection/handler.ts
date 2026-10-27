@@ -45,7 +45,7 @@ import {
 import { redactErrorText } from "../execution/redact.ts";
 import { type GitSpawn, gitSpawn } from "../git/spawn.ts";
 import { parsePorcelainStatus } from "../git/status.ts";
-import { resolveInsideWorkspace } from "./paths.ts";
+import { resolveInsideWorkspace } from "../workspace/paths.ts";
 
 export type InspectHandlerOptions = {
   /** The runner's own registration seam — the same one `run.start` resolves through. */
@@ -134,7 +134,11 @@ export function createInspectHandler(
       case "diagnostics":
         return diagnostics(commandId, root, deps);
       case "snapshot.status":
-        return refuse(commandId, "UNSUPPORTED_COMMAND", "snapshot.status is not implemented in this runner");
+        return refuse(
+          commandId,
+          "UNSUPPORTED_COMMAND",
+          "snapshot.status is not implemented in this runner",
+        );
     }
   }
 
