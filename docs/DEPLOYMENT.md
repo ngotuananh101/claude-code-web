@@ -44,11 +44,10 @@ allowlist working unchanged from development.
 
 ## Prerequisites
 
-- Docker with Compose v2 (`docker compose version`); the GHCR override needs
-  v2.24 or newer.
-- This repository's `infra/docker/` directory — the compose files and `.env`.
-  Images are either built from a full checkout or pulled from GHCR (both are
-  documented below).
+- Docker with Compose v2 (`docker compose version`).
+- The files in `infra/docker/` — `compose.prod.yml` for a source build, or
+  `compose.ghcr.yml` for the published image, plus `.env`. The GHCR file is
+  standalone: two files, no checkout.
 - An existing TLS reverse proxy on the host (Caddy, nginx, Traefik, …) if the
   stack is reachable from outside the machine.
 - A free loopback port for the stack; the default is `127.0.0.1:8080`.
@@ -93,27 +92,35 @@ curl -fsS http://127.0.0.1:8080/healthz
 inputs. Each tag is a multi-arch manifest — `linux/amd64` and `linux/arm64` — so
 the host pulls its own architecture with no platform flag.
 
-`infra/docker/compose.ghcr.yml` is an override that points the service at the
-registry image and removes the build context inherited from `compose.prod.yml`.
-Every command gains a second `-f`, and nothing is built on the host:
+`infra/docker/compose.ghcr.yml` is a standalone file for this path: it has no
+`build` section, so `docker compose` is the only tool the host needs.
 
 ```sh
-docker compose -f infra/docker/compose.prod.yml \
-               -f infra/docker/compose.ghcr.yml pull
-docker compose -f infra/docker/compose.prod.yml \
-               -f infra/docker/compose.ghcr.yml up -d
+mkdir -p /opt/cc-web && cd /opt/cc-web
+# copy infra/docker/compose.ghcr.yml here as compose.yml, and create .env
+docker compose pull
+docker compose up -d
 ```
 
-The rest of this document applies unchanged: the same `infra/docker/.env`, the
-same `control-data` volume, the same seeding and proxy steps. A deploy host
-needs `compose.prod.yml`, `compose.ghcr.yml` and `.env` — not the repository or
-a Bun toolchain; the reset build context means `../..` never has to exist.
+A deploy host needs those two files and nothing else: no repository, no Bun
+toolchain. The file reads `.env` next to itself and refuses to start with a
+clear message when `CC_WEB_JWT_SECRET` or `CC_WEB_ALLOWED_ORIGINS` is missing.
+The rest of this document applies unchanged — the same `control-data` volume,
+the same seeding and proxy steps — with `compose.yml` in place of
+`infra/docker/compose.prod.yml` in the commands.
 
-Keep the `-f` set consistent: every command that creates a container (`pull`,
-`up`, and the `run` in the restore path) must include the override, or Compose
-falls back to the locally built `cc-web:prod` image. Commands that act on the
-existing container — `exec`, `cp`, `stop`, `start`, `restart`, `logs`, `down` —
-address it by project and service name and work with either file set.
+### The `.env` on the deploy host
+
+```sh
+cat > .env <<'EOF'
+CC_WEB_JWT_SECRET=<output of: openssl rand -base64 48>
+CC_WEB_ALLOWED_ORIGINS=https://cc.example.com
+EOF
+```
+
+The optional variables (`CC_WEB_SITE_ADDRESS`, `CC_WEB_BIND_ADDR`,
+`CC_WEB_HTTP_PORT`, `CC_WEB_IMAGE_TAG`) have defaults; see the configuration
+reference below.
 
 ### Registry authentication
 
@@ -133,7 +140,7 @@ step from every deploy host.
 ### Tags: `latest` versus `sha-<short>`
 
 Every build publishes `latest` (follows `main`) and `sha-<short>` (one commit,
-immutable). The override defaults to `latest`; pin a release in `.env` when
+immutable). The file defaults to `latest`; pin a release in `.env` when
 reproducibility matters:
 
 ```sh
@@ -233,8 +240,8 @@ git pull
 docker compose -f infra/docker/compose.prod.yml up -d --build
 
 # Upgrade, pulling the image CI published (see "Deploy from prebuilt images").
-docker compose -f infra/docker/compose.prod.yml -f infra/docker/compose.ghcr.yml pull
-docker compose -f infra/docker/compose.prod.yml -f infra/docker/compose.ghcr.yml up -d
+docker compose -f infra/docker/compose.ghcr.yml pull
+docker compose -f infra/docker/compose.ghcr.yml up -d
 
 # Restart the stack.
 docker compose -f infra/docker/compose.prod.yml restart app
@@ -268,9 +275,8 @@ docker compose -f infra/docker/compose.prod.yml exec -T app \
 Restore (the server must be stopped, and the old `-wal`/`-shm` files must go —
 replaying a stale WAL over a replaced database corrupts it). `--entrypoint sh`
 bypasses the supervisor, and `--user bun` keeps the restored file owned by the
-account that writes it at runtime. A GHCR deployment adds
-`-f infra/docker/compose.ghcr.yml` to the `run` command so it uses the pulled
-image instead of trying to build `cc-web:prod`:
+account that writes it at runtime. On a GHCR deploy host, use `compose.yml` in
+place of `infra/docker/compose.prod.yml` below:
 
 ```sh
 docker compose -f infra/docker/compose.prod.yml stop app
@@ -327,14 +333,13 @@ hosts already run one.
 
 | Symptom | Likely cause |
 | --- | --- |
-| `missing required environment variable: CC_WEB_JWT_SECRET` at boot | `.env` missing next to the compose file, or the key is empty |
+| `required variable CC_WEB_JWT_SECRET is missing a value` / `missing required environment variable: CC_WEB_JWT_SECRET` | `.env` missing next to the compose file, or the key is empty |
 | Login answers `403` | Browser origin not in `CC_WEB_ALLOWED_ORIGINS` (scheme/port must match exactly) |
 | Browser socket closes immediately / never opens | Proxy drops `Upgrade`; see the nginx block above |
 | Runner connect answers `401` | Token unknown or revoked — mint a new one |
 | `up` fails: address already in use | Change `CC_WEB_HTTP_PORT` |
 | Container restarts shortly after starting | One of the two processes died; `docker compose logs app` shows which. The supervisor exits on purpose |
 | `pull` answers `unauthorized` / `denied` | The GHCR package is private — `docker login ghcr.io` with a `read:packages` token, or make the package public |
-| Compose rejects `!reset` in `compose.ghcr.yml` | Compose is older than 2.24 — upgrade Docker Compose, or build from source |
 | Database permission error | The volume was created by another user, or a seed/restore ran as root instead of `--user bun` (the WAL files become unwritable) |
 
 ## Related

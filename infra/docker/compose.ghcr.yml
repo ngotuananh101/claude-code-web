@@ -1,12 +1,16 @@
-# Deploy the prebuilt image from GHCR instead of building on this host.
+# Production deployment from the published image — no checkout required.
 #
-# This is an override for compose.prod.yml, not a stack of its own. Use it as
-# the second `-f` in every command:
+# Copy this file and a `.env` beside it to the deploy host, then:
 #
-#   docker compose -f infra/docker/compose.prod.yml \
-#                  -f infra/docker/compose.ghcr.yml pull
-#   docker compose -f infra/docker/compose.prod.yml \
-#                  -f infra/docker/compose.ghcr.yml up -d
+#   docker compose -f compose.ghcr.yml pull
+#   docker compose -f compose.ghcr.yml up -d
+#
+# Rename it to compose.yml (or docker-compose.yml) to drop the `-f`.
+#
+# The image holds Caddy (SPA + reverse proxy) and the control server in one
+# container. Only Caddy's port is published, on loopback by default, so an
+# existing reverse proxy on this host terminates TLS. SQLite lives on the
+# control-data named volume.
 #
 # .github/workflows/images.yml publishes the image on every push to main that
 # touches an app, a workspace package, the seed script or the Docker inputs.
@@ -14,14 +18,35 @@
 # pulls its own architecture — no platform flag needed.
 #
 # CC_WEB_IMAGE_TAG picks the release: `latest` follows main, `sha-<short>` pins
-# one commit. Set it in .env (see .env.example).
+# one commit.
 #
-# `build: !reset null` removes the build context inherited from compose.prod.yml:
-# a deploy host never falls back to building from source, and `up` cannot
-# silently produce an image that differs from what CI tested. Requires Compose
-# 2.24 or newer.
+# The source-build path is compose.prod.yml in this directory; it needs a full
+# checkout. This file never builds anything.
+
+name: cc-web
 
 services:
   app:
     image: ghcr.io/ngotuananh101/claude-code-web:${CC_WEB_IMAGE_TAG:-latest}
-    build: !reset null
+    restart: unless-stopped
+    environment:
+      # Compose reads `.env` next to this file for ${...}; the `:?` messages
+      # turn a missing secret into a clear error instead of a boot failure.
+      CC_WEB_JWT_SECRET: ${CC_WEB_JWT_SECRET:?set CC_WEB_JWT_SECRET in .env (>= 32 bytes)}
+      CC_WEB_ALLOWED_ORIGINS: ${CC_WEB_ALLOWED_ORIGINS:?set CC_WEB_ALLOWED_ORIGINS in .env}
+      CC_WEB_SITE_ADDRESS: ${CC_WEB_SITE_ADDRESS:-:80}
+      CC_WEB_DB: /data/control.sqlite
+      CC_WEB_PORT: "8787"
+    volumes:
+      # Named volume, not a bind mount: the SQLite database (with its WAL and
+      # SHM files) is container state and must survive `up`.
+      - control-data:/data
+    # The image's healthcheck probes both processes (control on 8787, Caddy's
+    # admin API on 2019), so it is not duplicated here.
+    ports:
+      # Loopback by default: the host's existing proxy fronts this. Use
+      # 0.0.0.0 only for direct LAN access.
+      - "${CC_WEB_BIND_ADDR:-127.0.0.1}:${CC_WEB_HTTP_PORT:-8080}:80"
+
+volumes:
+  control-data:
