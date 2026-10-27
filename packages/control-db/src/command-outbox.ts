@@ -29,6 +29,7 @@ export type CommandKind =
   | "approval.respond"
   | "workspace.file.write"
   | "workspace.file.revert"
+  | "workspace.revert"
   | "workspace.inspect"
   | "config.inspect";
 

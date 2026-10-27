@@ -266,4 +266,25 @@ describe("command outbox", () => {
 
     expect(o.get("cmd-1")).toMatchObject({ deliveryState: "accepted", attemptId: "attempt-1" });
   });
+
+  test("a workspace.revert row round-trips through the outbox", async () => {
+    const { db, outbox: o } = outbox();
+
+    await o.enqueue({
+      commandId: "c-revert",
+      runnerId: "r-1",
+      kind: "workspace.revert",
+      payload: { op: "workspace.revert", planDigest: "d1" },
+      issuedAt: new Date(0).toISOString(),
+      workspaceId: "default",
+    });
+
+    // The kind is stored verbatim and the payload survives JSON round-trip, so
+    // the dispatcher can rebuild the workspace.revert frame verbatim from the row.
+    const row = db
+      .query("SELECT kind, payload FROM command_outbox WHERE command_id = ?")
+      .get("c-revert") as { kind: string; payload: string };
+    expect(row.kind).toBe("workspace.revert");
+    expect(JSON.parse(row.payload)).toEqual({ op: "workspace.revert", planDigest: "d1" });
+  });
 });
