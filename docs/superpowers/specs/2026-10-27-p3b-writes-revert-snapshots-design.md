@@ -233,6 +233,7 @@ exhaustive, P3-A already added several):
 | `REVERT_STALE` | the plan digest no longer matches the tree | 409 |
 | `PLAN_TOO_LARGE` | the plan exceeds the apply budget | 409 |
 | `SNAPSHOT_INCOMPARABLE` | the collector mode cannot be reproduced (e.g. `.git` disappeared) | 409 |
+| `FILE_UNWRITABLE` | the write itself failed (EACCES, ENOSPC, …) — the mutation counterpart of P3-A's `FILE_UNREADABLE` | 502 |
 
 ### 7.2 Storage: runner database + content-addressed blobs
 
@@ -481,7 +482,8 @@ Differences from the read routes:
   per-file cap can never succeed; refusing at the edge saves a round trip).
 - `statusForCode` gains the §7.1 table: `FILE_CONFLICT`/`WORKSPACE_BUSY`/
   `REVERT_STALE`/`SNAPSHOT_PARTIAL`/`PLAN_TOO_LARGE`/`SNAPSHOT_INCOMPARABLE` →
-  409, `NO_SNAPSHOT` → 404, `SYMLINK_REFUSED`/`FILE_UNSUPPORTED` → 400.
+  409, `NO_SNAPSHOT` → 404, `SYMLINK_REFUSED`/`FILE_UNSUPPORTED` → 400,
+  `FILE_UNWRITABLE` → 502.
   `retryable` stays code-derived (`RUNNER_UNAVAILABLE` only).
 
 ### 7.11 Web panel
