@@ -25,6 +25,9 @@ export type SessionSummary = {
   lastEventType: string | null;
   lastIngestedAt: number;
   live: boolean;
+  /** The session's pin (§2.3, ADR-006); null for a pre-pin session. */
+  runnerId: string | null;
+  workspaceId: string | null;
 };
 
 type SessionsStore = {

@@ -141,6 +141,13 @@ export type SessionSummary = {
   lastIngestedAt: number;
   /** True while the session holds an active run. */
   live: boolean;
+  /**
+   * The session's pin (§2.3, ADR-006), or null for a session dispatched before
+   * the pin milestone. Nullable is the honest answer: the panel says "workspace
+   * unknown for this session" rather than guessing where it runs.
+   */
+  runnerId: string | null;
+  workspaceId: string | null;
 };
 
 /**
@@ -157,10 +164,13 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
               MAX(e.session_sequence) AS watermark,
               COUNT(*) AS event_count,
               MAX(e.ingested_at) AS last_ingested_at,
-              (a.session_id IS NOT NULL) AS live
+              (a.session_id IS NOT NULL) AS live,
+              s.runner_id AS runner_id,
+              s.workspace_id AS workspace_id
        FROM run_events e
        JOIN runners r ON r.id = e.runner_id
        LEFT JOIN active_runs a ON a.session_id = e.session_id
+       LEFT JOIN sessions s ON s.id = e.session_id
        WHERE r.owner_id = ?
        GROUP BY e.session_id`,
     )
@@ -170,16 +180,25 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     event_count: number;
     last_ingested_at: number;
     live: number;
+    runner_id: string | null;
+    workspace_id: string | null;
   }>;
 
   const dispatched = db
     .prepare(
-      `SELECT DISTINCT a.session_id AS session_id, a.dispatched_at AS dispatched_at
+      `SELECT DISTINCT a.session_id AS session_id, a.dispatched_at AS dispatched_at,
+              s.runner_id AS runner_id, s.workspace_id AS workspace_id
        FROM active_runs a
        JOIN runners r ON r.id = a.runner_id
+       LEFT JOIN sessions s ON s.id = a.session_id
        WHERE r.owner_id = ?`,
     )
-    .all(ownerId) as Array<{ session_id: string; dispatched_at: number }>;
+    .all(ownerId) as Array<{
+    session_id: string;
+    dispatched_at: number;
+    runner_id: string | null;
+    workspace_id: string | null;
+  }>;
 
   const byId = new Map<string, SessionSummary>();
   for (const row of rows) {
@@ -190,6 +209,8 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
       lastEventType: null,
       lastIngestedAt: row.last_ingested_at,
       live: row.live === 1,
+      runnerId: row.runner_id,
+      workspaceId: row.workspace_id,
     });
   }
   for (const row of dispatched) {
@@ -201,6 +222,8 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
       lastEventType: null,
       lastIngestedAt: row.dispatched_at,
       live: true,
+      runnerId: row.runner_id,
+      workspaceId: row.workspace_id,
     });
   }
 

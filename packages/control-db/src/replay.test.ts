@@ -9,6 +9,7 @@ import {
   sessionOwner,
   sessionWatermark,
 } from "./replay.ts";
+import { ensureSessionPin } from "./sessions.ts";
 
 /**
  * The browser's read model over the journal (§12.5).
@@ -223,6 +224,58 @@ describe("listing an owner's sessions", () => {
       lastEventType: null,
       live: true,
     });
+  });
+
+  test("answers a session's pin from the sessions table", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    seedSession(db, "session-1", 2);
+    ensureSessionPin(db, {
+      sessionId: "session-1",
+      ownerId: "owner-1",
+      workspaceId: "ws-1",
+      runnerId: "runner-a",
+    });
+
+    const [summary] = listSessions(db, "owner-1");
+
+    // P3-A ruling 12: the panel's composite id is built from the rail's own
+    // rows, so the pin has to be on them — no second request on the common
+    // path.
+    expect(summary).toMatchObject({ runnerId: "runner-a", workspaceId: "ws-1" });
+  });
+
+  test("reports a null pin for a session with no pin row", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    seedSession(db, "session-1", 1);
+
+    const [summary] = listSessions(db, "owner-1");
+
+    // A session dispatched before the pin milestone has no row. Null is the
+    // honest answer — the panel says "workspace unknown", never guesses.
+    expect(summary).toMatchObject({ runnerId: null, workspaceId: null });
+  });
+
+  test("a dispatched session carries its pin before any event is journaled", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    db.prepare(
+      `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
+       VALUES ('run-1', 'session-fresh', 'runner-a', 'attempt-1', 1)`,
+    ).run();
+    ensureSessionPin(db, {
+      sessionId: "session-fresh",
+      ownerId: "owner-1",
+      workspaceId: "ws-1",
+      runnerId: "runner-a",
+    });
+
+    const [summary] = listSessions(db, "owner-1");
+
+    // The fresh session is exactly the one the panel opens on, so the
+    // dispatched path needs the pin too.
+    expect(summary).toMatchObject({ runnerId: "runner-a", workspaceId: "ws-1" });
   });
 
   test("another owner's sessions are invisible", () => {
