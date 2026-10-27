@@ -22,10 +22,10 @@ import { type GitSpawn, gitSpawn } from "../git/spawn.ts";
 import { isRefusedCredentialBasename } from "./paths.ts";
 
 /** Basenames matching this pattern are atomic-write leftovers; skip them silently. */
-const ATOMIC_WRITE_TMP = /^\.cc-web-.*\.tmp$/;
+export const ATOMIC_WRITE_TMP = /^\.cc-web-.*\.tmp$/;
 
 /** The directories a walk never descends into. */
-const IGNORED_DIRS = new Set([
+export const IGNORED_DIRS = new Set([
   ".git",
   "node_modules",
   "dist",
@@ -34,6 +34,22 @@ const IGNORED_DIRS = new Set([
   "__pycache__",
   "target",
 ]);
+
+/**
+ * Whether `relativePath` (relative to the workspace root) could never appear in a
+ * baseline manifest — i.e. it lives under an ignored directory or matches the
+ * atomic-write temp-file namespace, at any depth. Used by both the collector
+ * (to skip) and the revert handler (to refuse) so the boundary is defined once.
+ */
+export function isNeverCollectedPath(relativePath: string): boolean {
+  const segments = relativePath.split("/");
+  for (const seg of segments) {
+    if (IGNORED_DIRS.has(seg)) return true;
+  }
+  const basename = segments[segments.length - 1];
+  if (basename !== undefined && ATOMIC_WRITE_TMP.test(basename)) return true;
+  return false;
+}
 
 export type Collected = {
   mode: "git" | "walk";

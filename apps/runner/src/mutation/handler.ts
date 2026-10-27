@@ -25,6 +25,7 @@ import {
 } from "@cc-web/protocol";
 import { latestSnapshot, lockHolder } from "@cc-web/runner-db";
 import { redactErrorText } from "../execution/redact.ts";
+import { isNeverCollectedPath } from "../workspace/collect.ts";
 import { resolveInsideWorkspace } from "../workspace/paths.ts";
 import { blobPath } from "../workspace/snapshot.ts";
 
@@ -278,7 +279,10 @@ async function fileRevert(
   const current = await readCurrent(candidate);
   if (current.kind === "refused") return refuse(current.code, current.reason);
 
-  // 6. expectedHash revision check (when not null).
+  // 6. expectedHash revision check. When non-null it must match the current hash;
+  //    when null it asserts the file is absent — present + null expectedHash is a
+  //    conflict (§7.6 kept+present requires sha256(current) === expectedHash, and
+  //    null can never satisfy it).
   if (request.expectedHash !== null) {
     if (current.kind === "absent") {
       return refuse("FILE_CONFLICT", "expected hash does not match current content");
@@ -286,12 +290,20 @@ async function fileRevert(
     if (current.hash !== request.expectedHash) {
       return refuse("FILE_CONFLICT", "expected hash does not match current content");
     }
+  } else if (current.kind === "present") {
+    // null expectedHash asserts absence, but the file is present.
+    return refuse("FILE_CONFLICT", "expected hash does not match current content");
   }
 
   // 7. Revert table.
   if (current.kind === "absent") {
     // Current absent.
     if (entry === undefined) {
+      // absent now + no entry: refuse never-collected paths before the no-op, so a
+      // raw revert can never delete e.g. .git/config (the manifest never has an
+      // entry for it, but "absent + no entry" must not silently succeed).
+      if (isNeverCollectedPath(request.path))
+        return refuse("FILE_UNSUPPORTED", "path is not part of the collectable workspace");
       // absent now + no entry -> no-op.
       return {
         type: "rpc.result",
@@ -331,6 +343,10 @@ async function fileRevert(
 
   // Current present.
   if (entry === undefined) {
+    // present + no entry: refuse never-collected paths before the delete, so a
+    // raw revert can never delete e.g. .git/config or .cc-web-*.tmp leftovers.
+    if (isNeverCollectedPath(request.path))
+      return refuse("FILE_UNSUPPORTED", "path is not part of the collectable workspace");
     // present + no entry -> delete the regular file.
     await rm(resolved.absolutePath);
     return {

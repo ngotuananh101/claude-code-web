@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectWorkspaceFiles } from "./collect.ts";
+import { collectWorkspaceFiles, isNeverCollectedPath } from "./collect.ts";
 
 const roots: string[] = [];
 async function workspace(): Promise<string> {
@@ -87,6 +87,16 @@ test("atomic-write temp files are skipped in git mode too", async () => {
   expect(collected.mode).toBe("git");
   expect(collected.paths).toEqual(["a.txt"]);
   expect(collected.truncated).toBe(false);
+});
+
+test("isNeverCollectedPath flags ignored dirs at any depth and temp-file basenames", () => {
+  expect(isNeverCollectedPath(".git/config")).toBe(true);
+  expect(isNeverCollectedPath("node_modules/x/y.js")).toBe(true);
+  expect(isNeverCollectedPath("sub/node_modules/x.js")).toBe(true);
+  expect(isNeverCollectedPath("dist/output.js")).toBe(true);
+  expect(isNeverCollectedPath(".cc-web-x.tmp")).toBe(true);
+  expect(isNeverCollectedPath("a.txt")).toBe(false);
+  expect(isNeverCollectedPath("src/a.ts")).toBe(false);
 });
 
 test("a cap-stop with exclusions still reports truncation", async () => {

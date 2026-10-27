@@ -234,3 +234,41 @@ test("no baseline, excluded entries and a held lock are refusals", async () => {
   db.query("INSERT OR REPLACE INTO workspace_locks VALUES (?, ?, ?)").run(root, "attempt-1", 1);
   expect((await handler(revert("c3", "a.txt", null))).error?.code).toBe("WORKSPACE_BUSY");
 });
+
+test("expectedHash null with a present kept file is a conflict and untouched", async () => {
+  const root = await workspace();
+  const { db, handler } = setup(root);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" });
+  await writeFile(join(root, "a.txt"), "next\n");
+  expect((await handler(revert("c1", "a.txt", null))).error?.code).toBe("FILE_CONFLICT");
+  expect(await readFile(join(root, "a.txt"), "utf8")).toBe("next\n");
+});
+
+test("never-collected paths (.git, .cc-web-.tmp) are refused even with no entry", async () => {
+  const root = await workspace();
+  const { db, handler } = setup(root);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" });
+  await mkdir(join(root, ".git"), { recursive: true });
+  await writeFile(join(root, ".git", "config"), "repo-config");
+  await writeFile(join(root, ".cc-web-x.tmp"), "leftover");
+  expect((await handler(revert("c1", ".git/config", sha("repo-config")))).error?.code).toBe(
+    "FILE_UNSUPPORTED",
+  );
+  expect((await handler(revert("c2", ".cc-web-x.tmp", sha("leftover")))).error?.code).toBe(
+    "FILE_UNSUPPORTED",
+  );
+  expect(await readFile(join(root, ".git", "config"), "utf8")).toBe("repo-config");
+  expect(await readFile(join(root, ".cc-web-x.tmp"), "utf8")).toBe("leftover");
+});
+
+test("nested never-collected paths (sub/node_modules) are refused", async () => {
+  const root = await workspace();
+  const { db, handler } = setup(root);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" });
+  await mkdir(join(root, "sub", "node_modules"), { recursive: true });
+  await writeFile(join(root, "sub", "node_modules", "x.js"), "dep");
+  expect((await handler(revert("c1", "sub/node_modules/x.js", sha("dep")))).error?.code).toBe(
+    "FILE_UNSUPPORTED",
+  );
+  expect(await readFile(join(root, "sub", "node_modules", "x.js"), "utf8")).toBe("dep");
+});
