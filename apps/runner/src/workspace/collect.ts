@@ -14,11 +14,12 @@
  * enormous tree.
  */
 
-import { readdir, lstat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { MAX_SNAPSHOT_ENTRIES } from "@cc-web/protocol";
 import { type GitSpawn, gitSpawn } from "../git/spawn.ts";
 import { isRefusedCredentialBasename } from "./paths.ts";
-import { MAX_SNAPSHOT_ENTRIES } from "@cc-web/protocol";
 
 /** The directories a walk never descends into. */
 const IGNORED_DIRS = new Set([
@@ -69,7 +70,8 @@ export async function collectWorkspaceFiles(
 }
 
 function collectFromGit(stdout: string, maxEntries: number): Collected {
-  const trimmed = stdout.replace(/\u0000+$/, "");
+  let trimmed = stdout;
+  while (trimmed.endsWith("\0")) trimmed = trimmed.slice(0, -1);
   if (trimmed === "") {
     return { mode: "git", paths: [], excluded: [], truncated: false };
   }
@@ -98,7 +100,7 @@ async function walk(
   if (collected.length + excluded.length >= limit) return;
 
   const dir = join(root, relative || ".");
-  let entries;
+  let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
