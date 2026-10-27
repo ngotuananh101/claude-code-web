@@ -54,6 +54,7 @@ export type CommandKind =
   | "approval.respond"
   | "workspace.file.write"
   | "workspace.file.revert"
+  | "workspace.revert"
   | "workspace.inspect"
   | "config.inspect";
 
@@ -279,6 +280,7 @@ export {
   reconcile,
   type ServerRunState,
 } from "./reconcile.ts";
+export * from "./mutation.ts";
 export {
   type DesiredState,
   type ObservedState,

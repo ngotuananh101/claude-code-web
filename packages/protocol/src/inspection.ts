@@ -18,6 +18,8 @@
  * `..` here would be a second, weaker copy of the rule that actually matters.
  */
 
+import type { MutationResult } from "./mutation.ts";
+
 /** The `capabilities` entry a runner must advertise before it is sent RPCs. */
 export const INSPECT_CAPABILITY = "inspect" as const;
 
@@ -55,7 +57,8 @@ export type WorkspaceInspectRequest =
   | { op: "file.list"; path: string }
   | { op: "file.read"; path: string }
   | { op: "git.diff"; path: string }
-  | { op: "git.changes" };
+  | { op: "git.changes" }
+  | { op: "snapshot.status" };
 
 /**
  * A question about the runner's own configuration. It carries a `workspaceId`
@@ -124,12 +127,34 @@ export type GitDiffResult = {
 
 export type DiagnosticsResult = { op: "diagnostics"; report: DiagnosticsReport };
 
+export type SnapshotEntry = {
+  path: string;
+  status: "modified" | "created" | "deleted" | "excluded";
+  snapshotHash: string | null; currentHash: string | null;
+  size: number | null;
+  revertable: boolean;
+  reason?: string;
+};
+
+export type SnapshotStatusResult = {
+  op: "snapshot.status";
+  baseline: {
+    attemptId: string; sessionId: string | null;
+    capturedAt: string; partial: boolean; fileCount: number;
+  } | null;
+  entries: SnapshotEntry[];
+  counts: { modified: number; created: number; deleted: number; excluded: number };
+  digest: string | null;
+  truncated: boolean;
+};
+
 export type InspectResult =
   | FileListResult
   | FileReadResult
   | GitChangesResult
   | GitDiffResult
-  | DiagnosticsResult;
+  | DiagnosticsResult
+  | SnapshotStatusResult;
 
 /**
  * Runner → Server: the answer to one inspection command.
@@ -143,7 +168,7 @@ export type RpcResultFrame = {
   type: "rpc.result";
   commandId: string;
   ok: boolean;
-  result?: InspectResult;
+  result?: InspectResult | MutationResult;
   error?: { code: string; message: string };
 };
 
@@ -162,6 +187,7 @@ export function parseInspectRequest(kind: string, payload: unknown): InspectRequ
 
   if (kind === "workspace.inspect") {
     if (op === "git.changes") return { op: "git.changes" };
+    if (op === "snapshot.status") return { op: "snapshot.status" };
     if (op === "file.list" || op === "file.read" || op === "git.diff") {
       const path = record["path"];
       if (typeof path !== "string") return undefined;
@@ -199,7 +225,7 @@ export function parseRpcResultFrame(value: unknown): RpcResultFrame | undefined 
     if (typeof result !== "object" || result === null) return undefined;
     const op = (result as Record<string, unknown>)["op"];
     if (typeof op !== "string") return undefined;
-    return { type: "rpc.result", commandId, ok, result: result as InspectResult };
+    return { type: "rpc.result", commandId, ok, result: result as InspectResult | MutationResult };
   }
 
   const error = record["error"];

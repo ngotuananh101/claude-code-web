@@ -133,6 +133,8 @@ export function createInspectHandler(
         return gitDiff(commandId, root, request.path, deps.spawn);
       case "diagnostics":
         return diagnostics(commandId, root, deps);
+      case "snapshot.status":
+        return refuse(commandId, "UNSUPPORTED_COMMAND", "snapshot.status is not implemented in this runner");
     }
   }
 
