@@ -231,6 +231,29 @@ export class CommandOutbox {
       .run(reason, Date.now(), commandId);
   }
 
+  /**
+   * Retire a command that was answered without a receipt (§23 Ruling 2).
+   *
+   * An inspection is not an attempt, so its answer (`rpc.result`) is the only
+   * proof it was served, and there is no attempt id to record. Marking it
+   * through `markAccepted` would write `""` into `attempt_id` and leave a row
+   * that claims an attempt nobody made; leaving it alone would keep it
+   * deliverable until it expired, and then audit a succeeded read as "expired".
+   * Terminal states stay terminal, exactly like the other transitions.
+   */
+  markAnswered(commandId: string): void {
+    const row = this.#require(commandId);
+    if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
+
+    this.#db
+      .query(
+        `UPDATE command_outbox
+            SET delivery_state = 'accepted', accepted_at = ?
+          WHERE command_id = ?`,
+      )
+      .run(Date.now(), commandId);
+  }
+
   get(commandId: string): OutboxCommand | undefined {
     const row = this.#row(commandId);
     return row ? toCommand(row) : undefined;

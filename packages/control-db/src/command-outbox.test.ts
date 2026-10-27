@@ -117,6 +117,26 @@ describe("command outbox", () => {
     expect(() => o.markAccepted("cmd-unknown", "attempt-1")).toThrow(/unknown command/);
   });
 
+  test("an answered command with no receipt is retired without inventing an attempt", async () => {
+    const { outbox: o } = outbox();
+    // §23 Ruling 2: an inspection's answer IS its `rpc.result` — no receipt, and
+    // no attempt for a receipt to name. Retiring it must not fabricate one.
+    await o.enqueue({
+      ...command,
+      kind: "workspace.inspect",
+      payload: { op: "git.changes" },
+    });
+    o.markSent("cmd-1");
+
+    o.markAnswered("cmd-1");
+
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "accepted",
+      attemptId: undefined,
+    });
+    expect(o.pendingFor("runner-a")).toEqual([]);
+  });
+
   test("a rejected command is retired with its reason and is not re-sent", async () => {
     const { outbox: o } = outbox();
     await o.enqueue(command);
