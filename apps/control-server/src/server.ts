@@ -35,6 +35,7 @@ import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts";
+import { handleInspect } from "./routes/inspect-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
 import {
   handleCreateRunner,
@@ -45,6 +46,7 @@ import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
 import { handleListSessions } from "./routes/sessions-routes.ts";
 import { handleUsageStats } from "./routes/stats-routes.ts";
 import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
+import { PendingRpcRequests } from "./rpc/pending-requests.ts";
 import {
   BrowserGateway,
   type BrowserSocketData,
@@ -160,6 +162,13 @@ export function createServer(options: ServerOptions): ServerHandle {
     onWorkspaces: (runnerId, workspaces) => {
       upsertRunnerWorkspaces(options.db, runnerId, workspaces);
     },
+    // §23: a well-formed `rpc.result` answers the HTTP request that is waiting
+    // for it. The gateway deliberately knows nothing about the registry; a
+    // frame with no waiter is dropped (the caller may have timed out a
+    // millisecond earlier, and that race is expected).
+    onRpcResult: (_runnerId, frame) => {
+      pending.settle(frame);
+    },
     // §12.1, §12.2: journal every event before any ACK is written, and let the
     // ACK carry only the contiguous watermark the journal can vouch for. A resend
     // of what already committed answers `duplicate` and allocates nothing, which
@@ -218,6 +227,12 @@ export function createServer(options: ServerOptions): ServerHandle {
   if (options.outbox) {
     dispatcher = new Dispatcher({ outbox: options.outbox, gateway: runnerGateway });
   }
+
+  // Read-only inspection waiters (§23). In memory by design (Ruling 3): the
+  // waiter IS the HTTP request, which cannot outlive the process. The gateway
+  // learns nothing about the registry — it hands every well-formed `rpc.result`
+  // over, and a frame with no waiter is dropped.
+  const pending = new PendingRpcRequests();
 
   // The scheduler is what the HTTP surface will call. Wiring the drain here
   // means `dispatch()` is a complete operation: decide, persist, deliver.
@@ -316,6 +331,88 @@ export function createServer(options: ServerOptions): ServerHandle {
           browserGateway,
           dispatcher,
           decodeURIComponent(decisionMatch[1] ?? ""),
+        );
+      }
+
+      // Read-only inspection (§23 §10). Five routes, one contract: the owner
+      // names a workspace through its composite id and the runner's `rpc.result`
+      // answers the waiting request. The capture stays encoded here —
+      // `parseCompositeId` owns the single decode, so decoding twice would
+      // corrupt an id that legitimately contains a `%`.
+      const filesMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+      if (filesMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          filesMatch[1] ?? "",
+          "file.list",
+        );
+      }
+
+      const fileMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/file$/);
+      if (fileMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          fileMatch[1] ?? "",
+          "file.read",
+        );
+      }
+
+      const changesMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/changes$/);
+      if (changesMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          changesMatch[1] ?? "",
+          "git.changes",
+        );
+      }
+
+      const diffMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/diff$/);
+      if (diffMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          diffMatch[1] ?? "",
+          "git.diff",
+        );
+      }
+
+      const diagnosticsMatch = url.pathname.match(
+        /^\/api\/workspaces\/([^/]+)\/config\/diagnostics$/,
+      );
+      if (diagnosticsMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          diagnosticsMatch[1] ?? "",
+          "diagnostics",
         );
       }
 
