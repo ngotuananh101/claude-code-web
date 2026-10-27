@@ -130,7 +130,8 @@ export type DiagnosticsResult = { op: "diagnostics"; report: DiagnosticsReport }
 export type SnapshotEntry = {
   path: string;
   status: "modified" | "created" | "deleted" | "excluded";
-  snapshotHash: string | null; currentHash: string | null;
+  snapshotHash: string | null;
+  currentHash: string | null;
   size: number | null;
   revertable: boolean;
   reason?: string;
@@ -139,8 +140,11 @@ export type SnapshotEntry = {
 export type SnapshotStatusResult = {
   op: "snapshot.status";
   baseline: {
-    attemptId: string; sessionId: string | null;
-    capturedAt: string; partial: boolean; fileCount: number;
+    attemptId: string;
+    sessionId: string | null;
+    capturedAt: string;
+    partial: boolean;
+    fileCount: number;
   } | null;
   entries: SnapshotEntry[];
   counts: { modified: number; created: number; deleted: number; excluded: number };

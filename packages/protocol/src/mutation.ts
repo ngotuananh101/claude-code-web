@@ -30,7 +30,12 @@ export const MAX_REVERT_BYTES = 16 * 1024 * 1024;
 export const SNAPSHOT_RETENTION = 5;
 
 /** A revision-checked save of one file's contents. */
-export type FileWriteRequest = { op: "file.write"; path: string; content: string; expectedHash: string };
+export type FileWriteRequest = {
+  op: "file.write";
+  path: string;
+  content: string;
+  expectedHash: string;
+};
 /**
  * Restore one file to its baseline, or delete a file the baseline says was
  * created during the run. `expectedHash === null` asserts the path is absent.
@@ -44,14 +49,18 @@ export type MutationRequest = FileWriteRequest | FileRevertRequest | WorkspaceRe
 export type FileWriteResult = { op: "file.write"; path: string; hash: string; size: number };
 /** The runner's answer to a `file.revert`. */
 export type FileRevertResult = {
-  op: "file.revert"; path: string;
+  op: "file.revert";
+  path: string;
   action: "restored" | "deleted" | "none";
-  hash: string | null; size: number | null;
+  hash: string | null;
+  size: number | null;
 };
 /** The runner's answer to a `workspace.revert`. */
 export type WorkspaceRevertResult = {
-  op: "workspace.revert"; planDigest: string;
-  restored: number; deleted: number;
+  op: "workspace.revert";
+  planDigest: string;
+  restored: number;
+  deleted: number;
   failed: { path: string; code: string } | null;
 };
 export type MutationResult = FileWriteResult | FileRevertResult | WorkspaceRevertResult;
@@ -70,15 +79,22 @@ export function parseMutationRequest(kind: string, payload: unknown): MutationRe
   const op = record["op"];
 
   if (kind === "workspace.file.write" && op === "file.write") {
-    const path = record["path"], content = record["content"], expectedHash = record["expectedHash"];
-    if (typeof path !== "string" || typeof content !== "string" || typeof expectedHash !== "string") {
+    const path = record["path"],
+      content = record["content"],
+      expectedHash = record["expectedHash"];
+    if (
+      typeof path !== "string" ||
+      typeof content !== "string" ||
+      typeof expectedHash !== "string"
+    ) {
       return undefined;
     }
     return { op, path, content, expectedHash };
   }
 
   if (kind === "workspace.file.revert" && op === "file.revert") {
-    const path = record["path"], expectedHash = record["expectedHash"];
+    const path = record["path"],
+      expectedHash = record["expectedHash"];
     if (typeof path !== "string") return undefined;
     if (expectedHash !== null && typeof expectedHash !== "string") return undefined;
     return { op, path, expectedHash };
