@@ -5,6 +5,7 @@ import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
+import InspectPanel from "../components/InspectPanel.vue";
 import {
   closeSession,
   loadSessions,
@@ -112,35 +113,46 @@ async function refreshNow(): Promise<void> {
 </script>
 
 <template>
-  <section class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+  <section class="relative flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
     <template v-if="active">
-      <header
-        class="z-10 flex items-baseline justify-between gap-4 px-7 pt-4 pb-3"
-      >
-        <span class="truncate font-mono text-[13px]">{{ active.sessionId }}</span>
-        <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
-          <span>{{ active.watermark }}</span>
-          <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
-            <i class="size-[7px] animate-pulse rounded-full bg-primary" />
-            đang chạy
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header
+          class="z-10 flex items-baseline justify-between gap-4 px-7 pt-4 pb-3"
+        >
+          <span class="truncate font-mono text-[13px]">{{ active.sessionId }}</span>
+          <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
+            <span>{{ active.watermark }}</span>
+            <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
+              <i class="size-[7px] animate-pulse rounded-full bg-primary" />
+              đang chạy
+            </span>
           </span>
-        </span>
-      </header>
+        </header>
 
-      <EventJournal
-        v-if="sessions.stream !== null"
-        class="z-10"
-        :events="sessions.stream.events"
-        :needs-resync="sessions.stream.needsResync"
-        :session-live="activeLive"
+        <EventJournal
+          v-if="sessions.stream !== null"
+          class="z-10"
+          :events="sessions.stream.events"
+          :needs-resync="sessions.stream.needsResync"
+          :session-live="activeLive"
+        />
+        <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          Đang chờ journal…
+        </div>
+
+        <div class="z-10 px-7 pt-2 pb-4.5">
+          <Composer :session-id="routeSession" :active-run-id="liveRunId" @started="onStarted" />
+        </div>
+      </div>
+
+      <!-- §16.1's secondary panel: read-only inspection beside the journal on
+           wide screens, stacked under it on narrow ones. It reads the pin from
+           the rail's list, so it costs no extra request of its own until a tab
+           is opened. -->
+      <InspectPanel
+        :session-id="active.sessionId"
+        class="z-10 h-72 shrink-0 border-t border-border/60 lg:h-auto lg:w-[360px] lg:border-t-0 lg:border-l"
       />
-      <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
-        Đang chờ journal…
-      </div>
-
-      <div class="z-10 px-7 pt-2 pb-4.5">
-        <Composer :session-id="routeSession" :active-run-id="liveRunId" @started="onStarted" />
-      </div>
     </template>
 
     <template v-else>
