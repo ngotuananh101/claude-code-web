@@ -438,12 +438,9 @@ async function workspaceRevert(
   if (plan.truncated || plan.digest === null)
     return refuse("PLAN_TOO_LARGE", "plan is truncated or unplannable");
 
-  // 4. The caller's digest must match the freshly computed plan. A preview that no
-  //    longer matches the tree is refused before any mutation.
-  if (plan.digest !== request.planDigest)
-    return refuse("REVERT_STALE", "workspace state changed since the plan was previewed");
-
-  // 5. Budget check before taking the lock: the apply only acts on revertable entries.
+  // 4. Budget check before the digest comparison (§7.8 ordering): the apply only acts
+  //    on revertable entries. A plan that is both over budget and stale must refuse
+  //    PLAN_TOO_LARGE, not REVERT_STALE.
   const actable = plan.entries.filter((e) => e.revertable);
   if (actable.length > MAX_REVERT_FILES)
     return refuse("PLAN_TOO_LARGE", "plan exceeds the per-revert file budget");
@@ -465,6 +462,11 @@ async function workspaceRevert(
   }
   if (restoreBytes > MAX_REVERT_BYTES)
     return refuse("PLAN_TOO_LARGE", "plan exceeds the per-revert byte budget");
+
+  // 5. The caller's digest must match the freshly computed plan. A preview that no
+  //    longer matches the tree is refused before any mutation.
+  if (plan.digest !== request.planDigest)
+    return refuse("REVERT_STALE", "workspace state changed since the plan was previewed");
 
   // 6. Sentinel lock. A run start during the apply observes this holder and is
   //    answered WORKSPACE_BUSY through the existing lock translation; re-issuing

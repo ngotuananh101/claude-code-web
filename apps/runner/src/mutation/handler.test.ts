@@ -376,6 +376,24 @@ test("a plan over the file budget refuses", async () => {
   expect(frame.error?.code).toBe("PLAN_TOO_LARGE");
 });
 
+test("a stale and over-budget plan refuses PLAN_TOO_LARGE, not REVERT_STALE", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  const { db, handler } = setup(root, homeDir);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  // Compute the digest while the tree matches the baseline, then diverge AND push the
+  // plan over the file budget so the plan is simultaneously stale and over budget.
+  await writeFile(join(root, "a.txt"), "next\n");
+  const digest = await planDigestFor(db, root);
+  for (let i = 0; i < 301; i++) await writeFile(join(root, `f${i}.txt`), "new\n");
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  // §7.8 ordering: budget is checked before the digest comparison, so an over-budget
+  // plan refuses PLAN_TOO_LARGE even though it is also stale.
+  expect(frame.error?.code).toBe("PLAN_TOO_LARGE");
+});
+
 test("a held lock refuses the apply and names the holder", async () => {
   const root = await workspace();
   const homeDir = await homeDirFor();
