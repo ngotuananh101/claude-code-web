@@ -76,7 +76,6 @@ const diagnosticsLoading = ref(false);
 
 const crumbs = computed(() => breadcrumbs(directory.value));
 const diffLines = computed(() => (diff.value === null ? [] : classifyDiffLines(diff.value.diff)));
-const breadcrumbPrefix = computed(() => [...crumbs.value]);
 
 const STATUS_LABELS: Record<string, string> = {
   added: "thêm",
@@ -178,9 +177,11 @@ function goUp(): void {
 }
 
 // A different session is a different workspace: drop everything the previous
-// one showed rather than presenting its contents under a new header.
+// one showed rather than presenting its contents under a new header. The key
+// is a primitive so the rail's 15 s refresh — which replaces the session array
+// but not this session's pin — does not reset the panel mid-navigation.
 watch(
-  () => [props.sessionId, workspace.value] as const,
+  () => `${props.sessionId}\u0000${workspace.value ?? ""}`,
   () => {
     directory.value = "";
     listing.value = null;
@@ -238,7 +239,7 @@ watch(tab, (next) => {
           <button type="button" class="hover:text-foreground" @click="loadFiles('')">
             workspace
           </button>
-          <template v-for="crumb in breadcrumbPrefix" :key="crumb.path">
+          <template v-for="crumb in crumbs" :key="crumb.path">
             <span>/</span>
             <button type="button" class="hover:text-foreground" @click="loadFiles(crumb.path)">
               {{ crumb.name }}
