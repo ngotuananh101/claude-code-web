@@ -101,4 +101,36 @@ export function migrateRunnerDb(db: Database): void {
       trusted_at    INTEGER NOT NULL
     );
   `);
+
+  // Run-start file snapshots (§15.4, §18.2): one snapshot_runs row per captured
+  // baseline, one file_snapshots row per file in it. Content itself lives in
+  // on-disk blobs keyed by hash; the DB only stores references.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS snapshot_runs (
+      attempt_id     TEXT PRIMARY KEY,
+      workspace_path TEXT NOT NULL,      -- canonical realpath
+      session_id     TEXT,
+      collector      TEXT NOT NULL,      -- 'git' | 'walk'
+      captured_at    INTEGER NOT NULL,
+      partial        INTEGER NOT NULL DEFAULT 0,
+      file_count     INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_snapshots (
+      attempt_id TEXT NOT NULL,
+      path       TEXT NOT NULL,          -- workspace-relative
+      state      TEXT NOT NULL,          -- 'kept' | 'excluded'
+      hash       TEXT,                  -- sha256 hex, null when excluded
+      size       INTEGER,
+      mode       INTEGER,
+      reason     TEXT,                  -- excluded: credential | symlink | oversize | unbaselined | non_regular
+      PRIMARY KEY (attempt_id, path)
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS file_snapshots_hash ON file_snapshots (hash);
+  `);
 }

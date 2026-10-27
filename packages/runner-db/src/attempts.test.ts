@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import {
+  acquireWorkspaceLock,
   attemptState,
   beginAttempt,
   finishAttempt,
@@ -258,5 +259,25 @@ describe("the SDK session id", () => {
   test("an unknown session has no session id", () => {
     const db = freshDb();
     expect(sdkSessionIdForSession(db, "session-1")).toBeUndefined();
+  });
+});
+
+describe("workspace lock sentinel", () => {
+  test("a sentinel holder blocks a run start and names itself", () => {
+    const db = freshDb();
+    expect(acquireWorkspaceLock(db, "/w", "revert:c1")).toBe(true);
+    const begun = beginAttempt(db, {
+      attemptId: "a-1",
+      sessionId: "s",
+      runId: "r",
+      workspacePath: "/w",
+    });
+    expect(begun).toEqual({ ok: false, reason: "workspace_locked", holderAttemptId: "revert:c1" });
+    expect(acquireWorkspaceLock(db, "/w", "revert:c1")).toBe(true); // idempotent for the holder
+    expect(acquireWorkspaceLock(db, "/w", "revert:c2")).toBe(false); // second mutation refused
+    releaseAttempt(db, "revert:c1");
+    expect(
+      beginAttempt(db, { attemptId: "a-1", sessionId: "s", runId: "r", workspacePath: "/w" }),
+    ).toEqual({ ok: true });
   });
 });

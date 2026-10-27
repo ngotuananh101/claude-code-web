@@ -15,6 +15,7 @@ export {
 } from "./approvals.ts";
 export {
   type AttemptState,
+  acquireWorkspaceLock,
   attemptState,
   type BeginInput,
   type BeginResult,
@@ -47,3 +48,13 @@ export {
   fingerprintCommand,
   type InboxState,
 } from "./inbox.ts";
+export {
+  latestSnapshot,
+  pruneSnapshots,
+  recordSnapshot,
+  type SnapshotEntry,
+  type SnapshotRun,
+  type SnapshotRunInput,
+  type SnapshotState,
+  type StoredSnapshotEntry,
+} from "./snapshots.ts";

@@ -133,6 +133,42 @@ export function releaseAttempt(db: Database, attemptId: string): void {
   db.prepare("DELETE FROM workspace_locks WHERE attempt_id = ?").run(attemptId);
 }
 
+/**
+ * Claim the workspace lock for a mutation holder (§7.9, §11.4).
+ *
+ * Mutations (save, per-file revert, workspace revert) all take the same
+ * `workspace_locks` row a run uses — by their own sentinel id such as
+ * `revert:<commandId>` or `write:<commandId>`, never a real attempt id. A run
+ * start during an apply sees that sentinel as the holder and answers
+ * `workspace_locked` through the existing translation, so the two lanes cannot
+ * interleave.
+ *
+ * Idempotent for the holder: re-issuing with the same `holderId` is a no-op
+ * success. A different holder is refused while the lock is held.
+ */
+export function acquireWorkspaceLock(
+  db: Database,
+  workspacePath: string,
+  holderId: string,
+  now: number = Date.now(),
+): boolean {
+  const tx = db.transaction(() => {
+    const row = db
+      .prepare("SELECT attempt_id FROM workspace_locks WHERE workspace_path = ?")
+      .get(workspacePath) as { attempt_id: string } | null;
+
+    if (row !== null) return row.attempt_id === holderId;
+
+    db.prepare(
+      "INSERT INTO workspace_locks (workspace_path, attempt_id, acquired_at) VALUES (?, ?, ?)",
+    ).run(workspacePath, holderId, now);
+
+    return true;
+  });
+
+  return tx();
+}
+
 /** The attempt that holds a workspace lock, if any. */
 export function lockHolder(db: Database, workspacePath: string): string | undefined {
   const row = db
