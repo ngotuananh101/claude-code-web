@@ -21,6 +21,9 @@ import { MAX_SNAPSHOT_ENTRIES } from "@cc-web/protocol";
 import { type GitSpawn, gitSpawn } from "../git/spawn.ts";
 import { isRefusedCredentialBasename } from "./paths.ts";
 
+/** Basenames matching this pattern are atomic-write leftovers; skip them silently. */
+const ATOMIC_WRITE_TMP = /^\.cc-web-.*\.tmp$/;
+
 /** The directories a walk never descends into. */
 const IGNORED_DIRS = new Set([
   ".git",
@@ -74,13 +77,21 @@ export async function collectWorkspaceFiles(
   };
 }
 
+function isAtomicWriteTmp(path: string): boolean {
+  const name = path.split("/").pop();
+  return name !== undefined && ATOMIC_WRITE_TMP.test(name);
+}
+
 function collectFromGit(stdout: string, maxEntries: number): Collected {
   let trimmed = stdout;
   while (trimmed.endsWith("\0")) trimmed = trimmed.slice(0, -1);
   if (trimmed === "") {
     return { mode: "git", paths: [], excluded: [], truncated: false };
   }
-  const paths = trimmed.split("\0").sort();
+  const paths = trimmed
+    .split("\0")
+    .filter((p) => !isAtomicWriteTmp(p))
+    .sort();
   return {
     mode: "git",
     paths: paths.slice(0, maxEntries),
@@ -142,6 +153,11 @@ async function walk(
       if (collected.length + excluded.length >= limit) stoppedAtLimit = true;
       continue;
     }
+
+    // A regular file: skip atomic-write temp files silently. They must never
+    // enter a manifest (they would churn the plan digest and a later revert
+    // would try to rewrite junk).
+    if (ATOMIC_WRITE_TMP.test(entry.name)) continue;
 
     // A regular file: check the credential basename before admitting it.
     if (isRefusedCredentialBasename(entry.name)) {

@@ -61,6 +61,34 @@ test("crossing the entry cap truncates instead of silently shrinking", async () 
   expect(collected.paths).toHaveLength(3);
 });
 
+test("atomic-write temp files are skipped in the walk, not collected or excluded", async () => {
+  const root = await workspace();
+  await writeFile(join(root, "a.txt"), "prev\n");
+  // Matches the writeAtomic temp-file pattern: .cc-web-<uuid>.tmp
+  await writeFile(
+    join(root, ".cc-web-2f1c9b1e-8a44-4b7a-9d1e-0123456789ab.tmp"),
+    "leftover from a crashed write",
+  );
+  const collected = await collectWorkspaceFiles(root, { spawn: noGit.spawn });
+  expect(collected.paths).toEqual(["a.txt"]);
+  expect(collected.excluded).toEqual([]);
+  expect(collected.truncated).toBe(false);
+});
+
+test("atomic-write temp files are skipped in git mode too", async () => {
+  const root = await workspace();
+  // git ls-files --cached --others --exclude-standard lists untracked files,
+  // so a temp file from a crashed write would appear here if not filtered.
+  const spawn = async () => ({
+    exitCode: 0,
+    stdout: "a.txt\0.cc-web-2f1c9b1e-8a44-4b7a-9d1e-0123456789ab.tmp\0",
+  });
+  const collected = await collectWorkspaceFiles(root, { spawn });
+  expect(collected.mode).toBe("git");
+  expect(collected.paths).toEqual(["a.txt"]);
+  expect(collected.truncated).toBe(false);
+});
+
 test("a cap-stop with exclusions still reports truncation", async () => {
   // Two symlinks (excluded) plus five regular files in the same directory.
   // With maxEntries 3 the walk hits the combined cap (collected + excluded
