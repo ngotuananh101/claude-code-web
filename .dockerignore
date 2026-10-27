@@ -1,0 +1,31 @@
+# Build-context hygiene for the production images.
+#
+# The images copy source only: local databases, build output, editor state and
+# secrets are never part of a build. Keeping node_modules and dist out also
+# means a stale local build cannot leak into an image layer.
+.git
+.github
+.gitignore
+node_modules
+**/node_modules
+dist
+**/dist
+data
+**/data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.tsbuildinfo
+*.log
+.env
+.env.*
+.env.example
+.remember
+**/.remember
+.zcode
+**/.zcode
+.superpowers
+**/.superpowers
+docs/superpowers
+test-results
+coverage

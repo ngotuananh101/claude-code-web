@@ -1,0 +1,74 @@
+# Production image for the Control Server (§20.1, §20.3).
+#
+# Scope is the control plane only. The Vue client ships in the Caddy image built
+# from Dockerfile.web, and Runners stay host-native: a Runner inherits the
+# operator's Claude config and provider credentials, which a container does not
+# have (§20.3).
+#
+# Deployed by infra/docker/compose.prod.yml; operating notes in
+# docs/DEPLOYMENT.md.
+
+# Pinned to the Bun version Phase 0 verified. Bump together with bun.lock.
+FROM oven/bun:1.4.3-debian
+
+# sqlite3 is for consistent backups (§20.5): `.backup` uses SQLite's backup API,
+# which is safe while WAL is active — copying the main file is not.
+# ca-certificates is future-proofing for outbound TLS; requests to this image
+# are answered locally today.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sqlite3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first, so a source edit does not invalidate the install layer.
+# Every workspace package.json is copied because the root `workspaces` globs and
+# the lockfile name all of them.
+COPY package.json bun.lock ./
+COPY apps/control-server/package.json apps/control-server/
+COPY apps/runner/package.json apps/runner/
+COPY apps/web/package.json apps/web/
+COPY packages/agent-adapter/package.json packages/agent-adapter/
+COPY packages/control-db/package.json packages/control-db/
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/runner-db/package.json packages/runner-db/
+COPY packages/shared/package.json packages/shared/
+
+# Production dependencies only, filtered to the control server and its
+# workspace dependencies: a plain `--production` install would also pull the
+# web client's runtime dependencies (Vue, fonts, icons) into an image that
+# never serves them. `--ignore-scripts` skips the postinstall that embeds the
+# Claude Code binary: that asset belongs to the Runner, and the control plane
+# never imports @cc-web/agent-adapter. Reproducibility comes from the pinned
+# base image, not `--frozen-lockfile` (the lockfile names optional platform
+# binaries that a different host would skip).
+RUN bun install --production --ignore-scripts --filter '@cc-web/control-server'
+
+# A filtered install links the workspace packages into the workspace's own
+# node_modules, not the root. The seed script runs from /app/scripts, so point
+# the root at the same links instead of duplicating the packages.
+RUN mkdir -p /app/node_modules \
+    && ln -sfn /app/apps/control-server/node_modules/@cc-web /app/node_modules/@cc-web
+
+COPY . .
+
+# The database lives on the volume mount, and the listen port is fixed so the
+# Caddy reverse proxy has a stable upstream. Both are set here so a bare
+# `docker run` works without extra flags.
+ENV CC_WEB_DB=/data/control.sqlite \
+    CC_WEB_PORT=8787
+
+RUN mkdir -p /data && chown bun:bun /data
+
+# Non-root, matching the harness image; the named volume is initialised with
+# this directory's ownership.
+USER bun
+VOLUME ["/data"]
+EXPOSE 8787
+
+# Bun answers its own liveness check — the image has no curl, and adding one
+# for a single probe is not worth it.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["bun", "-e", "fetch('http://127.0.0.1:8787/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
+CMD ["bun", "run", "apps/control-server/src/index.ts"]
