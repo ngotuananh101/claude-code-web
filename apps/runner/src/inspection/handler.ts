@@ -46,6 +46,7 @@ import { redactErrorText } from "../execution/redact.ts";
 import { type GitSpawn, gitSpawn } from "../git/spawn.ts";
 import { parsePorcelainStatus } from "../git/status.ts";
 import { resolveInsideWorkspace } from "../workspace/paths.ts";
+import type { StatusOutcome } from "../workspace/status.ts";
 
 export type InspectHandlerOptions = {
   /** The runner's own registration seam — the same one `run.start` resolves through. */
@@ -54,6 +55,12 @@ export type InspectHandlerOptions = {
   now?: () => number;
   homeDir?: string;
   env?: Record<string, string | undefined>;
+  /**
+   * Optional seam for the read-only snapshot status op. When absent the op is
+   * refused as `UNSUPPORTED_COMMAND`, so an older runner binary that predates
+   * the feature still answers cleanly instead of throwing.
+   */
+  snapshotStatus?: (root: string) => Promise<StatusOutcome>;
 };
 
 /** Advisory: which optional command kinds this runner implements (Ruling 13). */
@@ -107,7 +114,12 @@ export function createInspectHandler(
     }
 
     try {
-      return await dispatch(commandId, root, request, { spawn, home, env });
+      return await dispatch(commandId, root, request, {
+        spawn,
+        home,
+        env,
+        ...(options.snapshotStatus !== undefined ? { snapshotStatus: options.snapshotStatus } : {}),
+      });
     } catch (error) {
       // A throw here is a bug or a dying filesystem, not a result. Answer with a
       // redacted message so the waiter settles instead of timing out blind.
@@ -120,7 +132,12 @@ export function createInspectHandler(
     commandId: string,
     root: string,
     request: InspectRequest,
-    deps: { spawn: GitSpawn; home: string; env: Record<string, string | undefined> },
+    deps: {
+      spawn: GitSpawn;
+      home: string;
+      env: Record<string, string | undefined>;
+      snapshotStatus?: (root: string) => Promise<StatusOutcome>;
+    },
   ): Promise<RpcResultFrame> {
     switch (request.op) {
       case "file.list":
@@ -133,12 +150,18 @@ export function createInspectHandler(
         return gitDiff(commandId, root, request.path, deps.spawn);
       case "diagnostics":
         return diagnostics(commandId, root, deps);
-      case "snapshot.status":
-        return refuse(
-          commandId,
-          "UNSUPPORTED_COMMAND",
-          "snapshot.status is not implemented in this runner",
-        );
+      case "snapshot.status": {
+        const seam = deps.snapshotStatus;
+        if (seam === undefined)
+          return refuse(
+            commandId,
+            "UNSUPPORTED_COMMAND",
+            "snapshot.status is not provided by this runner",
+          );
+        const outcome = await seam(root);
+        if (outcome.ok) return answer(commandId, outcome.result);
+        return refuse(commandId, outcome.code, "snapshot status could not be computed");
+      }
     }
   }
 

@@ -414,3 +414,43 @@ describe("command shape", () => {
     expect(frame).toMatchObject({ ok: false, error: { code: "UNSUPPORTED_COMMAND" } });
   });
 });
+
+describe("snapshot.status", () => {
+  test("snapshot.status is served through the injected seam", async () => {
+    const root = await makeRoot();
+    const handler = createInspectHandler({
+      workspacePathFor: (id) => (id === "default" ? root : undefined),
+      snapshotStatus: async () => ({
+        ok: true,
+        result: {
+          op: "snapshot.status",
+          baseline: null,
+          entries: [],
+          counts: { modified: 0, created: 0, deleted: 0, excluded: 0 },
+          digest: null,
+          truncated: false,
+        },
+      }),
+    });
+    const frame = await handler({
+      commandId: "c1",
+      kind: "workspace.inspect",
+      workspaceId: "default",
+      payload: { op: "snapshot.status" },
+    });
+    expect(frame.ok).toBe(true);
+  });
+
+  test("without the seam snapshot.status is unsupported", async () => {
+    const root = await makeRoot();
+    const handler = createInspectHandler({ workspacePathFor: () => root });
+    const frame = await handler({
+      commandId: "c1",
+      kind: "workspace.inspect",
+      workspaceId: "default",
+      payload: { op: "snapshot.status" },
+    });
+    expect(frame.ok).toBe(false);
+    expect(frame.error?.code).toBe("UNSUPPORTED_COMMAND");
+  });
+});
