@@ -33,6 +33,9 @@ import { prepareBranch } from "./git/checkout.ts";
 import { gitSpawn } from "./git/spawn.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
 import { createInspectHandler, INSPECT_CAPABILITIES } from "./inspection/handler.ts";
+import { createMutationHandler, MUTATION_CAPABILITIES } from "./mutation/handler.ts";
+import { createBaselineCapture } from "./workspace/snapshot.ts";
+import { createSnapshotStatus } from "./workspace/status.ts";
 
 /**
  * A declaration is an array, or a thunk producing one. The thunk is how M4
@@ -42,8 +45,18 @@ import { createInspectHandler, INSPECT_CAPABILITIES } from "./inspection/handler
  */
 export type DeclaredWorkspacesOption = DeclaredWorkspace[] | (() => DeclaredWorkspace[]);
 
-/** The two read-only command kinds the daemon routes away from the run controller. */
+/** The full set of command kinds this runner implements, unioned per lane. */
+const RUNNER_CAPABILITIES: string[] = [...INSPECT_CAPABILITIES, ...MUTATION_CAPABILITIES];
+
+/** The read-only command kinds the daemon routes to the inspection handler. */
 const INSPECT_KINDS = new Set(["workspace.inspect", "config.inspect"]);
+
+/** The write/revert command kinds the daemon routes to the mutation handler. */
+const MUTATION_KINDS = new Set([
+  "workspace.file.write",
+  "workspace.file.revert",
+  "workspace.revert",
+]);
 
 /**
  * Whether a raw command frame is an inspection. Reads `kind` defensively: a
@@ -54,6 +67,13 @@ function isInspectKind(command: unknown): boolean {
   if (typeof command !== "object" || command === null) return false;
   const kind = (command as Record<string, unknown>)["kind"];
   return typeof kind === "string" && INSPECT_KINDS.has(kind);
+}
+
+/** Same seam as `isInspectKind`, but for the write/revert lane. */
+function isMutationKind(command: unknown): boolean {
+  if (typeof command !== "object" || command === null) return false;
+  const kind = (command as Record<string, unknown>)["kind"];
+  return typeof kind === "string" && MUTATION_KINDS.has(kind);
 }
 
 export function resolveDeclaredWorkspaces(
@@ -88,7 +108,7 @@ export function helloFrame(input: {
     workspaces: input.declaredWorkspaces ?? [],
     // Ruling 13: the server gates an inspection on this, so a new server never
     // dispatches one to a runner that would misread the kind as a run start.
-    capabilities: INSPECT_CAPABILITIES,
+    capabilities: RUNNER_CAPABILITIES,
   };
 }
 
@@ -138,10 +158,19 @@ export type DaemonOptions = {
   shutdownGraceMs?: number;
   /**
    * Answers a read-only inspection (§23). Defaults to the real handler built
-   * from `workspacePathFor`, so the composition and its tests use the same
-   * wiring; tests inject a fake to observe routing without a filesystem.
+   * from `workspacePathFor` and `createSnapshotStatus`, so the composition and
+   * its tests use the same wiring; tests inject a fake to observe routing
+   * without a filesystem.
    */
   inspect?: (command: unknown) => Promise<RpcResultFrame>;
+  /**
+   * Answers a write/revert command (§7.1). Defaults to the real handler built
+   * from `workspacePathFor` and a snapshot status composed inside the inspect
+   * handler; tests inject a fake to observe routing without a filesystem.
+   */
+  mutation?: (command: unknown) => Promise<RpcResultFrame>;
+  /** The run-start baseline capture (P3-B). See `RunController` wiring. */
+  captureBaseline?: ExecuteOptions["captureBaseline"];
   onEvent?: (event: unknown) => void;
 };
 
@@ -226,6 +255,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     sdk: options.sdk ?? ((input) => createSdkStream(input)),
     prepareWorkspace:
       options.prepareWorkspace ?? ((path, branch) => prepareBranch(path, branch, gitSpawn)),
+    captureBaseline:
+      options.captureBaseline ??
+      createBaselineCapture({ db, homeDir: options.identityDir, spawn: gitSpawn }),
     onSettled: () => pump.flush(),
     // §13: a suspended run never settles, so the gate triggers the flush
     // itself — the approval request must ship the moment it is appended.
@@ -236,18 +268,33 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // registration — the same seam `run.start` uses — so the server's `path` is
   // display metadata and never authoritative. Defaulting from the daemon's
   // already-resolved `workspacePathFor` keeps the env→path wiring in `main.ts`
-  // as its single source of truth.
+  // as its single source of truth. The inspect handler owns the readonly
+  // snapshot.status seam, so it is composed here too.
   const inspect =
     options.inspect ??
-    createInspectHandler({ workspacePathFor: options.workspacePathFor ?? (() => undefined) });
+    createInspectHandler({
+      workspacePathFor: options.workspacePathFor ?? (() => undefined),
+      snapshotStatus: createSnapshotStatus({ db, spawn: gitSpawn }),
+    });
+
+  const mutate =
+    options.mutation ??
+    createMutationHandler({
+      db,
+      homeDir: options.identityDir,
+      spawn: gitSpawn,
+      workspacePathFor: options.workspacePathFor ?? (() => undefined),
+    });
 
   // Ruling 15's pre-switch. `runs.handle` persists the command before answering
   // and starts the run after, so the receipt keeps meaning "durable", not
-  // "finished" (§9.4). An inspect never reaches it.
+  // "finished" (§9.4). Inspects and mutations never reach it.
   const dispatch = (command: unknown): Promise<CommandOutcome> =>
     isInspectKind(command)
       ? inspect(command).then((frame) => ({ receipt: null, results: [frame] }))
-      : runs.handle(command).then((receipt) => ({ receipt }));
+      : isMutationKind(command)
+        ? mutate(command).then((frame) => ({ receipt: null, results: [frame] }))
+        : runs.handle(command).then((receipt) => ({ receipt }));
 
   const loop = new ReconnectLoop({
     runnerId: identity.runnerId,

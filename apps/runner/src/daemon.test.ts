@@ -300,6 +300,18 @@ describe("the hello frame (M4 branches)", () => {
   });
 });
 
+describe("the hello frame advertises capabilities", () => {
+  test("hello advertises both the inspect and write capabilities", () => {
+    const hello = helloFrame({
+      runnerId: "r",
+      runnerVersion: "0",
+      sdkVersion: "0",
+      bootId: "b",
+    });
+    expect(hello.capabilities).toEqual(["inspect", "workspace.write"]);
+  });
+});
+
 describe("dispatching an inspect command", () => {
   test("routes an inspect to the inspect handler and not to the run controller", async () => {
     const seen: unknown[] = [];
@@ -376,5 +388,57 @@ describe("dispatching an inspect command", () => {
     // Not an inspect kind, so it falls through; the controller's envelope parse
     // is what refuses it, and the refusal is still a receipt.
     expect(outcome.receipt).toMatchObject({ accepted: false, reason: "malformed" });
+  });
+
+  test("routes a workspace.file.write to the mutation handler, not the run controller", async () => {
+    let runControllerCalls = 0;
+    const seen: unknown[] = [];
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
+    dirs.push(dir);
+    await saveIdentity(dir, {
+      runnerId: "runner-a",
+      controlUrl: "ws://127.0.0.1:1/ws/runner",
+      credential: "cck_test",
+    });
+
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+      mutation: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: { op: "file.write", path: "a.txt", hash: "h", size: 1 },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const realHandle = withFake.runs.handle.bind(withFake.runs);
+    withFake.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "workspace.file.write",
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      payload: { op: "file.write", path: "a.txt", content: "x", expectedHash: "x" },
+    });
+
+    // Mutation dispatch mirrors the inspect branch: no receipt, the frame in results.
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(runControllerCalls).toBe(0);
   });
 });
