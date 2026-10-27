@@ -5,6 +5,13 @@
  * transport-agnostic: `Bun.serve`'s websocket handlers are thin adapters around
  * these four methods, so the fencing logic is testable without a socket.
  *
+ * Four inbound frame families live here beside each other: `hello` /
+ * `reconcile` promote the connection, `command.receipt` moves delivery state,
+ * `events` reach the journal, and `rpc.result` answers a bounded inspection
+ * call. That last one is deliberately not an event: events are session/run
+ * scoped, journaled and replayed, while an `rpc.result` answers one waiting
+ * HTTP request and is dropped once delivered (Ruling 1).
+ *
  * Four rules, in order:
  *
  *  1. **Authenticate on open, before any message.** A socket that fails this is
@@ -24,6 +31,8 @@ import {
   negotiateHello,
   PROTOCOL_VERSION,
   parseDeclaredWorkspaces,
+  parseRpcResultFrame,
+  type RpcResultFrame,
   type RunnerCommand,
   type RunnerEvent,
   type RunnerRunState,
@@ -77,6 +86,8 @@ type Connection = {
   socket: RunnerSocket;
   negotiated: boolean;
   state: "connected" | "ready";
+  /** What the hello declared; a reconnect that re-declares replaces it. */
+  capabilities: string[];
 };
 
 /** The subset of `ServerWebSocket` used here; keeps tests free of a real server. */
@@ -131,6 +142,13 @@ type GatewayOptions = {
    * so a boot that stops declaring a workspace loses its row.
    */
   onWorkspaces?: (runnerId: string, workspaces: DeclaredWorkspace[]) => void;
+  /**
+   * Called for every well-formed `rpc.result` a runner sends. Injected rather
+   * than handled here because the waiter belongs to the caller: when there is
+   * one, this class knows nothing about a registry of pending HTTP requests —
+   * like the receipt hook, it only knows a frame arrived and who sent it.
+   */
+  onRpcResult?: (runnerId: string, frame: RpcResultFrame) => void;
 };
 
 /** What a successful authorization hands to the socket that carries it. */
@@ -161,6 +179,7 @@ export class RunnerGateway {
     | ((runnerId: string, action: { runId: string; attemptId: string }) => void)
     | undefined;
   readonly #onWorkspaces: ((runnerId: string, workspaces: DeclaredWorkspace[]) => void) | undefined;
+  readonly #onRpcResult: ((runnerId: string, frame: RpcResultFrame) => void) | undefined;
   readonly #live = new Map<string, Connection>();
 
   constructor(options: GatewayOptions) {
@@ -173,6 +192,7 @@ export class RunnerGateway {
     this.#onEvents = options.onEvents;
     this.#onAbandonApproval = options.onAbandonApproval;
     this.#onWorkspaces = options.onWorkspaces;
+    this.#onRpcResult = options.onRpcResult;
   }
 
   /**
@@ -241,6 +261,7 @@ export class RunnerGateway {
       socket,
       negotiated: false,
       state: "connected",
+      capabilities: [],
     });
 
     // Close the socket this one replaced, rather than waiting for it to speak.
@@ -312,6 +333,9 @@ export class RunnerGateway {
       case "command.receipt":
         return this.#handleReceipt(connection, record);
 
+      case "rpc.result":
+        return this.#handleRpcResult(connection, record);
+
       case "events":
         return this.#handleEvents(connection, record["events"]);
 
@@ -374,6 +398,15 @@ export class RunnerGateway {
   }
 
   /**
+   * What the runner's hello declared it can serve. The ready connection's
+   * copy, `[]` when nothing is live — and deliberately `[]` after a close, so
+   * a caller that gatekeeps on this cannot act on a stale declaration.
+   */
+  capabilitiesOf(runnerId: string): readonly string[] {
+    return this.#live.get(runnerId)?.capabilities ?? [];
+  }
+
+  /**
    * Hand a command to a runner's current socket (§9.2).
    *
    * Refuses anything that is not `ready`. The distinction matters: a `connected`
@@ -421,6 +454,7 @@ export class RunnerGateway {
     }
 
     connection.negotiated = true;
+    connection.capabilities = [...result.capabilities];
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 
@@ -544,6 +578,25 @@ export class RunnerGateway {
       }
     }
 
+    return { ok: true };
+  }
+
+  /**
+   * A runner's answer to one bounded inspection call.
+   *
+   * A malformed frame from a live runner is a bug, not an attack: refuse it
+   * over the still-open socket, exactly like the receipt path refuses a
+   * malformed receipt. Closing here would drop the event stream over a frame
+   * that carries no state either side depends on.
+   */
+  #handleRpcResult(connection: Connection, message: Record<string, unknown>): HandleResult {
+    const frame = parseRpcResultFrame(message);
+    if (frame === undefined) {
+      this.#send(connection, { type: "error", reason: "malformed" });
+      return { ok: false, reason: "malformed" };
+    }
+
+    this.#onRpcResult?.(connection.socket.data.runnerId, frame);
     return { ok: true };
   }
 

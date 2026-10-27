@@ -510,6 +510,89 @@ describe("event ingestion", () => {
 
     expect(result).toEqual({ ok: false, reason: "malformed" });
   });
+
+  test("dispatches an rpc.result frame to onRpcResult", () => {
+    const received: Array<{
+      runnerId: string;
+      frame: { type: string; commandId: string; ok: boolean };
+    }> = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onRpcResult: (runnerId, frame) => {
+        received.push({ runnerId, frame });
+      },
+    });
+
+    const { socket } = readySocket(gateway);
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "rpc.result",
+        commandId: "c1",
+        ok: true,
+        result: { op: "git.changes", entries: [], truncated: false },
+      }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(received).toEqual([
+      {
+        runnerId: "runner-a",
+        frame: expect.objectContaining({ commandId: "c1", ok: true }),
+      },
+    ]);
+  });
+
+  test("refuses a malformed rpc.result without closing the socket", () => {
+    let reached = 0;
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onRpcResult: () => {
+        reached += 1;
+      },
+    });
+
+    const { socket, sent, closed } = readySocket(gateway);
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "rpc.result", commandId: "" }),
+    );
+
+    // A malformed frame from a live runner is a bug, not an attack: refuse it
+    // over the still-open socket, the way the receipt path already does.
+    expect(result).toEqual({ ok: false, reason: "malformed" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "malformed" });
+    expect(closed).toEqual([]);
+    expect(reached).toBe(0);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("exposes the capabilities the hello declared", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, capabilities: ["inspect"] } }),
+    );
+
+    expect(gateway.capabilitiesOf("runner-a")).toEqual(["inspect"]);
+  });
+
+  test("reports no capabilities for an offline runner", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+    });
+
+    expect(gateway.capabilitiesOf("nobody")).toEqual([]);
+  });
 });
 
 describe("declared workspaces reach the projection", () => {
