@@ -11,8 +11,12 @@ import {
   fetchChanges,
   fetchDiagnostics,
   fetchDiff,
+  fetchSnapshotStatus,
   listFiles,
   readFile,
+  revertFile,
+  revertWorkspace,
+  writeFile,
 } from "./inspect-api.ts";
 
 /**
@@ -24,15 +28,21 @@ import {
  * Vietnamese — and an unknown code keeps the server's own message.
  */
 
-type Captured = { url: string; method: string };
+type Captured = { url: string; method: string; body: string; contentType: string };
 
 const realFetch = globalThis.fetch;
 
 function capture(status: number, body: unknown, options: { json?: boolean } = {}): Captured {
-  const captured = { url: "", method: "" } as Captured;
+  const captured = { url: "", method: "", body: "", contentType: "" } as Captured;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     captured.url = String(input);
     captured.method = init?.method ?? "GET";
+    captured.body = init?.body ? String(init.body) : "";
+    captured.contentType = init?.headers
+      ? Array.isArray(init.headers)
+        ? ""
+        : (new Headers(init.headers).get("Content-Type") ?? "")
+      : "";
     const text = options.json === false ? String(body) : JSON.stringify(body);
     return new Response(text, {
       status,
@@ -193,6 +203,72 @@ describe("inspect calls", () => {
       ok: false,
       code: "error",
       message: "Không kết nối được máy chủ.",
+    });
+  });
+
+  test("saves with PUT, a JSON body and the path in the query", async () => {
+    const captured = capture(200, { op: "file.write", path: "a.txt", hash: "h2", size: 5 });
+    const outcome = await writeFile("r-1%2Fdefault", "src/a.ts", "next\n", "h1");
+    expect(outcome).toEqual({
+      ok: true,
+      value: { op: "file.write", path: "a.txt", hash: "h2", size: 5 },
+    });
+    expect(captured.url).toBe("/api/workspaces/r-1%2Fdefault/file?path=src%2Fa.ts");
+    expect(captured.method).toBe("PUT");
+    expect(JSON.parse(captured.body)).toEqual({ content: "next\n", expectedHash: "h1" });
+    expect(captured.contentType).toBe("application/json");
+  });
+
+  test("reverts one file with POST and an explicit null token", async () => {
+    const captured = capture(200, {
+      op: "file.revert",
+      path: "new.ts",
+      action: "deleted",
+      hash: null,
+      size: null,
+    });
+    await revertFile("r-1%2Fdefault", "new.ts", null);
+    expect(captured.url).toBe("/api/workspaces/r-1%2Fdefault/file/revert");
+    expect(captured.method).toBe("POST");
+    expect(JSON.parse(captured.body)).toEqual({ path: "new.ts", expectedHash: null });
+  });
+
+  test("applies a workspace revert with the plan digest", async () => {
+    const captured = capture(200, {
+      op: "workspace.revert",
+      planDigest: "d1",
+      restored: 1,
+      deleted: 0,
+      failed: null,
+    });
+    await revertWorkspace("r-1%2Fdefault", "d1");
+    expect(captured.url).toBe("/api/workspaces/r-1%2Fdefault/revert");
+    expect(JSON.parse(captured.body)).toEqual({ planDigest: "d1" });
+  });
+
+  test("fetches the snapshot status", async () => {
+    const captured = capture(200, {
+      op: "snapshot.status",
+      baseline: null,
+      entries: [],
+      counts: { modified: 0, created: 0, deleted: 0, excluded: 0 },
+      digest: null,
+      truncated: false,
+    });
+    await fetchSnapshotStatus("r-1%2Fdefault");
+    expect(captured.url).toBe("/api/workspaces/r-1%2Fdefault/snapshot");
+  });
+
+  test("maps REVERT_STALE to Vietnamese copy", async () => {
+    capture(409, {
+      error: { code: "REVERT_STALE", message: "stale", retryable: false },
+      requestId: "r",
+    });
+    const outcome = await revertWorkspace("r-1%2Fdefault", "d1");
+    expect(outcome).toEqual({
+      ok: false,
+      code: "REVERT_STALE",
+      message: "Kế hoạch khôi phục đã cũ — hãy xem lại.",
     });
   });
 });

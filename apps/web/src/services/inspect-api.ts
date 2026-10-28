@@ -16,8 +16,12 @@ import type {
   DiagnosticsResult,
   FileListResult,
   FileReadResult,
+  FileRevertResult,
+  FileWriteResult,
   GitChangesResult,
   GitDiffResult,
+  SnapshotStatusResult,
+  WorkspaceRevertResult,
 } from "@cc-web/protocol";
 
 export type InspectOutcome<T> =
@@ -47,6 +51,16 @@ const MESSAGES: Record<string, string> = {
   NOT_A_FILE: "Đường dẫn không phải tệp.",
   UNSUPPORTED_COMMAND: "Runner không hỗ trợ yêu cầu này.",
   DIAGNOSTICS_UNAVAILABLE: "Không lấy được chẩn đoán cấu hình.",
+  FILE_CONFLICT: "Tệp đã bị thay đổi — hãy tải lên và thử lại.",
+  WORKSPACE_BUSY: "Workspace đang bận — hãy thử lại sau.",
+  SYMLINK_REFUSED: "Không được phép thao tác liên kết mềm.",
+  FILE_UNSUPPORTED: "Loại tệp này không được hỗ trợ.",
+  NO_SNAPSHOT: "Chưa có baseline cho workspace này.",
+  SNAPSHOT_PARTIAL: "Baseline chưa đầy đủ — không thể khôi phục toàn bộ.",
+  REVERT_STALE: "Kế hoạch khôi phục đã cũ — hãy xem lại.",
+  PLAN_TOO_LARGE: "Kế hoạch khôi phục quá lớn — không thể áp dụng.",
+  SNAPSHOT_INCOMPARABLE: "Baseline không so sánh được với trạng thái hiện tại.",
+  FILE_UNWRITABLE: "Không thể ghi tệp.",
 };
 
 /** The copy for a transport or parse failure — there is no code to translate. */
@@ -83,10 +97,10 @@ async function failure(response: Response): Promise<InspectOutcome<never>> {
   return { ok: false, code, message };
 }
 
-async function request<T>(url: string): Promise<InspectOutcome<T>> {
+async function request<T>(url: string, init?: RequestInit): Promise<InspectOutcome<T>> {
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, init);
   } catch {
     return { ok: false, ...UNREACHABLE };
   }
@@ -99,6 +113,23 @@ async function request<T>(url: string): Promise<InspectOutcome<T>> {
     // A 200 whose body is not JSON is a broken server, not a panel bug.
     return { ok: false, ...UNREACHABLE };
   }
+}
+
+/**
+ * Build a JSON-bodied request and answer it through the same never-throw spine
+ * as `request`: an `UNREACHABLE` (network/parse) failure, or the server's own
+ * translated error. No call site needs its own try/catch.
+ */
+async function mutate<T>(
+  url: string,
+  method: "PUT" | "POST",
+  body: unknown,
+): Promise<InspectOutcome<T>> {
+  return request<T>(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export function listFiles(id: string, path: string): Promise<InspectOutcome<FileListResult>> {
@@ -119,4 +150,39 @@ export function fetchDiff(id: string, path: string): Promise<InspectOutcome<GitD
 
 export function fetchDiagnostics(id: string): Promise<InspectOutcome<DiagnosticsResult>> {
   return request(`/api/workspaces/${id}/config/diagnostics`);
+}
+
+/** (§7.10) A revision-checked save of one file's contents. */
+export function writeFile(
+  id: string,
+  path: string,
+  content: string,
+  expectedHash: string,
+): Promise<InspectOutcome<FileWriteResult>> {
+  return mutate(`/api/workspaces/${id}/file?path=${encodeURIComponent(path)}`, "PUT", {
+    content,
+    expectedHash,
+  });
+}
+
+/** (§7.10) Restore one file to its baseline, or delete a file the baseline says was created. */
+export function revertFile(
+  id: string,
+  path: string,
+  expectedHash: string | null,
+): Promise<InspectOutcome<FileRevertResult>> {
+  return mutate(`/api/workspaces/${id}/file/revert`, "POST", { path, expectedHash });
+}
+
+/** (§7.10) Restore the whole workspace to its run-start baseline, conditioned on the reviewed plan digest. */
+export function revertWorkspace(
+  id: string,
+  planDigest: string,
+): Promise<InspectOutcome<WorkspaceRevertResult>> {
+  return mutate(`/api/workspaces/${id}/revert`, "POST", { planDigest });
+}
+
+/** (§7.10) Preview the current baseline and the per-file revert plan it yields. */
+export function fetchSnapshotStatus(id: string): Promise<InspectOutcome<SnapshotStatusResult>> {
+  return request(`/api/workspaces/${id}/snapshot`);
 }

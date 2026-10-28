@@ -267,6 +267,8 @@ export {
   parseInspectRequest,
   parseRpcResultFrame,
   type RpcResultFrame,
+  type SnapshotEntry,
+  type SnapshotStatusResult,
   type WorkspaceInspectRequest,
 } from "./inspection.ts";
 export { MODEL_IDS, type ModelId } from "./models.ts";
