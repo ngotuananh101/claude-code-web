@@ -133,4 +133,17 @@ export function migrateRunnerDb(db: Database): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS file_snapshots_hash ON file_snapshots (hash);
   `);
+
+  // Custom workspaces the user chose at runtime by browsing the host filesystem
+  // (§18.2, Task 2). These survive daemon restarts so a hand-picked folder that
+  // is neither a discovered Claude project nor the default workspace stays
+  // selectable. `workspace_id` is the primary key used in dispatch; `path` is
+  // UNIQUE so re-adding the same folder does not duplicate it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS custom_workspaces (
+      workspace_id TEXT PRIMARY KEY,
+      path         TEXT NOT NULL UNIQUE,
+      added_at     INTEGER NOT NULL
+    );
+  `);
 }

@@ -58,3 +58,8 @@ export {
   type SnapshotState,
   type StoredSnapshotEntry,
 } from "./snapshots.ts";
+export {
+  addCustomWorkspace,
+  type CustomWorkspace,
+  listCustomWorkspaces,
+} from "./workspaces.ts";
