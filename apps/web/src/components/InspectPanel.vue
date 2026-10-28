@@ -717,7 +717,7 @@ watch(tab, (next) => {
                     <template v-if="confirmingPath.value === entry.path">
                       <button
                         type="button"
-                        class="shrink-0 text-red-600 hover:underline"
+                        class="shrink-0 text-destructive hover:underline"
                         @click="revertOneFile({ path: entry.path, currentHash: entry.currentHash })"
                       >
                         xác nhận
