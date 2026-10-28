@@ -233,8 +233,14 @@ export async function executeRun(
 
   // §10.4: resume the session this runner last used for it, by explicit id.
   // `continue: true` is never used — it would pick whichever conversation
-  // happened to be newest.
-  const resume = sdkSessionIdForSession(db, sessionId);
+  // happened to be newest. An explicit `resumeSessionId` in the run.start
+  // payload takes precedence over the stored session id, so a caller can point
+  // at a specific conversation regardless of what this runner last recorded.
+  const explicitResume =
+    typeof record?.["resumeSessionId"] === "string" && record["resumeSessionId"].trim() !== ""
+      ? record["resumeSessionId"].trim()
+      : undefined;
+  const resume = explicitResume ?? sdkSessionIdForSession(db, sessionId);
 
   // A terminal *state* is decided once. The terminal *event* is written only by
   // the path that observed it: a `result` frame carries its own event type, and

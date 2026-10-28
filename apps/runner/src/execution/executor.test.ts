@@ -890,6 +890,128 @@ describe("the SDK session id", () => {
   });
 });
 
+describe("the resumeSessionId payload", () => {
+  test("an explicit resumeSessionId is forwarded to the SDK as resume", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", resumeSessionId: "explicit-session-id" } },
+      { workspacePath: WORKSPACES.get("workspace-1")!, sdk },
+    );
+
+    // §10.4: an explicit resumeSessionId from the run.start payload wins over the
+    // stored session id and is passed directly to the SDK.
+    expect(seen?.resume).toBe("explicit-session-id");
+  });
+
+  test("an omitted resumeSessionId falls back to the stored session id", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    db.prepare("UPDATE local_attempts SET sdk_session_id = ? WHERE attempt_id = ?").run(
+      "sdk-previous",
+      "attempt-1",
+    );
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+    });
+
+    // No resumeSessionId in the payload: the previous behavior is preserved.
+    expect(seen?.resume).toBe("sdk-previous");
+  });
+
+  test("an empty resumeSessionId is ignored, falling back to the stored session id", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    db.prepare("UPDATE local_attempts SET sdk_session_id = ? WHERE attempt_id = ?").run(
+      "sdk-previous",
+      "attempt-1",
+    );
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", resumeSessionId: "" } },
+      { workspacePath: WORKSPACES.get("workspace-1")!, sdk },
+    );
+
+    // An empty string is not a valid id — the stored session id is used instead.
+    expect(seen?.resume).toBe("sdk-previous");
+  });
+
+  test("a non-string resumeSessionId is ignored, falling back to the stored session id", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    db.prepare("UPDATE local_attempts SET sdk_session_id = ? WHERE attempt_id = ?").run(
+      "sdk-previous",
+      "attempt-1",
+    );
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "hello", resumeSessionId: 42 } },
+      { workspacePath: WORKSPACES.get("workspace-1")!, sdk },
+    );
+
+    // A non-string is not a valid id — the stored session id is used instead.
+    expect(seen?.resume).toBe("sdk-previous");
+  });
+});
+
 describe("redaction", () => {
   test("no persisted payload names the credential source", async () => {
     const { db } = setup();
