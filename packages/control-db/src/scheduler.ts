@@ -61,6 +61,12 @@ export type DispatchRequest = {
    * `model`, never as an envelope field.
    */
   branch?: string;
+  /**
+   * The Claude session id to resume (§10.4). When present the runner's executor
+   * passes it to the SDK stream as `resume` instead of the last-known session id.
+   * Carries in the run.start payload, next to `prompt`.
+   */
+  resumeSessionId?: string;
 };
 
 export type DispatchDecision =
@@ -139,6 +145,9 @@ export class Scheduler {
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
         ...(request.model === undefined ? {} : { model: request.model }),
         ...(request.branch === undefined ? {} : { branch: request.branch }),
+        ...(request.resumeSessionId === undefined
+          ? {}
+          : { resumeSessionId: request.resumeSessionId }),
       },
     });
 

@@ -56,6 +56,7 @@ export async function handleDispatchRun(
     model?: unknown;
     runnerId?: unknown;
     branch?: unknown;
+    resumeSessionId?: unknown;
   };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
@@ -116,6 +117,18 @@ export async function handleDispatchRun(
       return new Response("bad request", { status: 400 });
     }
     branch = record.branch;
+  }
+
+  // §10.4: resumeSessionId is the id of a Claude session to resume. It must be a
+  // non-empty string — the runner's executor ignores empty or non-string values,
+  // but an explicit bad value here is a client error, not a silent default that
+  // would start a fresh conversation when the operator asked to continue one.
+  let resumeSessionId: string | undefined;
+  if (record.resumeSessionId !== undefined) {
+    if (typeof record.resumeSessionId !== "string" || record.resumeSessionId.trim() === "") {
+      return new Response("bad request", { status: 400 });
+    }
+    resumeSessionId = record.resumeSessionId.trim();
   }
 
   // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
@@ -275,6 +288,7 @@ export async function handleDispatchRun(
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(model === undefined ? {} : { model }),
       ...(branch === undefined ? {} : { branch }),
+      ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
     },
     scheduler.capacityFor(ready, {
       runnerId: ready,

@@ -434,6 +434,90 @@ describe("the model on POST /api/sessions/:id/runs", () => {
   });
 });
 
+describe("the resumeSessionId on POST /api/sessions/:id/runs", () => {
+  test("a resumeSessionId travels in the run.start payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", resumeSessionId: "prev-session-id" }),
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) =>
+          (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello" &&
+          (JSON.parse(row.payload) as { resumeSessionId?: string }).resumeSessionId ===
+            "prev-session-id",
+      ),
+    );
+  });
+
+  test("an empty resumeSessionId is a bad request", async () => {
+    const { url, cookie } = await start();
+
+    const response = await dispatch(url, cookie, "hello", "session-empty", {
+      resumeSessionId: "",
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  test("a whitespace-only resumeSessionId is a bad request", async () => {
+    const { url, cookie } = await start();
+
+    const response = await dispatch(url, cookie, "hello", "session-ws", {
+      resumeSessionId: "   ",
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  test("a non-string resumeSessionId is a bad request", async () => {
+    const { url, cookie } = await start();
+
+    const response = await dispatch(url, cookie, "hello", "session-num", {
+      resumeSessionId: 42,
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  test("an absent resumeSessionId is omitted from the payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+      ),
+    );
+
+    const payloads = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    expect(
+      payloads.some(
+        (row) => "resumeSessionId" in (JSON.parse(row.payload) as Record<string, unknown>),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("placement pins the runner through the workspace", () => {
   test("a workspace declared on one runner only dispatches to that runner", async () => {
     const { db, url, cookie, credential } = await start();
