@@ -224,6 +224,7 @@ Mint a runner token in the web UI, then on the runner host:
 ```sh
 echo -n "$RUNNER_TOKEN" | ./dist/cc-web-runner setup \
   --server https://cc.example.com --runner-id <name>
+export CC_WEB_RUNNER_DEFAULT_WORKSPACE=/path/to/workspace   # the directory agents work in
 ./dist/cc-web-runner connect               # foreground smoke test
 ./dist/cc-web-runner service install       # systemd unit, no secret in it
 ```
@@ -231,6 +232,27 @@ echo -n "$RUNNER_TOKEN" | ./dist/cc-web-runner setup \
 `--server` is the public origin the proxy publishes; the runner derives
 `wss://…/ws/runner` from it. A `401` on connect means the credential is unknown
 or revoked — mint a new token.
+
+`CC_WEB_RUNNER_DEFAULT_WORKSPACE` is required: it is the only workspace the
+runner serves under the id `default`, and the same value is what the runner
+advertises on hello/reconcile. Without it the runner still connects and reads
+`ready`, but every `run.start` is refused `unknown_workspace` and the session
+stays `session_busy` until the stale slot is cleared. Make it durable for the
+service so a reboot does not lose it:
+
+```sh
+echo 'CC_WEB_RUNNER_DEFAULT_WORKSPACE=/path/to/workspace' | sudo tee /etc/cc-web-runner.env
+CC_WEB_RUNNER_ENV_FILE=/etc/cc-web-runner.env ./dist/cc-web-runner service install
+sudo systemctl restart cc-web-runner.service
+```
+
+Verify the server received the declaration:
+
+```sh
+sqlite3 /www/wwwroot/code.ponta.dev/data/control.sqlite \
+  "SELECT runner_id, workspace_id, path FROM workspaces;"
+# expect one row: <runner-id>|default|/path/to/workspace
+```
 
 ## Operating the stack
 

@@ -230,7 +230,14 @@ export function createServer(options: ServerOptions): ServerHandle {
   });
 
   if (options.outbox) {
-    dispatcher = new Dispatcher({ outbox: options.outbox, gateway: runnerGateway });
+    dispatcher = new Dispatcher({
+      outbox: options.outbox,
+      gateway: runnerGateway,
+      onRejectedStart: (runId, commandId, reason) => {
+        scheduler.release(runId);
+        console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
+      },
+    });
   }
 
   // Read-only inspection waiters (§23). In memory by design (Ruling 3): the

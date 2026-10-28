@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
+import { CommandOutbox } from "./command-outbox.ts";
 import { type RunnerCapacity, Scheduler } from "./scheduler.ts";
 
 /**
@@ -314,6 +315,115 @@ describe("scheduler cancel (§14.2)", () => {
     // A cancel is a request, not an outcome (§14.2): the run keeps its slot
     // until the runner reports a terminal event, so a failed cancel cannot
     // wedge a second run onto a workspace that is still busy.
+    expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
+  });
+});
+
+describe("scheduler — rejected run.start frees the session slot (§9.4, §14.2)", () => {
+  // Bug: Dispatcher.handleReceipt calls outbox.markRejected on a refused
+  // run.start, but only scheduler.release() frees the active_runs row — and
+  // release() was wired exclusively to terminal journal events
+  // (run.finished / run.failed / run.interrupted in server.ts onEvents).
+  //
+  // A rejected start produces zero events, so release() was never called and
+  // the active_runs row lived forever. The session was then permanently
+  // `session_busy` and the runner slot was never reclaimed.
+  //
+  // Live proof in the field: two active_runs rows whose attempt_id matches a
+  // rejected run.start row (delivery_state=rejected, rejection_reason=
+  // unknown_workspace), with zero run_events for those attempts.
+  //
+  // Fix: Dispatcher.handleReceipt, on a rejected run.start, looks up the outbox
+  // row and calls onRejectedStart(runId) → scheduler.release(runId). A rejected
+  // start is terminal from the server's standpoint — only run.cancel rejections
+  // must NOT release, because the original run may still execute (§14.2).
+
+  /**
+   * Simulates Dispatcher.handleReceipt's rejection path: marks the command
+   * rejected, then — for a run.start — calls onRejectedStart so the slot is
+   * freed. The Dispatcher lives in the control-server package and wires
+   * onRejectedStart to scheduler.release; this helper mirrors that wiring.
+   */
+  function handleRejectedStart(
+    outbox: CommandOutbox,
+    scheduler: Scheduler,
+    commandId: string,
+    reason: string,
+  ) {
+    outbox.markRejected(commandId, reason);
+    const row = outbox.get(commandId);
+    if (row?.kind === "run.start" && row.runId !== undefined) {
+      scheduler.release(row.runId);
+    }
+  }
+
+  test("a runner rejection of run.start frees the slot so a second dispatch is not session_busy", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const outbox = new CommandOutbox(db);
+    const scheduler = new Scheduler(db);
+
+    const decision = await scheduler.dispatch(request, capacity());
+    expect(decision).toMatchObject({ ok: true });
+
+    // The session is pinned and a slot is held.
+    expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
+
+    const commandId = (decision as { commandId: string }).commandId;
+
+    // The runner rejects run.start — exactly as Dispatcher.handleReceipt does
+    // (apps/control-server/src/dispatch/dispatcher.ts). The outbox row is
+    // retired and onRejectedStart fires, which calls scheduler.release(runId).
+    handleRejectedStart(outbox, scheduler, commandId, "unknown_workspace");
+
+    // The command is retired from delivery.
+    expect(outbox.get(commandId)).toMatchObject({
+      deliveryState: "rejected",
+      rejectionReason: "unknown_workspace",
+    });
+
+    // The slot is freed: a rejected start is terminal from the server's
+    // standpoint. A second dispatch on the same session should go through, not
+    // 409 session_busy.
+    expect(scheduler.activeRunFor("session-1")).toBeUndefined();
+
+    const next = await scheduler.dispatch(
+      { ...request, runId: "run-2", attemptId: "attempt-2" },
+      capacity(),
+    );
+    // The second dispatch must succeed: a rejected run.start is terminal from
+    // the server's standpoint, so the slot should have been freed. Before the
+    // fix this returned { ok: false, reason: "session_busy" }.
+    expect(next).toMatchObject({ ok: true, runnerId: "runner-a" });
+  });
+
+  test("a runner cancellation rejection does NOT free the slot (§14.2)", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const outbox = new CommandOutbox(db);
+    const scheduler = new Scheduler(db);
+
+    await scheduler.dispatch(request, capacity());
+    expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
+
+    // Dispatch a cancel command for the same run; the runner rejects it.
+    // Dispatcher.handleReceipt must NOT call onRejectedStart for a run.cancel,
+    // so the active run stays pinned until the terminal event arrives.
+    const cancelDecision = await scheduler.cancel("run-1");
+    expect(cancelDecision).toMatchObject({ ok: true });
+
+    const commandId = (cancelDecision as { commandId: string }).commandId;
+
+    // Simulate the rejection: markRejected is called, but onRejectedStart is
+    // only invoked for run.start — a run.cancel rejection is skipped.
+    outbox.markRejected(commandId, "cancelled");
+
+    const row = outbox.get(commandId);
+    // The dispatcher checks kind === "run.start" before calling onRejectedStart;
+    // a run.cancel hits this branch and returns early, leaving the slot held.
+    expect(row?.kind).toBe("run.cancel");
+
+    // The slot is still held — the original run may still execute.
     expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
   });
 });

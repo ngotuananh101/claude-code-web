@@ -41,17 +41,26 @@ export type DrainResult = {
 export type DispatcherOptions = {
   outbox: CommandOutbox;
   gateway: CommandSink;
+  /**
+   * Called when the runner rejects a `run.start` command. The server frees the
+   * active_runs slot so the session is not stranded in `session_busy` (§9.4).
+   * Not called for `run.cancel` rejections — the original run may still execute
+   * (§14.2). The command id and rejection reason are passed for operator logging.
+   */
+  onRejectedStart?: (runId: string, commandId: string, reason: string) => void;
   now?: () => Date;
 };
 
 export class Dispatcher {
   readonly #outbox: CommandOutbox;
   readonly #gateway: CommandSink;
+  readonly #onRejectedStart: DispatcherOptions["onRejectedStart"];
   readonly #now: () => Date;
 
   constructor(options: DispatcherOptions) {
     this.#outbox = options.outbox;
     this.#gateway = options.gateway;
+    this.#onRejectedStart = options.onRejectedStart;
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -110,7 +119,15 @@ export class Dispatcher {
       return;
     }
 
+    // Look up the row before retiring it: the caller needs to know whether the
+    // rejected command was a `run.start` (slot must be freed) or a `run.cancel`
+    // (the original run may still execute — §14.2).
+    const row = this.#outbox.get(receipt.commandId);
     this.#outbox.markRejected(receipt.commandId, receipt.reason ?? "rejected_by_runner");
+
+    if (row?.kind === "run.start" && row.runId !== undefined) {
+      this.#onRejectedStart?.(row.runId, receipt.commandId, receipt.reason ?? "rejected_by_runner");
+    }
   }
 }
 

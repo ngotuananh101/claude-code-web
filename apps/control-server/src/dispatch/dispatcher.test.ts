@@ -326,4 +326,111 @@ describe("dispatcher", () => {
     // and only after the promotion — never before it.
     expect(sent.map((s) => s["type"])).toEqual(["hello.ok", "reconcile.ok", "command"]);
   });
+
+  describe("rejected run.start (§9.4)", () => {
+    const startCommand = {
+      commandId: "cmd-start",
+      runnerId: "runner-a",
+      kind: "run.start" as const,
+      payload: { prompt: "hello" },
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+    };
+
+    const cancelCommand = {
+      commandId: "cmd-cancel",
+      runnerId: "runner-a",
+      kind: "run.cancel" as const,
+      payload: {},
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+    };
+
+    function setupWithHook() {
+      const db = new Database(":memory:");
+      migrate(db);
+      const outbox = new CommandOutbox(db);
+
+      let dispatcher: Dispatcher;
+      const gateway: RunnerGateway = new RunnerGateway({
+        policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+        verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+        onReceipt: (_runnerId, receipt) => dispatcher.handleReceipt(_runnerId, receipt),
+      });
+
+      const calls: Array<{ runId: string; commandId: string; reason: string }> = [];
+      dispatcher = new Dispatcher({
+        outbox,
+        gateway,
+        onRejectedStart: (runId, commandId, reason) => calls.push({ runId, commandId, reason }),
+      });
+
+      return { db, outbox, dispatcher, gateway, calls };
+    }
+
+    test("a rejected run.start calls onRejectedStart with runId + commandId + reason", async () => {
+      const { outbox, dispatcher, calls } = setupWithHook();
+      await outbox.enqueue(startCommand);
+
+      dispatcher.handleReceipt("runner-a", {
+        commandId: "cmd-start",
+        attemptId: "attempt-1",
+        accepted: false,
+        reason: "unknown_workspace",
+      });
+
+      expect(calls).toEqual([
+        { runId: "run-1", commandId: "cmd-start", reason: "unknown_workspace" },
+      ]);
+    });
+
+    test("a rejected run.start without an explicit reason still fires the hook", async () => {
+      const { outbox, dispatcher, calls } = setupWithHook();
+      await outbox.enqueue(startCommand);
+
+      dispatcher.handleReceipt("runner-a", {
+        commandId: "cmd-start",
+        attemptId: "attempt-1",
+        accepted: false,
+      });
+
+      expect(calls).toEqual([
+        { runId: "run-1", commandId: "cmd-start", reason: "rejected_by_runner" },
+      ]);
+    });
+
+    test("a rejected run.cancel does NOT call onRejectedStart (§14.2)", async () => {
+      const { outbox, dispatcher, calls } = setupWithHook();
+      await outbox.enqueue(cancelCommand);
+
+      dispatcher.handleReceipt("runner-a", {
+        commandId: "cmd-cancel",
+        attemptId: "attempt-1",
+        accepted: false,
+        reason: "cancelled",
+      });
+
+      // A cancel rejection is a request, not an outcome — the original run may
+      // still execute, so the slot must not be released.
+      expect(calls).toEqual([]);
+    });
+
+    test("an accepted run.start does NOT call onRejectedStart", async () => {
+      const { outbox, dispatcher, calls } = setupWithHook();
+      await outbox.enqueue(startCommand);
+
+      dispatcher.handleReceipt("runner-a", {
+        commandId: "cmd-start",
+        attemptId: "attempt-1",
+        accepted: true,
+      });
+
+      expect(calls).toEqual([]);
+    });
+  });
 });
