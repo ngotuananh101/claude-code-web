@@ -26,14 +26,19 @@ import {
   type WorkspaceRevertResult,
   WRITE_CAPABILITY,
 } from "@cc-web/protocol";
-import { acquireWorkspaceLock, latestSnapshot, lockHolder, releaseAttempt } from "@cc-web/runner-db";
-import { type GitSpawn } from "../git/spawn.ts";
-import type { SnapshotStatusResult } from "../workspace/status.ts";
-import { computeSnapshotPlan } from "../workspace/status.ts";
+import {
+  acquireWorkspaceLock,
+  latestSnapshot,
+  lockHolder,
+  releaseAttempt,
+} from "@cc-web/runner-db";
 import { redactErrorText } from "../execution/redact.ts";
+import type { GitSpawn } from "../git/spawn.ts";
 import { isNeverCollectedPath } from "../workspace/collect.ts";
 import { resolveInsideWorkspace } from "../workspace/paths.ts";
 import { blobPath } from "../workspace/snapshot.ts";
+import type { SnapshotStatusResult } from "../workspace/status.ts";
+import { computeSnapshotPlan } from "../workspace/status.ts";
 
 export type MutationHandlerOptions = {
   db: import("bun:sqlite").Database;
@@ -108,7 +113,14 @@ export function createMutationHandler(
       case "file.revert":
         return fileRevert(commandId, root, homeDir, db, request);
       case "workspace.revert":
-        return workspaceRevert(commandId, root, homeDir ?? root, db, request, _spawn as GitSpawn | undefined);
+        return workspaceRevert(
+          commandId,
+          root,
+          homeDir ?? root,
+          db,
+          request,
+          _spawn as GitSpawn | undefined,
+        );
     }
   }
 }
@@ -417,7 +429,8 @@ async function workspaceRevert(
   // 1. NO_SNAPSHOT / SNAPSHOT_INCOMPARABLE: there must be a baseline to revert to,
   //    and the collector mode must be reproducible.
   const snapshot = latestSnapshot(db, root);
-  if (snapshot === undefined) return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
+  if (snapshot === undefined)
+    return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
 
   const planOptions = spawn === undefined ? { db } : { db, spawn };
   const computed = await computeSnapshotPlan(planOptions, root);
@@ -429,10 +442,12 @@ async function workspaceRevert(
   const plan: SnapshotStatusResult = computed.plan;
   // computeSnapshotPlan returns a plan only when a baseline exists, so baseline is
   // non-null here; assert it for the type checker.
-  if (plan.baseline === null) return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
+  if (plan.baseline === null)
+    return refuse("NO_SNAPSHOT", "no baseline snapshot is available for revert");
 
   // 2. A partial baseline leaves the delete set unknowable: bulk revert is unsafe.
-  if (plan.baseline.partial) return refuse("SNAPSHOT_PARTIAL", "baseline was truncated; bulk revert is unsafe");
+  if (plan.baseline.partial)
+    return refuse("SNAPSHOT_PARTIAL", "baseline was truncated; bulk revert is unsafe");
 
   // 3. Truncated status, or a null (unplannable) digest -> PLAN_TOO_LARGE.
   if (plan.truncated || plan.digest === null)

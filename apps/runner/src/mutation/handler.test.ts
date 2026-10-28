@@ -15,8 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireWorkspaceLock, migrateRunnerDb, recordSnapshot } from "@cc-web/runner-db";
-import { createMutationHandler } from "./handler.ts";
 import { computeSnapshotPlan } from "../workspace/status.ts";
+import { createMutationHandler } from "./handler.ts";
 
 const roots: string[] = [];
 async function workspace(): Promise<string> {
