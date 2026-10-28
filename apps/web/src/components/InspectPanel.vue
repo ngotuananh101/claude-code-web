@@ -5,18 +5,25 @@ import type {
   FileReadResult,
   GitChangesResult,
   GitDiffResult,
+  SnapshotStatusResult,
 } from "@cc-web/protocol";
 import { computed, ref, watch } from "vue";
 import { classifyDiffLines } from "../features/inspect/diff";
+import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
+import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
 import {
   compositeId,
   fetchChanges,
   fetchDiagnostics,
   fetchDiff,
+  fetchSnapshotStatus,
   listFiles,
   readFile,
+  revertFile,
+  revertWorkspace,
+  writeFile,
 } from "../services/inspect-api";
 import { sessions } from "../stores/sessions.ts";
 
@@ -62,6 +69,11 @@ const filesError = ref<string | null>(null);
 const filesLoading = ref(false);
 const viewer = ref<FileReadResult | null>(null);
 
+// Files editor (P3-B save)
+const draft = ref<string | null>(null);
+const saving = ref(false);
+const saveError = ref<string | null>(null);
+
 // Changes
 const changes = ref<GitChangesResult | null>(null);
 const changesError = ref<string | null>(null);
@@ -70,6 +82,14 @@ const diff = ref<GitDiffResult | null>(null);
 const diffPath = ref<string | null>(null);
 const diffError = ref<string | null>(null);
 const diffLoading = ref(false);
+
+// Changes — snapshot source (P3-B baseline)
+const source = ref<"git" | "snapshot">("snapshot");
+const snapshotStatus = ref<SnapshotStatusResult | null>(null);
+const snapshotError = ref<string | null>(null);
+const snapshotLoading = ref(false);
+const confirmingPath = ref<string | null>(null);
+const workspaceRevertConfirm = ref(false);
 
 // Diagnostics
 const diagnostics = ref<DiagnosticsResult | null>(null);
@@ -183,15 +203,24 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
   const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
+  saving.value = false;
+  saveError.value = null;
   const outcome = await readFile(id, path);
   if (current !== epoch) return;
   filesLoading.value = false;
   if (!outcome.ok) {
     filesError.value = outcome.message;
     viewer.value = null;
+    draft.value = null;
     return;
   }
   viewer.value = outcome.value;
+  // Editable only for text, untruncated files with content available.
+  if (!outcome.value.binary && !outcome.value.truncated && outcome.value.content !== null) {
+    draft.value = outcome.value.content;
+  } else {
+    draft.value = null;
+  }
 }
 
 async function openDiff(path: string): Promise<void> {
@@ -211,6 +240,86 @@ async function openDiff(path: string): Promise<void> {
   }
   diff.value = outcome.value;
   diffPath.value = path;
+}
+
+async function loadSnapshot(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  const current = ++epoch;
+  snapshotLoading.value = true;
+  snapshotError.value = null;
+  const outcome = await fetchSnapshotStatus(id);
+  if (current !== epoch) return;
+  snapshotLoading.value = false;
+  if (!outcome.ok) {
+    snapshotError.value = outcome.message;
+    snapshotStatus.value = null;
+    return;
+  }
+  snapshotStatus.value = outcome.value;
+}
+
+async function saveFile(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  if (viewer.value === null || draft.value === null) return;
+
+  // Capture the current epoch without bumping it: the save belongs to the
+  // epoch that opened the file, and a stale epoch drops the response.
+  const current = epoch;
+  saving.value = true;
+  saveError.value = null;
+  const outcome = await writeFile(id, viewer.value.path, draft.value, viewer.value.hash);
+  if (current !== epoch) return;
+  saving.value = false;
+  if (!outcome.ok) {
+    saveError.value = outcome.message;
+    return;
+  }
+  viewer.value = viewerAfterSave(viewer.value, draft.value, outcome.value);
+  draft.value = outcome.value.content;
+  void loadFiles(directory.value);
+}
+
+async function revertOneFile(entry: { path: string; currentHash: string | null }): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  const current = ++epoch;
+  confirmingPath.value = null;
+  const outcome = await revertFile(id, entry.path, entry.currentHash);
+  if (current !== epoch) return;
+  if (!outcome.ok) {
+    snapshotError.value = outcome.message;
+    return;
+  }
+  void loadSnapshot();
+  if (source.value === "git") void loadChanges();
+}
+
+async function doRevertWorkspace(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  if (snapshotStatus.value === null) return;
+  const applicable = canApplyPlan(snapshotStatus.value);
+  if (!applicable.ok) {
+    snapshotError.value = applicable.reason;
+    return;
+  }
+  const current = ++epoch;
+  workspaceRevertConfirm.value = false;
+  const outcome = await revertWorkspace(id, snapshotStatus.value.digest ?? "");
+  if (current !== epoch) return;
+  if (!outcome.ok) {
+    snapshotError.value = outcome.message;
+    return;
+  }
+  void loadSnapshot();
+  if (source.value === "git") void loadChanges();
+}
+
+function reloadFile(name: string): void {
+  void loadFiles(directory.value);
+  void openEntry(name, "file");
 }
 
 function goUp(): void {
@@ -233,6 +342,9 @@ watch(
     viewer.value = null;
     filesError.value = null;
     filesLoading.value = false;
+    draft.value = null;
+    saving.value = false;
+    saveError.value = null;
     changes.value = null;
     changesError.value = null;
     changesLoading.value = false;
@@ -240,6 +352,11 @@ watch(
     diffPath.value = null;
     diffError.value = null;
     diffLoading.value = false;
+    snapshotStatus.value = null;
+    snapshotError.value = null;
+    snapshotLoading.value = false;
+    confirmingPath.value = null;
+    workspaceRevertConfirm.value = false;
     diagnostics.value = null;
     diagnosticsError.value = null;
     diagnosticsLoading.value = false;
@@ -251,7 +368,10 @@ watch(
 watch(tab, (next) => {
   if (workspace.value === null) return;
   if (next === "files" && listing.value === null) void loadFiles(directory.value);
-  if (next === "changes" && changes.value === null) void loadChanges();
+  if (next === "changes") {
+    if (source.value === "git" && changes.value === null) void loadChanges();
+    if (source.value === "snapshot" && snapshotStatus.value === null) void loadSnapshot();
+  }
   if (next === "diagnostics" && diagnostics.value === null) void loadDiagnostics();
 });
 </script>
@@ -323,8 +443,47 @@ watch(tab, (next) => {
           >
             Nội dung đã được rút gọn — chỉ hiển thị phần đầu của tệp.
           </p>
+
+          <!-- Editor (P3-B save): textarea only for text, untruncated files. -->
+          <template v-if="draft !== null">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <span class="text-muted-foreground">bản nháp</span>
+              <button
+                type="button"
+                class="shrink-0 text-primary hover:underline disabled:opacity-50"
+                :disabled="
+                  draft === null ||
+                  saving ||
+                  !isDirty(viewer.content ?? '', draft)
+                "
+                @click="saveFile"
+              >
+                {{ saving ? "đang lưu…" : "lưu" }}
+              </button>
+            </div>
+            <p
+              v-if="saveError !== null"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-destructive"
+            >
+              {{ saveError }}
+              <button
+                v-if="viewer !== null"
+                type="button"
+                class="ml-2 text-primary hover:underline"
+                @click="reloadFile(viewer.path.split('/').pop() ?? viewer.path)"
+              >
+                tải lại
+              </button>
+            </p>
+            <textarea
+              v-model="draft"
+              class="w-full resize-y overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-background/60 p-2 font-mono text-xs text-foreground"
+              rows="16"
+            />
+          </template>
+
           <pre
-            v-if="viewer.content !== null"
+            v-else-if="viewer.content !== null"
             class="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-background/60 p-2"
             >{{ viewer.content }}</pre
           >
@@ -376,34 +535,69 @@ watch(tab, (next) => {
 
       <!-- Changes -->
       <template v-else-if="tab === 'changes'">
-        <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
-          <span>{{ changeEntries.length }} thay đổi</span>
-          <button type="button" class="text-primary hover:underline" @click="loadChanges">
-            làm mới
-          </button>
-        </div>
-
-        <p v-if="changesLoading" class="text-muted-foreground">Đang tải…</p>
-        <p v-else-if="changesError !== null" class="text-destructive">{{ changesError }}</p>
-
-        <template v-else-if="diff !== null">
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <span class="truncate text-muted-foreground">{{ diffPath }}</span>
+        <div class="mb-2 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1 text-muted-foreground">
+            <span>So sánh:</span>
             <button
               type="button"
-              class="shrink-0 text-primary hover:underline"
-              @click="diff = null"
+              class="rounded-md px-2 py-0.5 text-xs transition-colors"
+              :class="
+                source === 'git'
+                  ? 'bg-primary/10 text-primary'
+                  : 'hover:text-foreground'
+              "
+              @click="source = 'git'"
             >
-              đóng
+              Git (HEAD)
+            </button>
+            <button
+              type="button"
+              class="rounded-md px-2 py-0.5 text-xs transition-colors"
+              :class="
+                source === 'snapshot'
+                  ? 'bg-primary/10 text-primary'
+                  : 'hover:text-foreground'
+              "
+              @click="source = 'snapshot'"
+            >
+              Từ lúc bắt đầu chạy
             </button>
           </div>
-          <p
-            v-if="diff.truncated"
-            class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
-          >
-            Diff đã được rút gọn.
-          </p>
-          <pre class="overflow-x-auto whitespace-pre rounded-md bg-background/60 p-2"><code>
+          <template v-if="source === 'git'">
+            <button type="button" class="text-primary hover:underline" @click="loadChanges">
+              làm mới
+            </button>
+          </template>
+          <template v-else>
+            <button type="button" class="text-primary hover:underline" @click="loadSnapshot">
+              làm mới
+            </button>
+          </template>
+        </div>
+
+        <!-- Git source (existing view) -->
+        <template v-if="source === 'git'">
+          <p v-if="changesLoading" class="text-muted-foreground">Đang tải…</p>
+          <p v-else-if="changesError !== null" class="text-destructive">{{ changesError }}</p>
+
+          <template v-else-if="diff !== null">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <span class="truncate text-muted-foreground">{{ diffPath }}</span>
+              <button
+                type="button"
+                class="shrink-0 text-primary hover:underline"
+                @click="diff = null"
+              >
+                đóng
+              </button>
+            </div>
+            <p
+              v-if="diff.truncated"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
+            >
+              Diff đã được rút gọn.
+            </p>
+            <pre class="overflow-x-auto whitespace-pre rounded-md bg-background/60 p-2"><code>
 <span
   v-for="(line, index) in diffLines"
   :key="index"
@@ -414,40 +608,207 @@ watch(tab, (next) => {
   }"
 >{{ line.text }}
 </span></code></pre>
-          <p v-if="diffLines.length === 0" class="text-muted-foreground">Không có diff.</p>
+            <p v-if="diffLines.length === 0" class="text-muted-foreground">Không có diff.</p>
+          </template>
+
+          <template v-else-if="changes !== null">
+            <!-- A failed diff keeps the list: only the diff failed, and the
+                 operator can pick another file without losing their place. -->
+            <p v-if="diffLoading" class="mb-1.5 text-muted-foreground">Đang tải diff…</p>
+            <p v-else-if="diffError !== null" class="mb-1.5 text-destructive">{{ diffError }}</p>
+            <p
+              v-if="changes.truncated"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
+            >
+              Danh sách đã được rút gọn — hiển thị 2000 thay đổi đầu tiên.
+            </p>
+            <ul class="grid gap-0.5">
+              <li v-for="entry in changeEntries" :key="entry.path">
+                <button
+                  type="button"
+                  class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
+                  @click="openDiff(entry.path)"
+                >
+                  <span class="truncate">
+                    {{ entry.path }}
+                    <span v-if="entry.origPath" class="text-muted-foreground">← {{ entry.origPath }}</span>
+                  </span>
+                  <span class="shrink-0 text-muted-foreground">
+                    {{ STATUS_LABELS[entry.status] ?? entry.status }}
+                  </span>
+                </button>
+              </li>
+            </ul>
+            <p v-if="changeEntries.length === 0" class="text-muted-foreground">
+              Working tree sạch — không có thay đổi nào.
+            </p>
+          </template>
         </template>
 
-        <template v-else-if="changes !== null">
-          <!-- A failed diff keeps the list: only the diff failed, and the
-               operator can pick another file without losing their place. -->
-          <p v-if="diffLoading" class="mb-1.5 text-muted-foreground">Đang tải diff…</p>
-          <p v-else-if="diffError !== null" class="mb-1.5 text-destructive">{{ diffError }}</p>
-          <p
-            v-if="changes.truncated"
-            class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
+        <!-- Snapshot source (P3-B baseline) -->
+        <template v-else>
+          <p v-if="snapshotLoading" class="text-muted-foreground">Đang tải…</p>
+          <p v-else-if="snapshotError !== null" class="text-destructive">{{ snapshotError }}</p>
+
+          <template v-else-if="snapshotStatus !== null">
+            <div v-if="snapshotStatus.baseline === null" class="text-muted-foreground">
+              Chưa có bản chụp lúc bắt đầu chạy.
+            </div>
+
+            <template v-else>
+              <div class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5">
+                <div class="text-muted-foreground">
+                  Baseline: attempt {{ snapshotStatus.baseline.attemptId }}
+                  <span v-if="snapshotStatus.baseline.sessionId !== null">
+                    — phiên {{ snapshotStatus.baseline.sessionId }}
+                  </span>
+                  , {{ new Date(snapshotStatus.baseline.capturedAt).toLocaleString() }}
+                </div>
+                <div v-if="snapshotStatus.baseline.partial" class="text-destructive">
+                  Bản chụp không đầy đủ.
+                </div>
+                <div v-if="snapshotStatus.truncated" class="text-destructive">
+                  Danh sách thay đổi đã bị rút gọn.
+                </div>
+              </div>
+
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <span class="text-muted-foreground">
+                  {{ snapshotStatus.entries.length }} mục
+                </span>
+                <button
+                  v-if="summarisePlan(snapshotStatus).restores +
+                         summarisePlan(snapshotStatus).deletions > 0"
+                  type="button"
+                  class="text-primary hover:underline"
+                  @click="workspaceRevertConfirm = true"
+                >
+                  Khôi phục cả workspace
+                </button>
+              </div>
+
+              <ul class="grid gap-0.5">
+                <li
+                  v-for="entry in snapshotStatus.entries"
+                  :key="entry.path"
+                  class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left"
+                >
+                  <span class="truncate">
+                    {{ entry.path }}
+                    <span v-if="entry.reason" class="text-muted-foreground">
+                      — {{ entry.reason }}
+                    </span>
+                  </span>
+                  <span v-if="entry.status === 'modified'" class="shrink-0 text-muted-foreground">
+                    sửa
+                  </span>
+                  <span v-else-if="entry.status === 'created'" class="shrink-0 text-muted-foreground">
+                    thêm
+                  </span>
+                  <span v-else-if="entry.status === 'deleted'" class="shrink-0 text-muted-foreground">
+                    xoá
+                  </span>
+                  <span v-else-if="entry.status === 'excluded'" class="shrink-0 text-muted-foreground">
+                    loại trừ
+                  </span>
+
+                  <!-- Per-file revert with inline confirm -->
+                  <template v-if="entry.revertable && entry.status !== 'excluded'">
+                    <template v-if="confirmingPath.value === entry.path">
+                      <button
+                        type="button"
+                        class="shrink-0 text-red-600 hover:underline"
+                        @click="revertOneFile({ path: entry.path, currentHash: entry.currentHash })"
+                      >
+                        xác nhận
+                      </button>
+                    </template>
+                    <template v-else>
+                      <button
+                        type="button"
+                        class="shrink-0 text-primary hover:underline"
+                        @click="confirmingPath.value = entry.path"
+                      >
+                        khôi phục
+                      </button>
+                    </template>
+                  </template>
+                </li>
+              </ul>
+            </template>
+          </template>
+
+          <!-- Workspace revert confirmation panel -->
+          <div
+            v-if="workspaceRevertConfirm && snapshotStatus !== null && snapshotStatus.baseline !== null"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
           >
-            Danh sách đã được rút gọn — hiển thị 2000 thay đổi đầu tiên.
-          </p>
-          <ul class="grid gap-0.5">
-            <li v-for="entry in changeEntries" :key="entry.path">
-              <button
-                type="button"
-                class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
-                @click="openDiff(entry.path)"
-              >
-                <span class="truncate">
-                  {{ entry.path }}
-                  <span v-if="entry.origPath" class="text-muted-foreground">← {{ entry.origPath }}</span>
-                </span>
-                <span class="shrink-0 text-muted-foreground">
-                  {{ STATUS_LABELS[entry.status] ?? entry.status }}
-                </span>
-              </button>
-            </li>
-          </ul>
-          <p v-if="changeEntries.length === 0" class="text-muted-foreground">
-            Working tree sạch — không có thay đổi nào.
-          </p>
+            <div class="w-full max-w-lg rounded-md border border-border/60 bg-card p-4 font-mono text-xs">
+              <h3 class="mb-3 text-sm font-medium">Xác nhận khôi phục toàn bộ workspace</h3>
+              <div v-if="snapshotStatus" class="mb-3 space-y-1 text-muted-foreground">
+                <div>
+                  Khôi phục: {{ summarisePlan(snapshotStatus).restores }} tệp
+                </div>
+                <div>Xóa: {{ summarisePlan(snapshotStatus).deletions }} tệp</div>
+                <div>Xung đột: {{ summarisePlan(snapshotStatus).conflicts }} mục</div>
+              </div>
+
+              <div v-if="canApplyPlan(snapshotStatus).ok === false" class="mb-3 text-destructive">
+                {{ (canApplyPlan(snapshotStatus) as { ok: false; reason: string }).reason }}
+              </div>
+
+              <div class="mb-3 max-h-60 overflow-y-auto">
+                <div v-if="snapshotStatus.entries.filter((e) => e.status === 'modified' || e.status === 'deleted').length > 0" class="mb-2">
+                  <div class="font-medium text-muted-foreground">Khôi phục:</div>
+                  <div
+                    v-for="e in snapshotStatus.entries.filter((e) => e.status === 'modified' || e.status === 'deleted').slice(0, 50)"
+                    :key="e.path"
+                    class="truncate"
+                  >
+                    {{ e.path }}
+                  </div>
+                </div>
+                <div v-if="snapshotStatus.entries.filter((e) => e.status === 'created').length > 0" class="mb-2">
+                  <div class="font-medium text-muted-foreground">Xóa:</div>
+                  <div
+                    v-for="e in snapshotStatus.entries.filter((e) => e.status === 'created').slice(0, 50)"
+                    :key="e.path"
+                    class="truncate"
+                  >
+                    {{ e.path }}
+                  </div>
+                </div>
+                <div v-if="snapshotStatus.entries.filter((e) => e.status === 'excluded').length > 0" class="mb-2">
+                  <div class="font-medium text-muted-foreground">Xung đột (không thao tác):</div>
+                  <div
+                    v-for="e in snapshotStatus.entries.filter((e) => e.status === 'excluded').slice(0, 50)"
+                    :key="e.path"
+                    class="truncate"
+                  >
+                    {{ e.path }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="px-3 py-1 text-muted-foreground hover:text-foreground"
+                  @click="workspaceRevertConfirm = false"
+                >
+                  hủy
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md bg-primary px-3 py-1 text-primary-foreground disabled:opacity-50"
+                  :disabled="!canApplyPlan(snapshotStatus).ok"
+                  @click="doRevertWorkspace"
+                >
+                  Xác nhận khôi phục
+                </button>
+              </div>
+            </div>
+          </div>
         </template>
       </template>
 
