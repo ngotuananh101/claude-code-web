@@ -92,6 +92,16 @@ describe("startRun", () => {
     expect(plain.body).toEqual({ prompt: "hello", permissionMode: "default" });
   });
 
+  test("a resumeSessionId travels in the body only when set", async () => {
+    const withResume = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", { prompt: "continue", resumeSessionId: "prev-session" });
+    expect(withResume.body).toEqual({ prompt: "continue", resumeSessionId: "prev-session" });
+
+    const withoutResume = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
+    await startRun("session-1", { prompt: "continue" });
+    expect(withoutResume.body).toEqual({ prompt: "continue" });
+  });
+
   test("409 collapses to session_busy", async () => {
     capture(409, "session_busy");
     expect((await startRun("s", { prompt: "p" })).ok).toBe(false);

@@ -27,6 +27,12 @@ export type StartRunRequest = {
   model?: string;
   /** The declared local head to check out before the run (M4). */
   branch?: string;
+  /**
+   * The id of a Claude Code session to resume into this run (§10.4). Omitted
+   * when absent so the server keeps its own "no resume" default rather than
+   * forwarding a literal `undefined` over the wire.
+   */
+  resumeSessionId?: string;
 };
 
 export async function startRun(sessionId: string, run: StartRunRequest): Promise<StartRunResult> {
@@ -38,6 +44,7 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.permissionMode !== undefined) body["permissionMode"] = run.permissionMode;
     if (run.model !== undefined) body["model"] = run.model;
     if (run.branch !== undefined) body["branch"] = run.branch;
+    if (run.resumeSessionId !== undefined) body["resumeSessionId"] = run.resumeSessionId;
     response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
