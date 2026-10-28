@@ -74,6 +74,7 @@ export {
 export {
   type DeclaredWorkspaceRow,
   type OwnerWorkspace,
+  registerWorkspace,
   upsertRunnerWorkspaces,
   workspacesForOwner,
 } from "./workspaces.ts";

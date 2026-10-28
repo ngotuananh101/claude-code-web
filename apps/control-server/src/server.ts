@@ -35,6 +35,7 @@ import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts";
+import { handleBrowse, handleRegisterWorkspace } from "./routes/browse-routes.ts";
 import { handleInspect } from "./routes/inspect-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
 import {
@@ -48,7 +49,11 @@ import {
   handleRevokeRunner,
 } from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
-import { handleListSessions } from "./routes/sessions-routes.ts";
+import {
+  handleListSessions,
+  handleWorkspaceSessionMessages,
+  handleWorkspaceSessionsList,
+} from "./routes/sessions-routes.ts";
 import { handleUsageStats } from "./routes/stats-routes.ts";
 import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
 import { PendingRpcRequests } from "./rpc/pending-requests.ts";
@@ -294,6 +299,33 @@ export function createServer(options: ServerOptions): ServerHandle {
         );
       }
 
+      // Browse and workspace registration (§23 Task 8). The runner id is a plain
+      // segment; the path to browse comes from `?path=`.
+      const browseMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/browse$/);
+      if (browseMatch && request.method === "GET") {
+        return handleBrowse(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          decodeURIComponent(browseMatch[1] ?? ""),
+        );
+      }
+
+      const registerWorkspaceMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/workspaces$/);
+      if (registerWorkspaceMatch && request.method === "POST") {
+        return handleRegisterWorkspace(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(registerWorkspaceMatch[1] ?? ""),
+        );
+      }
+
       if (url.pathname === "/api/sessions" && request.method === "GET") {
         return handleListSessions(request, options, allowed, browserGateway);
       }
@@ -444,6 +476,40 @@ export function createServer(options: ServerOptions): ServerHandle {
           dispatcher,
           snapshotMatch[1] ?? "",
           "snapshot.status",
+        );
+      }
+
+      // Workspace session history (§23 Task 8). The composite id stays encoded
+      // here — `parseCompositeId` inside the handler owns the single decode, so
+      // an id that legitimately contains a `%` round-trips correctly.
+      const sessionsListMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/sessions$/);
+      if (sessionsListMatch && request.method === "GET") {
+        return handleWorkspaceSessionsList(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          sessionsListMatch[1] ?? "",
+        );
+      }
+
+      const sessionMessagesMatch = url.pathname.match(
+        /^\/api\/workspaces\/([^/]+)\/sessions\/([^/]+)\/messages$/,
+      );
+      if (sessionMessagesMatch && request.method === "GET") {
+        return handleWorkspaceSessionMessages(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          sessionMessagesMatch[1] ?? "",
+          decodeURIComponent(sessionMessagesMatch[2] ?? ""),
         );
       }
 
