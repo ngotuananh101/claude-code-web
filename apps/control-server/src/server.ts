@@ -38,6 +38,11 @@ import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts"
 import { handleInspect } from "./routes/inspect-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
 import {
+  handleFileRevert,
+  handleFileWrite,
+  handleWorkspaceRevert,
+} from "./routes/mutation-routes.ts";
+import {
   handleCreateRunner,
   handleListRunners,
   handleRevokeRunner,
@@ -414,6 +419,68 @@ export function createServer(options: ServerOptions): ServerHandle {
           diagnosticsMatch[1] ?? "",
           "diagnostics",
         );
+      }
+
+      // §7.10: the four mutation routes share the inspection spine. They sit
+      // beside the read routes so the capture stays encoded — `parseCompositeId`
+      // owns the single decode. The PUT file route matches on method too, so it
+      // cannot shadow the GET file route.
+      const snapshotMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/snapshot$/);
+      if (snapshotMatch && request.method === "GET") {
+        return handleInspect(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          snapshotMatch[1] ?? "",
+          "snapshot.status",
+        );
+      }
+
+      const writeMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/file$/);
+      if (writeMatch && request.method === "PUT") {
+        return handleFileWrite(
+          request,
+          {
+            options,
+            allowedOrigins: allowed,
+            browserGateway,
+            runnerGateway,
+            pending,
+            dispatcher,
+            compositeId: writeMatch[1] ?? "",
+          },
+          url.searchParams.get("path") ?? "",
+        );
+      }
+
+      const fileRevertMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/file\/revert$/);
+      if (fileRevertMatch && request.method === "POST") {
+        return handleFileRevert(request, {
+          options,
+          allowedOrigins: allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          compositeId: fileRevertMatch[1] ?? "",
+        });
+      }
+
+      const revertMatch = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/revert$/);
+      if (revertMatch && request.method === "POST") {
+        return handleWorkspaceRevert(request, {
+          options,
+          allowedOrigins: allowed,
+          browserGateway,
+          runnerGateway,
+          pending,
+          dispatcher,
+          compositeId: revertMatch[1] ?? "",
+        });
       }
 
       if (url.pathname === "/ws/runner") {
