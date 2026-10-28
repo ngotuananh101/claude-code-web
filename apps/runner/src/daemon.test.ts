@@ -301,14 +301,19 @@ describe("the hello frame (M4 branches)", () => {
 });
 
 describe("the hello frame advertises capabilities", () => {
-  test("hello advertises both the inspect and write capabilities", () => {
+  test("hello advertises inspect, write, browse and sessions capabilities", () => {
     const hello = helloFrame({
       runnerId: "r",
       runnerVersion: "0",
       sdkVersion: "0",
       bootId: "b",
     });
-    expect(hello.capabilities).toEqual(["inspect", "workspace.write"]);
+    expect(hello.capabilities).toEqual([
+      "inspect",
+      "workspace.write",
+      "workspace.browse",
+      "workspace.sessions",
+    ]);
   });
 });
 
@@ -436,6 +441,165 @@ describe("dispatching an inspect command", () => {
     });
 
     // Mutation dispatch mirrors the inspect branch: no receipt, the frame in results.
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(runControllerCalls).toBe(0);
+  });
+
+  test("routes workspace.fs.browse to the browse handler, not the run controller", async () => {
+    let runControllerCalls = 0;
+    const seen: unknown[] = [];
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
+    dirs.push(dir);
+    await saveIdentity(dir, {
+      runnerId: "runner-a",
+      controlUrl: "ws://127.0.0.1:1/ws/runner",
+      credential: "cck_test",
+    });
+
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+      browse: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: {
+            op: "fs.browse",
+            currentPath: "/",
+            parentPath: null,
+            shortcuts: [],
+            entries: [],
+            truncated: false,
+          },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const realHandle = withFake.runs.handle.bind(withFake.runs);
+    withFake.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "workspace.fs.browse",
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      payload: { op: "fs.browse", path: "/" },
+    });
+
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(runControllerCalls).toBe(0);
+  });
+
+  test("routes workspace.sessions.list to the sessions handler, not the run controller", async () => {
+    let runControllerCalls = 0;
+    const seen: unknown[] = [];
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
+    dirs.push(dir);
+    await saveIdentity(dir, {
+      runnerId: "runner-a",
+      controlUrl: "ws://127.0.0.1:1/ws/runner",
+      credential: "cck_test",
+    });
+
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+      sessions: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: { op: "sessions.list", dir: "/srv/proj", sessions: [] },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const realHandle = withFake.runs.handle.bind(withFake.runs);
+    withFake.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "workspace.sessions.list",
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      payload: { op: "sessions.list", dir: "/srv/proj" },
+    });
+
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(runControllerCalls).toBe(0);
+  });
+
+  test("routes workspace.sessions.messages to the sessions handler, not the run controller", async () => {
+    let runControllerCalls = 0;
+    const seen: unknown[] = [];
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
+    dirs.push(dir);
+    await saveIdentity(dir, {
+      runnerId: "runner-a",
+      controlUrl: "ws://127.0.0.1:1/ws/runner",
+      credential: "cck_test",
+    });
+
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+      sessions: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: { op: "sessions.messages", sessionId: "sess-1", messages: [] },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const realHandle = withFake.runs.handle.bind(withFake.runs);
+    withFake.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "workspace.sessions.messages",
+      issuedAt: "2026-10-23T00:00:00.000Z",
+      workspaceId: "workspace-1",
+      payload: { op: "sessions.messages", sessionId: "sess-1", dir: "/srv/proj" },
+    });
+
     expect(outcome.receipt).toBeNull();
     expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
     expect(seen.length).toBe(1);

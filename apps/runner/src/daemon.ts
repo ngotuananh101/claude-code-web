@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { createSdkStream } from "@cc-web/agent-adapter";
 import { type DeclaredWorkspace, PROTOCOL_VERSION, type RpcResultFrame } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
+import { BROWSE_CAPABILITIES, createBrowseHandler } from "./browse/handler.ts";
 import { EventPump } from "./connection/event-pump.ts";
 import {
   type CommandOutcome,
@@ -34,6 +35,7 @@ import { gitSpawn } from "./git/spawn.ts";
 import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts";
 import { createInspectHandler, INSPECT_CAPABILITIES } from "./inspection/handler.ts";
 import { createMutationHandler, MUTATION_CAPABILITIES } from "./mutation/handler.ts";
+import { createSessionsHandler, SESSIONS_CAPABILITIES } from "./sessions/handler.ts";
 import { createBaselineCapture } from "./workspace/snapshot.ts";
 import { createSnapshotStatus } from "./workspace/status.ts";
 
@@ -46,10 +48,21 @@ import { createSnapshotStatus } from "./workspace/status.ts";
 export type DeclaredWorkspacesOption = DeclaredWorkspace[] | (() => DeclaredWorkspace[]);
 
 /** The full set of command kinds this runner implements, unioned per lane. */
-const RUNNER_CAPABILITIES: string[] = [...INSPECT_CAPABILITIES, ...MUTATION_CAPABILITIES];
+const RUNNER_CAPABILITIES: string[] = [
+  ...INSPECT_CAPABILITIES,
+  ...MUTATION_CAPABILITIES,
+  ...BROWSE_CAPABILITIES,
+  ...SESSIONS_CAPABILITIES,
+];
 
 /** The read-only command kinds the daemon routes to the inspection handler. */
 const INSPECT_KINDS = new Set(["workspace.inspect", "config.inspect"]);
+
+/** The read-only directory-browse command kinds the daemon routes to the browse handler. */
+const BROWSE_KINDS = new Set(["workspace.fs.browse"]);
+
+/** The read-only session-inspection command kinds routed to the sessions handler. */
+const SESSIONS_KINDS = new Set(["workspace.sessions.list", "workspace.sessions.messages"]);
 
 /** The write/revert command kinds the daemon routes to the mutation handler. */
 const MUTATION_KINDS = new Set([
@@ -74,6 +87,20 @@ function isMutationKind(command: unknown): boolean {
   if (typeof command !== "object" || command === null) return false;
   const kind = (command as Record<string, unknown>)["kind"];
   return typeof kind === "string" && MUTATION_KINDS.has(kind);
+}
+
+/** Recognizes the read-only directory-browse lane. */
+function isBrowseKind(command: unknown): boolean {
+  if (typeof command !== "object" || command === null) return false;
+  const kind = (command as Record<string, unknown>)["kind"];
+  return typeof kind === "string" && BROWSE_KINDS.has(kind);
+}
+
+/** Recognizes the read-only session-inspection lane. */
+function isSessionsKind(command: unknown): boolean {
+  if (typeof command !== "object" || command === null) return false;
+  const kind = (command as Record<string, unknown>)["kind"];
+  return typeof kind === "string" && SESSIONS_KINDS.has(kind);
 }
 
 export function resolveDeclaredWorkspaces(
@@ -169,6 +196,18 @@ export type DaemonOptions = {
    * handler; tests inject a fake to observe routing without a filesystem.
    */
   mutation?: (command: unknown) => Promise<RpcResultFrame>;
+  /**
+   * Answers a directory-browse command (§18.2). Defaults to the real
+   * `createBrowseHandler`; tests inject a fake to observe routing without a
+   * filesystem.
+   */
+  browse?: (command: unknown) => Promise<RpcResultFrame>;
+  /**
+   * Answers a session-inspection command (§18.2). Defaults to the real
+   * `createSessionsHandler` built from `workspacePathFor`; tests inject a fake
+   * to observe routing without an SDK or filesystem.
+   */
+  sessions?: (command: unknown) => Promise<RpcResultFrame>;
   /** The run-start baseline capture (P3-B). See `RunController` wiring. */
   captureBaseline?: ExecuteOptions["captureBaseline"];
   onEvent?: (event: unknown) => void;
@@ -286,15 +325,31 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       workspacePathFor: options.workspacePathFor ?? (() => undefined),
     });
 
+  const browse =
+    options.browse ??
+    createBrowseHandler({
+      homeDir: options.identityDir,
+    });
+
+  const sessions =
+    options.sessions ??
+    createSessionsHandler({
+      workspacePathFor: options.workspacePathFor ?? (() => undefined),
+    });
+
   // Ruling 15's pre-switch. `runs.handle` persists the command before answering
   // and starts the run after, so the receipt keeps meaning "durable", not
-  // "finished" (§9.4). Inspects and mutations never reach it.
+  // "finished" (§9.4). Inspects, mutations, browses and sessions never reach it.
   const dispatch = (command: unknown): Promise<CommandOutcome> =>
     isInspectKind(command)
       ? inspect(command).then((frame) => ({ receipt: null, results: [frame] }))
-      : isMutationKind(command)
-        ? mutate(command).then((frame) => ({ receipt: null, results: [frame] }))
-        : runs.handle(command).then((receipt) => ({ receipt }));
+      : isBrowseKind(command)
+        ? browse(command).then((frame) => ({ receipt: null, results: [frame] }))
+        : isSessionsKind(command)
+          ? sessions(command).then((frame) => ({ receipt: null, results: [frame] }))
+          : isMutationKind(command)
+            ? mutate(command).then((frame) => ({ receipt: null, results: [frame] }))
+            : runs.handle(command).then((receipt) => ({ receipt }));
 
   const loop = new ReconnectLoop({
     runnerId: identity.runnerId,

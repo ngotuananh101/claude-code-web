@@ -11,7 +11,10 @@
  *   runner service uninstall stop, disable and remove the unit (root)
  */
 
+import { Database } from "bun:sqlite";
 import { rm, writeFile } from "node:fs/promises";
+import type { DeclaredWorkspace } from "@cc-web/protocol";
+import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
@@ -24,7 +27,7 @@ import {
   writeUnitAndEnable,
 } from "../service/systemd.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
-import { declaredWorkspaces, defaultWorkspaceResolver } from "../workspaces/workspaces.ts";
+import { discoverWorkspaces, workspaceResolverFrom } from "../workspaces/workspaces.ts";
 
 /**
  * The server origin baked in at compile time by the release workflow
@@ -48,6 +51,18 @@ const command = process.argv[2] ?? "connect";
 
 function identityDir(): string {
   return process.env["CC_WEB_RUNNER_HOME"] ?? `${process.env["HOME"]}/.cc-web-runner`;
+}
+
+/**
+ * Opens the runner database for workspace discovery. The daemon opens its own
+ * handle later; this one is read-only and closed after discovery so two
+ * processes never contend on the same SQLite handle. Migrations are applied
+ * idempotently so a first boot discovers custom workspaces from a fresh schema.
+ */
+function openRunnerDb(dir: string): Database {
+  const db = new Database(`${dir}/runner.db`);
+  migrateRunnerDb(db);
+  return db;
 }
 
 /** The real io for the service subcommands; systemd is actually run. */
@@ -111,18 +126,34 @@ async function start(): Promise<void> {
   const dir = identityDir();
   const defaultWorkspaceEnv = process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"];
 
+  // §11.1 / §18.2: discover all workspaces — the default env dir, any persisted
+  // custom workspaces in the runner db, and Claude Code projects under the home
+  // directory. The declared list and the resolver both derive from this single
+  // discovery call, so they cannot disagree (§15.1).
+  //
+  // The db handle is opened once here so the thunk doesn't leak a handle per
+  // reconnect; the daemon opens its own handle for its read-write inbox/outbox
+  // and writes to the same file, which SQLite supports concurrently for reads
+  // from this handle.
+  const db = openRunnerDb(dir);
+  const discoveredWorkspaces = () =>
+    discoverWorkspaces({
+      ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
+      ...(db === undefined ? {} : { db }),
+      ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
+    });
+
   const daemon = await startDaemon({
     identityDir: dir,
     runnerVersion: "0.0.0",
     sdkVersion: "0.3.309",
-    // §11.1 MVP: one directory named in the environment serves the default
-    // workspace until the registration surface exists. The declaration and the
-    // resolver read the same value, so they cannot disagree (§15.1). The
-    // declaration is a thunk so every reconnect re-lists the workspace's
-    // branches (M4) instead of replaying what the boot saw.
-    workspacePathFor: defaultWorkspaceResolver(defaultWorkspaceEnv),
+    workspacePathFor: (workspaceId) => {
+      const list = discoveredWorkspaces();
+      const resolve = workspaceResolverFrom(list);
+      return resolve(workspaceId);
+    },
     declaredWorkspaces: () =>
-      declaredWorkspaces(defaultWorkspaceEnv).map((workspace) => ({
+      discoveredWorkspaces().map((workspace: DeclaredWorkspace) => ({
         ...workspace,
         branches: listBranches(workspace.path),
       })),
