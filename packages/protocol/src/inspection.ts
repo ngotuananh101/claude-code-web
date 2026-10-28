@@ -23,6 +23,19 @@ import type { MutationResult } from "./mutation.ts";
 /** The `capabilities` entry a runner must advertise before it is sent RPCs. */
 export const INSPECT_CAPABILITY = "inspect" as const;
 
+/**
+ * Capability a runner advertises before it is sent `workspace.fs.browse`
+ * directory listing commands. The runner is the only producer of
+ * `FsBrowseResult`; the server only issues the request.
+ */
+export const BROWSE_CAPABILITY = "workspace.browse" as const;
+
+/**
+ * Capability a runner advertises before it is sent `workspace.sessions.list`
+ * and `workspace.sessions.messages` session discovery commands.
+ */
+export const SESSIONS_CAPABILITY = "workspace.sessions" as const;
+
 /** Directory listing ceiling; a deeper tree is reported as truncated, not read. */
 export const MAX_LISTING_ENTRIES = 2000;
 /** Largest file content the runner will return in one result. */
@@ -36,6 +49,18 @@ export const MAX_DIFF_BYTES = 256 * 1024;
 export const BINARY_SNIFF_BYTES = 8000;
 /** Working-tree change ceiling, mirroring the listing bound. */
 export const MAX_CHANGE_ENTRIES = 2000;
+
+/** Directory listing ceiling for the folder browser. */
+export const MAX_BROWSE_ENTRIES = 500;
+/** Largest file content the runner will return in one browse or read result. */
+export const MAX_BROWSE_FILE_BYTES = 1024 * 1024;
+
+/** Bounds on the `limit` parameter of a sessions.list request. */
+export const SESSIONS_LIST_DEFAULT_LIMIT = 50;
+export const SESSIONS_LIST_MAX_LIMIT = 200;
+/** Bounds on the `limit` parameter of a sessions.messages request. */
+export const SESSIONS_MESSAGES_DEFAULT_LIMIT = 100;
+export const SESSIONS_MESSAGES_MAX_LIMIT = 500;
 
 /** Porcelain status letters, expanded to the words a UI can render directly. */
 export type ChangeStatus =
@@ -160,6 +185,84 @@ export type InspectResult =
   | DiagnosticsResult
   | SnapshotStatusResult;
 
+/** One entry in a directory listing returned by `workspace.fs.browse`. */
+export type FsBrowseEntry = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  isGitRepo: boolean;
+  hasClaudeProject: boolean;
+};
+
+/** A convenience navigation target offered alongside a listing. */
+export type FsBrowseShortcut = { label: string; path: string };
+
+/** The runner's answer to a `workspace.fs.browse` command. */
+export type FsBrowseResult = {
+  op: "fs.browse";
+  currentPath: string;
+  parentPath: string | null;
+  shortcuts: FsBrowseShortcut[];
+  entries: FsBrowseEntry[];
+  /** True when the entry count reached `MAX_BROWSE_ENTRIES` before the directory was exhausted. */
+  truncated: boolean;
+};
+
+/** The server's request to list a directory on the runner host. */
+export type FsBrowseRequest = {
+  /** Empty/absent defaults to the runner's configured root (user homedir on the runner). */
+  path?: string;
+  showHidden?: boolean;
+};
+
+/** The server's request to enumerate Claude Code sessions for a directory. */
+export type SessionsListRequest = {
+  op: "sessions.list";
+  dir: string;
+  limit?: number;
+  offset?: number;
+};
+
+/** The server's request to read the historical messages of a Claude Code session. */
+export type SessionMessagesRequest = {
+  op: "sessions.messages";
+  sessionId: string;
+  dir?: string;
+  limit?: number;
+  offset?: number;
+};
+
+/** One Claude Code session discovered for a directory. */
+export type SessionSummary = {
+  sessionId: string;
+  summary: string;
+  gitBranch?: string;
+  cwd?: string;
+  lastModified: number;
+  createdAt?: number;
+};
+
+/** The runner's answer to a `workspace.sessions.list` command. */
+export type SessionsListResult = {
+  op: "sessions.list";
+  dir: string;
+  sessions: SessionSummary[];
+};
+
+/** A single historical message replayed from a Claude Code session. */
+export type SessionMessage = {
+  type: "user" | "assistant" | "system";
+  uuid: string;
+  message: unknown;
+};
+
+/** The runner's answer to a `workspace.sessions.messages` command. */
+export type SessionMessagesResult = {
+  op: "sessions.messages";
+  sessionId: string;
+  messages: SessionMessage[];
+};
+
 /**
  * Runner → Server: the answer to one inspection command.
  *
@@ -172,7 +275,12 @@ export type RpcResultFrame = {
   type: "rpc.result";
   commandId: string;
   ok: boolean;
-  result?: InspectResult | MutationResult;
+  result?:
+    | InspectResult
+    | MutationResult
+    | FsBrowseResult
+    | SessionsListResult
+    | SessionMessagesResult;
   error?: { code: string; message: string };
 };
 
@@ -209,6 +317,118 @@ export function parseInspectRequest(kind: string, payload: unknown): InspectRequ
 }
 
 /**
+ * Parse the payload of a `workspace.fs.browse` command.
+ *
+ * `undefined` is the refusal signal, matching the other protocol parsers. The
+ * kind locks the vocabulary: a browse request only arrives under
+ * `workspace.fs.browse`, never under an inspect or sessions kind. Path safety
+ * belongs to the runner, which owns the filesystem (Task 3 of this feature);
+ * a parser refusing `..` here would be a second, weaker copy of the rule that
+ * actually matters, so the path is rebuilt from its known keys verbatim.
+ */
+export function parseBrowseRequest(kind: string, payload: unknown): FsBrowseRequest | undefined {
+  if (kind !== "workspace.fs.browse") return undefined;
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+
+  const path = record["path"];
+  if (path !== undefined && typeof path !== "string") return undefined;
+
+  const showHidden = record["showHidden"];
+  if (showHidden !== undefined && typeof showHidden !== "boolean") return undefined;
+
+  const request: FsBrowseRequest = {};
+  if (path !== undefined) request.path = path;
+  if (showHidden !== undefined) request.showHidden = showHidden;
+  return request;
+}
+
+/**
+ * Parse the payload of a `workspace.sessions.list` or `workspace.sessions.messages`
+ * command.
+ *
+ * `undefined` is the refusal signal, matching the other protocol parsers. The
+ * kind decides which ops are addressable: a `sessions.list` payload cannot be
+ * read as `sessions.messages`, and vice-versa. Bounded `limit` values keep a
+ * peer from requesting a pathological page before the transport ceiling
+ * (§12.6) ever sees it; `offset` is accepted unbounded because it is a cursor,
+ * not a memory commitment.
+ */
+export function parseSessionsRequest(
+  kind: string,
+  payload: unknown,
+): SessionsListRequest | SessionMessagesRequest | undefined {
+  const record =
+    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
+  if (record === null) return undefined;
+
+  if (kind === "workspace.sessions.list") {
+    const op = record["op"];
+    // The op is carried by the command kind, not chosen by the payload.
+    if (op !== undefined && op !== "sessions.list") return undefined;
+
+    const dir = record["dir"];
+    if (typeof dir !== "string" || dir === "") return undefined;
+
+    const limit = record["limit"];
+    if (typeof limit === "number") {
+      if (!Number.isInteger(limit) || limit < 1 || limit > SESSIONS_LIST_MAX_LIMIT) {
+        return undefined;
+      }
+    } else if (limit !== undefined) {
+      return undefined;
+    }
+
+    const offset = record["offset"];
+    if (typeof offset === "number") {
+      if (!Number.isInteger(offset) || offset < 0) return undefined;
+    } else if (offset !== undefined) {
+      return undefined;
+    }
+
+    const request: SessionsListRequest = { op: "sessions.list", dir };
+    if (limit !== undefined) request.limit = limit;
+    if (offset !== undefined) request.offset = offset;
+    return request;
+  }
+
+  if (kind === "workspace.sessions.messages") {
+    const op = record["op"];
+    if (op !== undefined && op !== "sessions.messages") return undefined;
+
+    const sessionId = record["sessionId"];
+    if (typeof sessionId !== "string" || sessionId === "") return undefined;
+
+    const dir = record["dir"];
+    if (dir !== undefined && typeof dir !== "string") return undefined;
+
+    const limit = record["limit"];
+    if (typeof limit === "number") {
+      if (!Number.isInteger(limit) || limit < 1 || limit > SESSIONS_MESSAGES_MAX_LIMIT) {
+        return undefined;
+      }
+    } else if (limit !== undefined) {
+      return undefined;
+    }
+
+    const offset = record["offset"];
+    if (typeof offset === "number") {
+      if (!Number.isInteger(offset) || offset < 0) return undefined;
+    } else if (offset !== undefined) {
+      return undefined;
+    }
+
+    const request: SessionMessagesRequest = { op: "sessions.messages", sessionId };
+    if (dir !== undefined) request.dir = dir;
+    if (limit !== undefined) request.limit = limit;
+    if (offset !== undefined) request.offset = offset;
+    return request;
+  }
+
+  return undefined;
+}
+
+/**
  * Parse an inbound `rpc.result` frame. The server holds a waiter per command
  * id; a frame it cannot read is dropped rather than matched loosely, because a
  * loosely matched answer would settle the wrong request.
@@ -229,7 +449,17 @@ export function parseRpcResultFrame(value: unknown): RpcResultFrame | undefined 
     if (typeof result !== "object" || result === null) return undefined;
     const op = (result as Record<string, unknown>)["op"];
     if (typeof op !== "string") return undefined;
-    return { type: "rpc.result", commandId, ok, result: result as InspectResult | MutationResult };
+    return {
+      type: "rpc.result",
+      commandId,
+      ok,
+      result: result as
+        | InspectResult
+        | MutationResult
+        | FsBrowseResult
+        | SessionsListResult
+        | SessionMessagesResult,
+    };
   }
 
   const error = record["error"];

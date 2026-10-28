@@ -56,7 +56,10 @@ export type CommandKind =
   | "workspace.file.revert"
   | "workspace.revert"
   | "workspace.inspect"
-  | "config.inspect";
+  | "config.inspect"
+  | "workspace.fs.browse"
+  | "workspace.sessions.list"
+  | "workspace.sessions.messages";
 
 export type RunnerEvent = {
   protocolVersion: ProtocolVersion;
@@ -249,24 +252,44 @@ export {
 } from "./handshake.ts";
 export {
   BINARY_SNIFF_BYTES,
+  BROWSE_CAPABILITY,
   type ChangeStatus,
   type ConfigInspectRequest,
   type DiagnosticsReport,
   type DiagnosticsResult,
   type FileListResult,
   type FileReadResult,
+  type FsBrowseEntry,
+  type FsBrowseRequest,
+  type FsBrowseResult,
+  type FsBrowseShortcut,
   type GitChangesResult,
   type GitDiffResult,
   INSPECT_CAPABILITY,
   type InspectRequest,
   type InspectResult,
+  MAX_BROWSE_ENTRIES,
+  MAX_BROWSE_FILE_BYTES,
   MAX_CHANGE_ENTRIES,
   MAX_DIFF_BYTES,
   MAX_FILE_BYTES,
   MAX_LISTING_ENTRIES,
+  parseBrowseRequest,
   parseInspectRequest,
   parseRpcResultFrame,
+  parseSessionsRequest,
   type RpcResultFrame,
+  SESSIONS_CAPABILITY,
+  SESSIONS_LIST_DEFAULT_LIMIT,
+  SESSIONS_LIST_MAX_LIMIT,
+  SESSIONS_MESSAGES_DEFAULT_LIMIT,
+  SESSIONS_MESSAGES_MAX_LIMIT,
+  type SessionMessage,
+  type SessionMessagesRequest,
+  type SessionMessagesResult,
+  type SessionSummary,
+  type SessionsListRequest,
+  type SessionsListResult,
   type SnapshotEntry,
   type SnapshotStatusResult,
   type WorkspaceInspectRequest,

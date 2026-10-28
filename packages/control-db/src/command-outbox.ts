@@ -21,17 +21,10 @@
  */
 
 import type { Database } from "bun:sqlite";
+import type { CommandKind } from "@cc-web/protocol";
 import { fingerprint } from "@cc-web/shared";
 
-export type CommandKind =
-  | "run.start"
-  | "run.cancel"
-  | "approval.respond"
-  | "workspace.file.write"
-  | "workspace.file.revert"
-  | "workspace.revert"
-  | "workspace.inspect"
-  | "config.inspect";
+export type { CommandKind } from "@cc-web/protocol";
 
 export type EnqueueInput = {
   commandId: string;
