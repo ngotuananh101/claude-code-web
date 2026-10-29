@@ -78,6 +78,10 @@ describe("composeWorkspaceId", () => {
   test("URL-encodes an already-composite workspace id", () => {
     expect(composeWorkspaceId(undefined, "r-1/default")).toBe("r-1%2Fdefault");
   });
+
+  test("does not double-encode if workspaceId already contains runnerId prefix", () => {
+    expect(composeWorkspaceId("r-1", "r-1/default")).toBe("r-1%2Fdefault");
+  });
 });
 
 describe("fetchWorkspaceSessions", () => {

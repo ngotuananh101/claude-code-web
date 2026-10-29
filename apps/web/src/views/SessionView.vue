@@ -108,15 +108,14 @@ watch(
     const targetResume = active.value?.sdkSessionId ?? payloadResume;
     if (targetResume === undefined || targetResume === "") return;
     if (fetchedResume.value === targetResume) return;
-    if (active.value?.runnerId === null || active.value?.workspaceId === null) return;
+    if (!active.value?.runnerId || !active.value?.workspaceId) return;
 
-    const compositeId = `${active.value.runnerId}/${active.value.workspaceId}`;
     fetchedResume.value = targetResume;
     void (async () => {
       const result = await fetchSessionMessages(
-        compositeId,
+        active.value.workspaceId,
         targetResume,
-        active.value?.runnerId ?? undefined,
+        active.value.runnerId,
       );
       if (result.ok) {
         historicalMessages.value = result.messages;

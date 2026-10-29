@@ -37,6 +37,9 @@ export type SessionsOptions = { limit?: number; offset?: number };
  */
 export function composeWorkspaceId(runnerId: string | undefined, workspaceId: string): string {
   if (runnerId !== undefined && runnerId !== "") {
+    if (workspaceId.startsWith(`${runnerId}/`)) {
+      return encodeURIComponent(workspaceId);
+    }
     return compositeId(runnerId, workspaceId);
   }
   if (workspaceId.includes("/")) {
