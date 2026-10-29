@@ -2,13 +2,14 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Folder,
   LayoutDashboard,
   LogOut,
   Search,
   Server,
   SquarePen,
 } from "@lucide/vue";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,13 +21,29 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  type FolderSessionGroup,
+  groupSessionsByFolder,
+} from "../features/sessions/folder-tree.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { stopTokenRefreshTimer } from "../services/auth-api.ts";
+import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
 import { closeSession, disconnectSocket, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 
 const route = useRoute();
 const router = useRouter();
+
+const workspaces = ref<OwnerWorkspace[]>([]);
+
+async function refreshWorkspaces(): Promise<void> {
+  const result = await fetchWorkspaces();
+  if (result.ok) workspaces.value = result.workspaces;
+}
+
+const folderGroups = computed<FolderSessionGroup[]>(() =>
+  groupSessionsByFolder(sessions.sessions, workspaces.value),
+);
 
 // vue-router writes {back, current, forward} into history.state; reading it
 // on every route change is what keeps the arrows honest.
@@ -64,8 +81,18 @@ function onKeydown(event: KeyboardEvent): void {
     searchOpen.value = true;
   }
 }
-onMounted(() => window.addEventListener("keydown", onKeydown));
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  void refreshWorkspaces();
+});
 onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+
+// Re-read workspace declarations whenever sessions change so newly custom-registered
+// folders resolve their path without requiring a full page refresh.
+watch(
+  () => sessions.sessions.length,
+  () => void refreshWorkspaces(),
+);
 
 // "New session" leaves the held journal for the composer page: §11's dispatch
 // API is what will let a prompt create a session from there.
@@ -173,39 +200,54 @@ async function signOut(): Promise<void> {
           <Search :size="15" />
         </Button>
       </div>
-      <!-- grid-cols-1 = minmax(0,1fr): without it the implicit auto column
-           sizes to the rows' nowrap min-content and overflows the rail. -->
-      <ul v-if="sessions.sessions.length > 0" class="grid grid-cols-1 content-start gap-0.5">
-        <li v-for="s in sessions.sessions" :key="s.sessionId">
-          <Button
-            variant="ghost"
-            class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-2 font-normal"
-            :class="
-              s.sessionId === sessions.activeId &&
-              'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
-            "
-            @click="router.push(`/sessions/${s.sessionId}`)"
+      <!-- Groups sessions by folder: never an un-scoped flat list -->
+      <div v-if="folderGroups.length > 0" class="space-y-3">
+        <div v-for="group in folderGroups" :key="group.compositeId" class="space-y-0.5">
+          <div
+            class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider"
+            :title="`${group.path} (${group.runnerId})`"
           >
-            <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
-              {{ s.sessionId }}
+            <Folder :size="12" class="shrink-0 text-primary" />
+            <span class="truncate font-mono">{{ group.displayName }}</span>
+            <span
+              v-if="group.shortRunnerId"
+              class="ml-auto font-mono text-[10px] text-muted-foreground/70"
+            >
+              {{ group.shortRunnerId }}
             </span>
-            <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-              {{ relativeTime(s.lastIngestedAt, now) }}
-              <span
-                v-if="s.live"
-                class="size-[7px] animate-pulse rounded-full bg-primary"
-                title="Có một run đang chạy"
-              />
-            </span>
-          </Button>
-        </li>
-      </ul>
+          </div>
+          <ul class="grid grid-cols-1 content-start gap-0.5 pl-1.5">
+            <li v-for="s in group.sessions" :key="s.sessionId">
+              <Button
+                variant="ghost"
+                class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
+                :class="
+                  s.sessionId === sessions.activeId &&
+                  'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
+                "
+                @click="router.push(`/sessions/${s.sessionId}`)"
+              >
+                <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
+                  {{ s.sessionId }}
+                </span>
+                <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {{ relativeTime(s.lastIngestedAt, now) }}
+                  <span
+                    v-if="s.live"
+                    class="size-[7px] animate-pulse rounded-full bg-primary"
+                    title="Có một run đang chạy"
+                  />
+                </span>
+              </Button>
+            </li>
+          </ul>
+        </div>
+      </div>
       <p
         v-else-if="sessions.loaded"
         class="px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
       >
-        Chưa có phiên nào. Kết nối một runner và chạy lệnh — phiên sẽ xuất hiện
-        ở đây ngay khi bắt đầu.
+        Chưa có phiên nào. Chọn runner và thư mục để tạo phiên mới.
       </p>
       <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">Đang đọc journal…</p>
       </div>
@@ -239,9 +281,13 @@ async function signOut(): Promise<void> {
       <CommandInput placeholder="Tìm phiên theo id…" />
       <CommandList>
         <CommandEmpty>Không có phiên nào khớp.</CommandEmpty>
-        <CommandGroup heading="Phiên">
+        <CommandGroup
+          v-for="group in folderGroups"
+          :key="group.compositeId"
+          :heading="`${group.displayName} (${group.shortRunnerId})`"
+        >
           <CommandItem
-            v-for="s in sessions.sessions"
+            v-for="s in group.sessions"
             :key="s.sessionId"
             :value="s.sessionId"
             @select="goToSession(s.sessionId)"

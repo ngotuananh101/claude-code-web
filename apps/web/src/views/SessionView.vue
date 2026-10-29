@@ -245,7 +245,7 @@ async function refreshNow(): Promise<void> {
         <div class="grid justify-items-center gap-1.5 text-center">
           <h1 class="text-[26px] font-medium tracking-tight">{{ greeting }}</h1>
           <p class="text-sm text-muted-foreground">
-            Chọn một phiên ở thanh bên, hoặc đợi runner mở phiên mới.
+            Chọn runner và thư mục để bắt đầu phiên mới hoặc tiếp tục phiên cũ.
           </p>
         </div>
 
@@ -272,15 +272,6 @@ async function refreshNow(): Promise<void> {
             @click="refreshNow"
           >
             làm mới
-          </Button>
-          <Button
-            v-if="sessions.sessions.length > 0"
-            variant="outline"
-            size="xs"
-            class="rounded-full bg-card px-3.5 hover:border-primary/40 hover:text-foreground"
-            @click="router.push(`/sessions/${sessions.sessions[0]!.sessionId}`)"
-          >
-            mở journal mới nhất
           </Button>
         </div>
       </div>

@@ -6,10 +6,12 @@ import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { toast } from "vue-sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { folderBasename } from "../features/sessions/folder-tree.ts";
 import { formatTokens } from "../lib/format-tokens.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { authFetch } from "../services/auth-api.ts";
-import { sessions } from "../stores/sessions.ts";
+import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
+import { type SessionSummary, sessions } from "../stores/sessions.ts";
 
 /**
  * The landing page (§17.1's usage read): what the journal cost in tokens,
@@ -19,6 +21,7 @@ import { sessions } from "../stores/sessions.ts";
 
 const stats = ref<UsageStats | null>(null);
 const runnersEnrolled = ref<number | null>(null);
+const workspaces = ref<OwnerWorkspace[]>([]);
 
 async function load(): Promise<void> {
   const response = await authFetch("/api/stats/usage");
@@ -36,10 +39,24 @@ async function loadRunners(): Promise<void> {
   runnersEnrolled.value = body.runners.length;
 }
 
+async function loadWorkspaces(): Promise<void> {
+  const result = await fetchWorkspaces();
+  if (result.ok) workspaces.value = result.workspaces;
+}
+
 onMounted(() => {
   void load();
   void loadRunners();
+  void loadWorkspaces();
 });
+
+function folderFor(s: SessionSummary): string | null {
+  if (!s.runnerId || !s.workspaceId) return null;
+  const match = workspaces.value.find(
+    (w) => w.runnerId === s.runnerId && w.workspaceId === s.workspaceId,
+  );
+  return match ? folderBasename(match.path) : null;
+}
 
 type Kpi = {
   label: string;
@@ -144,7 +161,11 @@ const hasUsage = computed(
 );
 
 const liveCount = computed(() => sessions.sessions.filter((s) => s.live).length);
-const recent = computed(() => sessions.sessions.slice(0, 6));
+// Folder-first everywhere: a session with no folder pin has no folder to be
+// listed under, so it does not appear here either.
+const recent = computed(() =>
+  sessions.sessions.filter((s) => s.runnerId !== null && s.workspaceId !== null).slice(0, 6),
+);
 </script>
 
 <template>
@@ -269,7 +290,15 @@ const recent = computed(() => sessions.sessions.slice(0, 6));
                 :to="`/sessions/${s.sessionId}`"
                 class="flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-muted/60"
               >
-                <span class="min-w-0 flex-1 truncate font-mono text-xs">{{ s.sessionId }}</span>
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 truncate font-mono text-xs">
+                  <span
+                    v-if="folderFor(s)"
+                    class="shrink-0 rounded bg-muted px-1.5 py-0.5 font-sans text-[10px] text-muted-foreground"
+                  >
+                    {{ folderFor(s) }}
+                  </span>
+                  <span class="truncate">{{ s.sessionId }}</span>
+                </span>
                 <span class="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
                   {{ s.eventCount }} sự kiện · {{ relativeTime(s.lastIngestedAt) }}
                   <i

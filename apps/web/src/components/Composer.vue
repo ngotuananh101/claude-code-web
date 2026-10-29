@@ -30,6 +30,7 @@ import {
   registerCustomWorkspace,
   workspaceForPath,
 } from "@/features/composer/composer-logic.ts";
+import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { authFetch } from "../services/auth-api";
 import { cancelRun, startRun } from "../services/runs-api";
@@ -157,6 +158,12 @@ const folderOptions = computed<FolderOption[]>(() => {
 });
 
 const selectedFolder = computed(() => folderOptions.value.find((o) => o.value === folderKey.value));
+
+const selectedSessionLabel = computed(() => {
+  if (selectedSession.value === NEW_SESSION) return "Phiên mới";
+  const found = workspaceSessions.value?.find((s) => s.sessionId === selectedSession.value);
+  return found ? found.summary || found.sessionId : selectedSession.value;
+});
 
 // A folder that falls out of the option list — a re-declaration dropped it, or
 // the runner changed — clears the selection rather than silently pointing the
@@ -352,36 +359,42 @@ async function stop(): Promise<void> {
     <InputGroupAddon
       v-if="sessionId === null"
       align="block-start"
-      class="gap-1.5 px-3.5 pt-2.5 pb-0"
+      class="flex-wrap gap-1.5 px-3.5 pt-2.5 pb-0"
     >
+      <!-- Bước 1: Chọn runner -->
       <Select v-model="runnerId">
         <SelectTrigger
           size="sm"
           aria-label="Chọn runner"
-          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! max-w-[150px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          :title="runnerId ? `Runner: ${runnerId}` : 'Chọn runner'"
         >
-          <Server :size="13" />
-          <SelectValue placeholder="Chọn runner" />
+          <Server :size="13" class="shrink-0" />
+          <span v-if="runnerId" class="truncate font-mono text-xs">{{ shortRunnerId(runnerId) }}</span>
+          <span v-else class="text-xs">Chọn runner</span>
         </SelectTrigger>
         <SelectContent position="popper">
           <SelectItem
             v-for="r in runners"
             :key="r.runnerId"
             :value="r.runnerId"
-            class="max-w-[300px] font-mono text-xs"
+            class="max-w-[320px] font-mono text-xs"
           >
             {{ r.runnerId }}
           </SelectItem>
         </SelectContent>
       </Select>
-      <Select v-model="folderKey" :disabled="runnerId === ''">
+
+      <!-- Bước 2: Chọn folder trên runner đã chọn -->
+      <Select v-if="runnerId !== ''" v-model="folderKey">
         <SelectTrigger
           size="sm"
           aria-label="Chọn folder"
-          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! max-w-[220px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          :title="selectedFolder ? selectedFolder.path : 'Chọn folder'"
         >
-          <FolderOpen :size="13" />
-          <span v-if="selectedFolder" class="max-w-[220px] truncate font-mono text-xs">
+          <FolderOpen :size="13" class="shrink-0" />
+          <span v-if="selectedFolder" class="max-w-[170px] truncate font-mono text-xs">
             {{ selectedFolder.path }}
           </span>
           <span v-else class="text-xs">Chọn folder</span>
@@ -397,26 +410,31 @@ async function stop(): Promise<void> {
           </SelectItem>
         </SelectContent>
       </Select>
+
+      <!-- Duyệt thư mục trên runner -->
       <Button
         v-if="runnerId !== ''"
         variant="ghost"
         size="sm"
-        class="h-7! gap-1 border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+        class="h-7! shrink-0 gap-1 border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         aria-label="Duyệt thư mục trên runner"
         title="Duyệt thư mục trên runner..."
         @click="browserOpen = true"
       >
-        <FolderGit2 :size="13" />
+        <FolderGit2 :size="13" class="shrink-0" />
         Duyệt…
       </Button>
-      <Select v-model="selectedSession" :disabled="!workspaceSessions">
+
+      <!-- Bước 3: Chọn phiên theo thư mục được chọn hoặc tạo mới (chỉ hiện sau khi đã chọn folder) -->
+      <Select v-if="selectedFolder" v-model="selectedSession" :disabled="!workspaceSessions">
         <SelectTrigger
           size="sm"
           aria-label="Chọn session"
-          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          class="h-7! max-w-[190px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          :title="selectedSessionLabel"
         >
-          <History :size="13" />
-          <SelectValue />
+          <History :size="13" class="shrink-0" />
+          <span class="truncate font-mono text-xs">{{ selectedSessionLabel }}</span>
         </SelectTrigger>
         <SelectContent position="popper">
           <SelectItem value="new" class="font-mono text-xs">Phiên mới</SelectItem>
@@ -437,13 +455,15 @@ async function stop(): Promise<void> {
           </SelectItem>
         </SelectContent>
       </Select>
+
+      <!-- Thông tin branch hiện tại của folder -->
       <span
         v-if="selectedFolder?.currentBranch"
-        class="flex h-7 items-center gap-1.5 px-2 text-xs text-muted-foreground"
+        class="flex h-7 shrink-0 items-center gap-1.5 px-2 text-xs text-muted-foreground"
         :title="`Branch hiện tại: ${selectedFolder.currentBranch}`"
       >
-        <GitBranch :size="13" />
-        <span class="max-w-[160px] truncate font-mono">{{ selectedFolder.currentBranch }}</span>
+        <GitBranch :size="13" class="shrink-0" />
+        <span class="max-w-[140px] truncate font-mono">{{ selectedFolder.currentBranch }}</span>
       </span>
     </InputGroupAddon>
 
