@@ -142,7 +142,7 @@ describe("discoverWorkspaces", () => {
     // Claude keeps a live .jsonl session file inside the encoded dir.
     await writeFile(
       join(projectEntry, "session.jsonl"),
-      JSON.stringify({ type: "system", cwd: projectDir }) + "\n",
+      `${JSON.stringify({ type: "system", cwd: projectDir })}\n`,
     );
 
     const found = discoverWorkspaces(opts({ homeDir: home }));
@@ -176,7 +176,7 @@ describe("discoverWorkspaces", () => {
     await mkdir(join(projectsRoot, projectDirName), { recursive: true });
     await writeFile(
       join(projectsRoot, projectDirName, "session.jsonl"),
-      JSON.stringify({ type: "system", cwd: defaultPath }) + "\n",
+      `${JSON.stringify({ type: "system", cwd: defaultPath })}\n`,
     );
 
     const found = discoverWorkspaces(opts({ defaultEnv: defaultPath, homeDir: home }));
@@ -215,11 +215,11 @@ describe("discoverWorkspaces", () => {
     await mkdir(join(projectsRoot, encB), { recursive: true });
     await writeFile(
       join(projectsRoot, encA, "s.jsonl"),
-      JSON.stringify({ type: "system", cwd: subA }) + "\n",
+      `${JSON.stringify({ type: "system", cwd: subA })}\n`,
     );
     await writeFile(
       join(projectsRoot, encB, "s.jsonl"),
-      JSON.stringify({ type: "system", cwd: subB }) + "\n",
+      `${JSON.stringify({ type: "system", cwd: subB })}\n`,
     );
 
     const found = discoverWorkspaces(opts({ homeDir: home }));

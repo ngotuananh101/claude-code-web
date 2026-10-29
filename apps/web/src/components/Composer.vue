@@ -1,6 +1,17 @@
 <script setup lang="ts">
-import type { ModelId } from "@cc-web/protocol";
-import { ArrowUp, FolderOpen, GitBranch, Paperclip, Server, Shield, Square, X } from "@lucide/vue";
+import type { ModelId, SessionSummary } from "@cc-web/protocol";
+import {
+  ArrowUp,
+  FolderGit2,
+  FolderOpen,
+  GitBranch,
+  History,
+  Paperclip,
+  Server,
+  Shield,
+  Square,
+  X,
+} from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
@@ -12,8 +23,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cancelRun, type StartRunRequest, startRun } from "../services/runs-api";
+import {
+  buildRunRequest,
+  loadWorkspaceSessions,
+  NEW_SESSION,
+  registerCustomWorkspace,
+} from "@/features/composer/composer-logic.ts";
+import { relativeTime } from "@/lib/relative-time.ts";
+import { cancelRun, startRun } from "../services/runs-api";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api";
+import FolderBrowserModal from "./FolderBrowserModal.vue";
 
 /**
  * The prompt box (§16.1). On the new-session page (sessionId null) it mints
@@ -48,6 +67,17 @@ const project = ref("default");
 const branch = ref("current");
 const permission = ref("default");
 const model = ref("default");
+
+/** Sessions discovered for the selected workspace; null means "not loaded yet". */
+const workspaceSessions = ref<SessionSummary[] | null>(null);
+/**
+ * The selected session id, or "new" for a fresh session. Only shown on the
+ * new-session page (sessionId === null); an existing session already pinned
+ * its session id when it was created.
+ */
+const selectedSession = ref<typeof NEW_SESSION | string>(NEW_SESSION);
+/** Whether the FolderBrowserModal is open. */
+const browserOpen = ref(false);
 
 const permissionLabels: Record<string, string> = {
   default: "Hỏi từng lệnh",
@@ -166,6 +196,62 @@ watch(selectedProject, (option) => {
   }
 });
 
+// On the new-session page, loading/fetching workspace declarations or the
+// operator picking a different workspace re-discovers that workspace's Claude
+// Code sessions. The fetch is gated on a declared runner so a legacy
+// prompt-only project never hits a runner endpoint.
+watch(
+  [selectedProject, () => props.sessionId],
+  (option) => {
+    if (props.sessionId !== null) return; // sessions are fixed for an existing session
+    const ws = option.runnerId;
+    if (ws === undefined) {
+      workspaceSessions.value = null;
+      selectedSession.value = NEW_SESSION;
+      return;
+    }
+    void (async () => {
+      const result = await loadWorkspaceSessions(option.workspaceId, ws);
+      if (result.ok) {
+        workspaceSessions.value = result.sessions;
+        // Reset to "new" — the operator picks a session from the fresh list.
+        selectedSession.value = NEW_SESSION;
+      } else {
+        workspaceSessions.value = null;
+        toast.error(result.message);
+      }
+    })();
+  },
+  { immediate: true },
+);
+
+// The FolderBrowserModal returned a registered workspace; add it to the
+// declared list (if not already present) and select it as the project.
+async function onBrowseSelect(path: string): Promise<void> {
+  browserOpen.value = false;
+  const runner = runnerId.value;
+  if (runner === "auto" || runner === "") {
+    toast.error("Chọn một runner cụ thể trước khi duyệt thư mục.");
+    return;
+  }
+  const result = await registerCustomWorkspace(runner, path);
+  if (result.ok) {
+    // Refresh the workspaces list so the new entry is selectable, then pick it.
+    void refreshWorkspacesAndSelect(result.compositeId);
+  } else {
+    toast.error(result.message);
+  }
+}
+
+// Refresh the declared workspaces from the server and select the composite id.
+async function refreshWorkspacesAndSelect(compositeId: string): Promise<void> {
+  const fresh = await fetchWorkspaces();
+  if (fresh.ok) {
+    workspaces.value = fresh.workspaces;
+  }
+  project.value = compositeId;
+}
+
 const canSend = computed(() => prompt.value.trim() !== "" && !sending.value);
 
 /** The permission selector warns while the run would skip every gate. */
@@ -202,29 +288,19 @@ async function send(): Promise<void> {
   if (!canSend.value) return;
   sending.value = true;
   const sessionId = props.sessionId ?? crypto.randomUUID();
-  const body: StartRunRequest = { prompt: prompt.value.trim(), permissionMode: permission.value };
-  // The model is a per-run choice; "Mặc định" means the SDK's own default, so
-  // nothing travels rather than a stand-in value.
-  if (model.value !== "default") body.model = model.value;
-  // Workspace and runner context rides only where its selectors live: the
-  // new-session screen. An existing session keeps what it was created with,
-  // and the legacy fallback (nothing declared) keeps a prompt-only body so
-  // §11.3 placement still answers it.
-  if (props.sessionId === null) {
-    if (selectedProject.value.runnerId !== undefined) {
-      body.workspaceId = selectedProject.value.workspaceId;
-    }
-    if (runnerId.value !== "auto") {
-      body.runnerId = runnerId.value;
-    }
-    // A branch rides only where a workspace does — the route refuses a
-    // branch without one, and "Hiện tại" means no checkout at all.
-    if (branch.value !== "current" && selectedProject.value.runnerId !== undefined) {
-      body.branch = branch.value;
-    }
-  }
+  const body = buildRunRequest({
+    prompt: prompt.value,
+    permission: permission.value,
+    model: model.value,
+    workspaceId: selectedProject.value.workspaceId,
+    projectRunnerId: selectedProject.value.runnerId,
+    runnerId: runnerId.value,
+    branch: branch.value,
+    selectedSession: selectedSession.value,
+    isNewSessionPage: props.sessionId === null,
+    branchOptions: selectedProject.value.branches,
+  });
   const result = await startRun(sessionId, body);
-  sending.value = false;
 
   if (result.ok) {
     prompt.value = "";
@@ -316,6 +392,46 @@ async function stop(): Promise<void> {
               <span class="max-w-[300px] truncate font-mono text-xs">{{ option.path }}</span>
               <span v-if="option.runnerId" class="font-mono text-[10px] text-muted-foreground">
                 {{ option.runnerId }}
+              </span>
+            </span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <Button
+        v-if="runnerId !== 'auto'"
+        variant="ghost"
+        size="sm"
+        class="h-7! gap-1 border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+        aria-label="Duyệt thư mục trên runner"
+        title="Duyệt thư mục trên runner..."
+        @click="browserOpen = true"
+      >
+        <FolderGit2 :size="13" />
+        Duyệt…
+      </Button>
+      <Select v-model="selectedSession" :disabled="!workspaceSessions">
+        <SelectTrigger
+          size="sm"
+          aria-label="Chọn session"
+          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+        >
+          <History :size="13" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value="new" class="font-mono text-xs">Phiên mới</SelectItem>
+          <SelectItem
+            v-for="session in workspaceSessions"
+            :key="session.sessionId"
+            :value="session.sessionId"
+            class="max-w-[300px]"
+          >
+            <span class="flex flex-col items-start">
+              <span class="max-w-[280px] truncate font-mono text-xs">
+                {{ session.summary || session.sessionId }}
+              </span>
+              <span class="font-mono text-[10px] text-muted-foreground">
+                {{ relativeTime(session.lastModified) }}
               </span>
             </span>
           </SelectItem>
@@ -442,4 +558,11 @@ async function stop(): Promise<void> {
       </div>
     </InputGroupAddon>
   </InputGroup>
+
+  <FolderBrowserModal
+    :open="browserOpen"
+    :runner-id="runnerId === 'auto' ? '' : runnerId"
+    @close="browserOpen = false"
+    @select="onBrowseSelect"
+  />
 </template>
