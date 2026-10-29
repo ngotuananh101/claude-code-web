@@ -1,0 +1,144 @@
+<script setup lang="ts">
+import type { BrowserReplayEvent } from "@cc-web/protocol";
+import { AlertCircle, Braces, Clock, Copy, Loader2 } from "@lucide/vue";
+import { computed, ref } from "vue";
+import { toast } from "vue-sonner";
+import type { AgentTurn } from "@/features/journal/chat-turns";
+import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
+import ApprovalCard from "../ApprovalCard.vue";
+import AgentThinkingStep from "./AgentThinkingStep.vue";
+import AgentToolStep from "./AgentToolStep.vue";
+
+const props = defineProps<{
+  /** The agent turn to render. */
+  turn: AgentTurn;
+  /** Optional terminal resolver for approval steps. */
+  terminalFor?: (
+    event: BrowserReplayEvent,
+  ) => { decision?: "allow" | "deny"; reason?: string } | undefined;
+}>();
+
+/** Whether the raw payload panel is open. */
+const showRaw = ref(false);
+
+/** Copy the raw payload JSON to the clipboard with a toast. */
+async function copyRawPayload(): Promise<void> {
+  const text = JSON.stringify(props.turn.rawPayload, null, 2);
+  await navigator.clipboard.writeText(text);
+  toast.success("Đã sao chép JSON.");
+}
+
+/** The formatted JSON string for display. */
+const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
+</script>
+
+<template>
+  <div class="flex flex-col gap-2.5 w-full max-w-full text-foreground">
+    <!-- Turn Header -->
+    <div class="flex items-center gap-2 text-sm">
+      <!-- Status display -->
+      <div v-if="turn.status === 'running'" class="flex items-center gap-1.5">
+        <Loader2 :size="14" class="animate-spin" />
+        <span>Đang xử lý…</span>
+      </div>
+
+      <div
+        v-else-if="turn.status === 'error'"
+        class="flex items-center gap-1.5 text-destructive"
+      >
+        <AlertCircle :size="14" />
+        <span>Lỗi</span>
+        <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
+      </div>
+
+      <div v-else-if="turn.status === 'interrupted'" class="flex items-center gap-1.5">
+        <span>Bị dừng</span>
+        <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
+      </div>
+
+      <div v-else class="flex items-center gap-1.5">
+        <Clock :size="14" />
+        <span>{{ turn.durationText ? `Worked for ${turn.durationText}` : "Agent" }}</span>
+      </div>
+
+      <!-- Horizontal divider line filling remaining width -->
+      <span class="h-px flex-1 bg-border/60" aria-hidden="true" />
+    </div>
+
+    <!-- Process Timeline -->
+    <div
+      v-if="turn.steps && turn.steps.length > 0"
+      class="flex flex-col gap-1.5 pl-3 border-l-2 border-border/60 my-1"
+    >
+      <template v-for="step in turn.steps" :key="step.key">
+        <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
+        <AgentToolStep v-if="step.kind === 'tool'" :step="step" />
+        <ApprovalCard
+          v-if="step.kind === 'approval'"
+          :event="step.event"
+          :terminal="terminalFor ? terminalFor(step.event) : undefined"
+        />
+      </template>
+    </div>
+
+    <!-- Assistant Response Prose -->
+    <div v-if="turn.text" :class="proseClasses" v-html="renderMarkdown(turn.text)" />
+
+    <div
+      v-else-if="turn.isStreaming"
+      class="flex items-center gap-1 text-sm text-muted-foreground"
+    >
+      <div class="flex items-end gap-0.5">
+        <span
+          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
+          style="animation-delay: 0ms"
+        ></span>
+        <span
+          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
+          style="animation-delay: 150ms"
+        ></span>
+        <span
+          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
+          style="animation-delay: 300ms"
+        ></span>
+      </div>
+      <span>Đang soạn câu trả lời…</span>
+    </div>
+
+    <!-- Raw Payload Toggle (Advanced Feature) -->
+    <div v-if="turn.rawPayload !== undefined" class="mt-2">
+      <button
+        type="button"
+        :aria-expanded="showRaw"
+        @click="showRaw = !showRaw"
+        class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Braces :size="12" />
+        <span>{{ showRaw ? "Ẩn JSON gốc" : "Xem JSON gốc" }}</span>
+      </button>
+
+      <transition
+        enter-active-class="transition-all duration-150 ease-out"
+        enter-from-class="opacity-0 max-h-0"
+        enter-to-class="opacity-100 max-h-80"
+        leave-active-class="transition-all duration-100 ease-in"
+        leave-from-class="opacity-100 max-h-80"
+        leave-to-class="opacity-0 max-h-0"
+      >
+        <div v-if="showRaw" class="overflow-hidden">
+          <pre
+            class="mt-2 max-h-80 overflow-auto rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground"
+          >{{ rawJson }}</pre>
+          <button
+            type="button"
+            @click.stop="copyRawPayload"
+            class="mt-1.5 flex items-center gap-1 rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Copy :size="11" />
+            <span>Sao chép</span>
+          </button>
+        </div>
+      </transition>
+    </div>
+  </div>
+</template>
