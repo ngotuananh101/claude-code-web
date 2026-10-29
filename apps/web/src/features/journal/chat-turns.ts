@@ -1,0 +1,644 @@
+/**
+ * Pure chat-turn parser for the journal's bubble interface (§16.1, Task 13).
+ *
+ * `deriveChatTurns` fuses two sources into a flat, chronological list of
+ * `ChatTurn`s:
+ *
+ *  - `historicalMessages: SessionMessage[]` — the resumed session's past
+ *    transcript (the assistant/user/system messages the runner returns for
+ *    `workspace.sessions.messages`).
+ *  - `liveEvents: BrowserReplayEvent[]` — the live journal stream for a running
+ *    or replayed run.
+ *
+ * The result is pure and deterministic: replaying the same inputs always
+ * produces the same turns, which is what makes a resubscribed client's view
+ * identical to a live one. This module is unit-tested directly (not via the
+ * EventJournal SFC, which cannot compile under `bun test`).
+ */
+import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+
+export type ChatTurn = UserTurn | AgentTurn;
+
+export type UserTurn = {
+  kind: "user";
+  key: string;
+  uuid?: string;
+  text: string;
+  rawPayload?: unknown;
+};
+
+export type AgentStep = ThinkingStep | ToolStep | ApprovalStep;
+
+export type ThinkingStep = {
+  kind: "thinking";
+  key: string;
+  text: string;
+  durationMs?: number;
+};
+
+export type ToolStep = {
+  kind: "tool";
+  key: string;
+  toolCallId: string;
+  toolName: string;
+  state: "running" | "done" | "error" | "interrupted";
+  inputSummary?: string | null;
+  outputSummary?: string | null;
+  filePath?: string;
+  command?: string;
+  diffStats?: { added: number; removed: number };
+  rawPayload?: unknown;
+};
+
+export type ApprovalStep = {
+  kind: "approval";
+  key: string;
+  event: BrowserReplayEvent;
+};
+
+export type AgentTurn = {
+  kind: "agent";
+  key: string;
+  runId?: string;
+  status: "running" | "done" | "error" | "interrupted";
+  durationText?: string;
+  steps: AgentStep[];
+  text: string;
+  isStreaming?: boolean;
+  rawPayload?: unknown;
+};
+
+/** Regex for `<command-message>...</command-message>` / `<command-name>...</command-name>` wrappers. */
+const COMMAND_TAG_RE = /<\/?command-(message|name)>/g;
+
+/**
+ * Strip the Claude Code system wrappers `<command-message>` / `<command-name>`
+ * from a user prompt and return the trimmed human text. Returns an empty string
+ * for empty/whitespace-only input.
+ */
+export function cleanUserPrompt(rawText: string): string {
+  const stripped = rawText.replace(COMMAND_TAG_RE, "").trim();
+  return stripped;
+}
+
+/**
+ * For an `Edit` tool input, compute added/removed line counts from
+ * `new_string`/`old_string`. Returns `null` for non-Edit tools or when neither
+ * field is present (Edit may legitimately add or remove content).
+ */
+export function extractDiffStats(
+  toolName: string,
+  input: Record<string, unknown> | undefined | null,
+): { added: number; removed: number } | null {
+  if (toolName !== "Edit") return null;
+  const record = input ?? {};
+  const oldString = record["old_string"];
+  const newString = record["new_string"];
+  if (oldString === undefined && newString === undefined) return null;
+
+  const added =
+    typeof newString === "string" && newString !== "" ? newString.split("\n").length : 0;
+  const removed =
+    typeof oldString === "string" && oldString !== "" ? oldString.split("\n").length : 0;
+  return { added, removed };
+}
+
+/**
+ * Format a millisecond duration into a compact human string.
+ * `770000` -> "12m 50s", `3000` -> "3s", `500` -> "< 1s", `3600000` -> "1h 0m".
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return "< 1s";
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+const RUN_TERMINALS: ReadonlySet<string> = new Set([
+  "run.finished",
+  "run.failed",
+  "run.interrupted",
+]);
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+/** Extract text from a content block array (Anthropic shape). */
+function textFromContentBlocks(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const texts: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const record = block as Record<string, unknown>;
+    if (record["type"] !== "text") continue;
+    const text = record["text"];
+    if (typeof text === "string" && text !== "") texts.push(text);
+  }
+  return texts.join("\n\n");
+}
+
+/** Read the user prompt text from a `user` SessionMessage, tolerant of shapes. */
+function userPromptText(message: SessionMessage): string {
+  const msg = asRecord(message.message);
+  if (msg === null) return "";
+  return textFromContentBlocks(msg["content"]);
+}
+
+/** Read the assistant prose from an `assistant` SessionMessage. */
+function assistantProse(message: SessionMessage): string {
+  const msg = asRecord(message.message);
+  if (msg === null) return "";
+  return textFromContentBlocks(msg["content"]);
+}
+
+type ToolUseBlock = {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown> | undefined;
+};
+
+/** Collect tool_use blocks from an assistant message's content array. */
+function toolUseBlocksOf(message: SessionMessage): ToolUseBlock[] {
+  const msg = asRecord(message.message);
+  if (msg === null) return [];
+  const content = msg["content"];
+  if (!Array.isArray(content)) return [];
+  const blocks: ToolUseBlock[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const record = block as Record<string, unknown>;
+    if (record["type"] !== "tool_use") continue;
+    const id = asString(record["id"]);
+    const name = asString(record["name"]);
+    if (id === undefined || name === undefined) continue;
+    const input = asRecord(record["input"]);
+    blocks.push({ type: "tool_use", id, name, input: input ?? undefined });
+  }
+  return blocks;
+}
+
+/** Collect thinking blocks from an assistant message's content array. */
+function thinkingBlocksOf(message: SessionMessage): string[] {
+  const msg = asRecord(message.message);
+  if (msg === null) return [];
+  const content = msg["content"];
+  if (!Array.isArray(content)) return [];
+  const texts: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const record = block as Record<string, unknown>;
+    if (record["type"] !== "thinking") continue;
+    const thinking = record["thinking"];
+    if (typeof thinking === "string" && thinking !== "") texts.push(thinking);
+  }
+  return texts;
+}
+
+function extractToolField(
+  name: string,
+  input?: Record<string, unknown> | null,
+): string | undefined {
+  const record = input ?? {};
+  if (name === "Bash") return asString(record["command"]);
+  if (name === "Edit" || name === "Write" || name === "Read") return asString(record["filePath"]);
+  if (name === "Grep" || name === "Glob") {
+    const pattern = asString(record["pattern"]);
+    if (pattern !== undefined) return pattern;
+    return asString(record["path"]);
+  }
+  return undefined;
+}
+
+/**
+ * Summarize a tool_use input into a compact string for display.
+ * Bash -> command, Edit/Write/Read -> filePath, Grep/Glob -> pattern/path.
+ */
+function summarizeToolInput(name: string, input: Record<string, unknown>[]): string | null {
+  const record = input[0] ?? {};
+  // Build a representative summary: the most relevant field for each tool kind.
+  const field = extractToolField(name, record as Record<string, unknown> | undefined);
+  if (field !== undefined) return field;
+  // Fallback: JSON of the whole input (redacted of nothing here — the executor
+  // already redacted secrets before persistence).
+  try {
+    const json = JSON.stringify(record);
+    return json.length > 240 ? `${json.slice(0, 240)}…` : json;
+  } catch {
+    return null;
+  }
+}
+
+type PendingTool = {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown> | undefined;
+  /** True when a `message.completed` retroactively supplied the input. */
+  inputUpdated: boolean;
+  outputSummary: string | null;
+  isError: boolean;
+  completed: boolean;
+};
+
+/**
+ * Convert historical `SessionMessage[]` + live `BrowserReplayEvent[]` into a
+ * chronological list of `ChatTurn`s.
+ *
+ * Historical phase: walk the messages. `system` messages are skipped. A `user`
+ * message with text content begins a `UserTurn`; a `user` message whose content
+ * is a `tool_result` block attaches to the in-flight tool step of the current
+ * agent turn. An `assistant` message begins an `AgentTurn`, collecting thinking
+ * blocks, tool_use blocks and prose text; subsequent tool_result user messages
+ * close out the matching tool steps.
+ *
+ * Live phase: `run.started` opens an `AgentTurn`; `run.finished`/`run.failed`/
+ * `run.interrupted` settles it. `message.*` events accumulate prose; `tool.*`
+ * events manage tool steps; `approval.requested` adds an approval step.
+ *
+ * Historical turns precede live turns in the output.
+ */
+export function deriveChatTurns(
+  historicalMessages: readonly SessionMessage[],
+  liveEvents: readonly BrowserReplayEvent[],
+): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+
+  // --- Historical replay -------------------------------------------------
+  let currentAgentTurn: AgentTurn | null = null;
+  const pendingTools = new Map<string, PendingTool>();
+
+  for (const message of historicalMessages) {
+    if (message.type === "system") continue;
+
+    if (message.type === "user") {
+      const msg = asRecord(message.message);
+
+      // A tool_result user message: `message.message` IS the tool_result block,
+      // e.g. { type: "tool_result", tool_use_id, content, is_error }. It attaches
+      // to the in-flight tool, not a user bubble.
+      if (isToolResultBlock(msg)) {
+        const toolUseId = asString(msg?.["tool_use_id"]);
+        if (toolUseId !== undefined) {
+          const pending = pendingTools.get(toolUseId);
+          if (pending !== undefined) {
+            pending.outputSummary = asString(msg?.["content"]) ?? null;
+            pending.isError = msg?.["is_error"] === true;
+            pending.completed = true;
+          }
+        }
+        continue;
+      }
+
+      // Real user prose: flush any in-flight agent turn first.
+      if (currentAgentTurn !== null) {
+        finalizeAgentTurn(currentAgentTurn, pendingTools);
+        turns.push(currentAgentTurn);
+        currentAgentTurn = null;
+      }
+
+      const text = cleanUserPrompt(userPromptText(message));
+      turns.push({
+        kind: "user",
+        key: `history-${message.uuid}`,
+        uuid: message.uuid,
+        text,
+        rawPayload: message.message,
+      });
+      continue;
+    }
+
+    // assistant
+    const prose = assistantProse(message);
+    const thinkingBlocks = thinkingBlocksOf(message);
+    const toolUses = toolUseBlocksOf(message);
+
+    let agent: AgentTurn | null = currentAgentTurn;
+    if (agent === null) {
+      agent = {
+        kind: "agent",
+        key: `history-${message.uuid}`,
+        status: "done",
+        steps: [],
+        text: prose,
+        isStreaming: false,
+        rawPayload: message.message,
+      };
+      currentAgentTurn = agent;
+    } else {
+      // Append to the open agent turn (consecutive assistant messages).
+      if (prose !== "") {
+        agent.text = agent.text === "" ? prose : `${agent.text}\n\n${prose}`;
+      }
+    }
+
+    for (const block of thinkingBlocks) {
+      agent.steps.push({
+        kind: "thinking",
+        key: `${agent.key}-thinking-${agent.steps.length}`,
+        text: block,
+      });
+    }
+
+    for (const toolUse of toolUses) {
+      const stepKey = `${agent.key}-tool-${agent.steps.length}`;
+      const toolStep: ToolStep = {
+        kind: "tool",
+        key: stepKey,
+        toolCallId: toolUse.id,
+        toolName: toolUse.name,
+        state: "running",
+        inputSummary: summarizeToolInput(toolUse.name, [toolUse.input ?? {}]),
+        outputSummary: null,
+        rawPayload: toolUse.input,
+      };
+      const filePath = extractToolField(toolUse.name, toolUse.input);
+      if (filePath !== undefined) toolStep.filePath = filePath;
+      if (toolUse.name === "Bash" && filePath !== undefined) toolStep.command = filePath;
+      const diffStats = extractDiffStats(toolUse.name, toolUse.input);
+      if (diffStats !== null) toolStep.diffStats = diffStats;
+
+      agent.steps.push(toolStep);
+      pendingTools.set(toolUse.id, {
+        toolCallId: toolUse.id,
+        toolName: toolUse.name,
+        input: toolUse.input,
+        inputUpdated: false,
+        outputSummary: null,
+        isError: false,
+        completed: false,
+      });
+    }
+  }
+
+  // Flush a trailing historical agent turn.
+  if (currentAgentTurn !== null) {
+    finalizeAgentTurn(currentAgentTurn, pendingTools);
+    turns.push(currentAgentTurn);
+    currentAgentTurn = null;
+  }
+
+  // --- Live events ------------------------------------------------------
+  let liveAgentTurn: AgentTurn | null = null;
+  const livePendingTools = new Map<string, PendingTool>();
+  /** Inputs collected from `message.completed` tool_use blocks before their
+   * `tool.started` — the SDK can emit complete frames before raw stream events. */
+  const liveToolInputs = new Map<string, Record<string, unknown>>();
+
+  for (const event of liveEvents) {
+    const payload = asRecord(event.payload) ?? {};
+
+    if (event.type === "run.started") {
+      if (liveAgentTurn !== null) {
+        finalizeAgentTurn(liveAgentTurn, livePendingTools, liveToolInputs);
+        turns.push(liveAgentTurn);
+      }
+      liveAgentTurn = {
+        kind: "agent",
+        key: `live-${event.runId}`,
+        status: "running",
+        runId: event.runId,
+        steps: [],
+        text: "",
+        isStreaming: true,
+        rawPayload: event.payload,
+      };
+      continue;
+    }
+
+    if (RUN_TERMINALS.has(event.type)) {
+      if (liveAgentTurn !== null) {
+        liveAgentTurn.status =
+          event.type === "run.finished"
+            ? "done"
+            : event.type === "run.failed"
+              ? "error"
+              : "interrupted";
+        liveAgentTurn.isStreaming = false;
+        const durationMs = payload["durationMs"];
+        if (typeof durationMs === "number") {
+          liveAgentTurn.durationText = formatDuration(durationMs);
+        }
+        finalizeAgentTurn(liveAgentTurn, livePendingTools, liveToolInputs);
+        turns.push(liveAgentTurn);
+        liveAgentTurn = null;
+      }
+      continue;
+    }
+
+    if (liveAgentTurn === null) continue;
+
+    if (event.type === "message.started") {
+      // Reset prose accumulation for this message; deltas populate `text`.
+      continue;
+    }
+
+    if (event.type === "message.delta") {
+      const text = asString(payload["text"]);
+      if (text !== undefined) liveAgentTurn.text += text;
+      continue;
+    }
+
+    if (event.type === "message.completed") {
+      // Completed messages carry tool_use input summaries. The SDK can emit
+      // complete frames before their own raw tool.started, so inputs may land
+      // before the corresponding started event — collect them here and apply in
+      // finalizeAgentTurn.
+      const msg = asRecord(payload["message"]);
+      if (msg !== null) {
+        const content = msg["content"];
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (typeof block !== "object" || block === null) continue;
+            const record = block as Record<string, unknown>;
+            if (record["type"] !== "tool_use") continue;
+            const id = asString(record["id"]);
+            if (id === undefined) continue;
+            const inputRecord = asRecord(record["input"]);
+            if (inputRecord !== null) liveToolInputs.set(id, inputRecord);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (event.type === "tool.started") {
+      const toolCallId = asString(payload["toolCallId"]);
+      const toolName = asString(payload["toolName"]);
+      if (toolCallId === undefined || toolName === undefined) continue;
+      // The SDK can emit message.completed (carrying tool_use input) before the
+      // raw tool.started, so prefer a pre-collected input, then the started
+      // payload's own input.
+      const preCollected = liveToolInputs.get(toolCallId);
+      const rawInput = payload["input"];
+      const inputRecord = preCollected ?? asRecord(rawInput);
+      if (inputRecord !== null) {
+        liveAgentTurn.steps.push(
+          newLiveToolStep(
+            liveAgentTurn.key,
+            liveAgentTurn.steps.length,
+            toolCallId,
+            toolName,
+            inputRecord,
+          ),
+        );
+        livePendingTools.set(toolCallId, {
+          toolCallId,
+          toolName,
+          input: inputRecord,
+          inputUpdated: preCollected !== undefined,
+          outputSummary: null,
+          isError: false,
+          completed: false,
+        });
+      } else {
+        // No input anywhere; still register a pending tool so a later completed
+        // can settle it.
+        liveAgentTurn.steps.push(
+          newLiveToolStep(
+            liveAgentTurn.key,
+            liveAgentTurn.steps.length,
+            toolCallId,
+            toolName,
+            undefined,
+          ),
+        );
+        livePendingTools.set(toolCallId, {
+          toolCallId,
+          toolName,
+          input: undefined,
+          inputUpdated: false,
+          outputSummary: null,
+          isError: false,
+          completed: false,
+        });
+      }
+      continue;
+    }
+
+    if (event.type === "tool.completed") {
+      const toolCallId = asString(payload["toolCallId"]);
+      if (toolCallId === undefined) continue;
+      const pending = livePendingTools.get(toolCallId);
+      if (pending === undefined) continue;
+      pending.outputSummary = asString(payload["outputSummary"]) ?? null;
+      pending.isError = payload["isError"] === true;
+      pending.completed = true;
+      // The completed payload may also carry the tool input directly.
+      const completedInput = asRecord(payload["input"]);
+      if (completedInput !== null && !pending.inputUpdated) {
+        pending.input = completedInput;
+        pending.inputUpdated = true;
+      }
+      continue;
+    }
+
+    if (event.type === "approval.requested") {
+      liveAgentTurn.steps.push({
+        kind: "approval",
+        key: `${liveAgentTurn.key}-approval-${liveAgentTurn.steps.length}`,
+        event,
+      });
+    }
+  }
+
+  if (liveAgentTurn !== null) {
+    finalizeAgentTurn(liveAgentTurn, livePendingTools, liveToolInputs);
+    turns.push(liveAgentTurn);
+  }
+
+  return turns;
+}
+
+function newLiveToolStep(
+  turnKey: string,
+  index: number,
+  toolCallId: string,
+  toolName: string,
+  input: Record<string, unknown> | undefined,
+): ToolStep {
+  const step: ToolStep = {
+    kind: "tool",
+    key: `${turnKey}-tool-${index}`,
+    toolCallId,
+    toolName,
+    state: "running",
+    inputSummary: summarizeToolInput(toolName, [input ?? {}]),
+    outputSummary: null,
+    rawPayload: input,
+  };
+  const filePath = extractToolField(toolName, input);
+  if (filePath !== undefined) {
+    if (toolName === "Bash") step.command = filePath;
+    else step.filePath = filePath;
+  }
+  const diffStats = extractDiffStats(toolName, input);
+  if (diffStats !== null) step.diffStats = diffStats;
+  return step;
+}
+
+/**
+ * Settle an agent turn's tool steps from pending-tool results. Called once the
+ * turn is complete (the next user message, a run terminal, or end of input).
+ */
+function finalizeAgentTurn(
+  agentTurn: AgentTurn,
+  pendingTools: Map<string, PendingTool>,
+  toolInputs?: Map<string, Record<string, unknown>>,
+): void {
+  for (const step of agentTurn.steps) {
+    if (step.kind !== "tool") continue;
+    const pending = pendingTools.get(step.toolCallId);
+    if (pending !== undefined) {
+      step.state = pending.completed ? (pending.isError ? "error" : "done") : "running";
+      step.outputSummary = pending.outputSummary;
+    }
+
+    // The input may have been retroactively collected from a `message.completed`
+    // event or a `tool.completed` payload (the SDK can emit complete frames before
+    // raw tool.started). Re-derive the display fields from the now-complete input.
+    let resolvedInput: Record<string, unknown> | undefined;
+    if (pending?.inputUpdated && pending.input !== undefined) {
+      resolvedInput = pending.input;
+    } else if (pending?.input !== undefined) {
+      resolvedInput = pending.input;
+    } else {
+      resolvedInput = toolInputs?.get(step.toolCallId);
+    }
+    if (resolvedInput !== undefined) {
+      step.rawPayload = resolvedInput;
+      step.inputSummary = summarizeToolInput(step.toolName, [resolvedInput]);
+      const filePath = extractToolField(step.toolName, resolvedInput);
+      if (filePath !== undefined) {
+        if (step.toolName === "Bash") step.command = filePath;
+        else step.filePath = filePath;
+      }
+      const diffStats = extractDiffStats(step.toolName, resolvedInput);
+      if (diffStats !== null) step.diffStats = diffStats;
+    }
+  }
+  pendingTools.clear();
+  toolInputs?.clear();
+}
+
+/**
+ * Whether a message object directly IS a tool_result block. In the
+ * `SessionMessage` shape, a tool_result user message has `message.message` set
+ * to `{ type: "tool_result", tool_use_id, content, is_error }` rather than a
+ * `{ content: ... }` wrapper.
+ */
+function isToolResultBlock(message: Record<string, unknown> | null): boolean {
+  if (message === null) return false;
+  return message["type"] === "tool_result" && typeof message["tool_use_id"] === "string";
+}

@@ -1,0 +1,627 @@
+import { describe, expect, test } from "bun:test";
+import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import {
+  cleanUserPrompt,
+  deriveChatTurns,
+  extractDiffStats,
+  formatDuration,
+} from "./chat-turns.ts";
+
+/**
+ * Unit tests for the chat-turn parser (§16.1, Task 13 chat-bubble interface).
+ *
+ * This module turns the raw `SessionMessage[]` replay and the live
+ * `BrowserReplayEvent[]` stream into a flat list of `ChatTurn`s: user turns on
+ * the right, agent turns on the left with thinking steps, tool steps and prose.
+ * Pure and deterministic so a resubscribe is byte-identical to a live render.
+ */
+
+let seq = 0;
+function liveEvent(type: string, payload: unknown, runId = "run-1"): BrowserReplayEvent {
+  seq += 1;
+  return {
+    sessionSequence: seq,
+    eventId: `evt-${seq}`,
+    runId,
+    attemptId: "attempt-1",
+    occurredAt: `2026-10-25T00:00:${String(seq).padStart(2, "0")}Z`,
+    type: type as BrowserReplayEvent["type"],
+    payload,
+  };
+}
+
+function resetSeq(): void {
+  seq = 0;
+}
+
+function userMsg(message: unknown, uuid = "u-1"): SessionMessage {
+  return { type: "user", uuid, message };
+}
+function assistantMsg(message: unknown, uuid = "a-1"): SessionMessage {
+  return { type: "assistant", uuid, message };
+}
+
+function toolUseBlock(id: string, name: string, input: Record<string, unknown>) {
+  return { type: "tool_use", id, name, input };
+}
+
+describe("cleanUserPrompt", () => {
+  test("returns plain text unchanged when trimmed", () => {
+    expect(cleanUserPrompt("Hello, world!")).toBe("Hello, world!");
+  });
+
+  test("trims surrounding whitespace", () => {
+    expect(cleanUserPrompt("  hi there  ")).toBe("hi there");
+  });
+
+  test("strips a <command-message> wrapper retaining inner text", () => {
+    expect(cleanUserPrompt("<command-message>Hello</command-message>")).toBe("Hello");
+  });
+
+  test("strips <command-message> with leading text before the tag", () => {
+    expect(
+      cleanUserPrompt("Please read <command-message>this guidance</command-message> thanks"),
+    ).toBe("Please read this guidance thanks");
+  });
+
+  test("strips <command-name> wrapper", () => {
+    expect(cleanUserPrompt("<command-name>List files</command-name>")).toBe("List files");
+  });
+
+  test("strips multiple system command wrappers", () => {
+    expect(
+      cleanUserPrompt(
+        "<command-message>outer</command-message> <command-name>inner</command-name>",
+      ),
+    ).toBe("outer inner");
+  });
+
+  test("returns empty string for empty input", () => {
+    expect(cleanUserPrompt("")).toBe("");
+  });
+
+  test("returns empty string for whitespace-only input", () => {
+    expect(cleanUserPrompt("   \t\n ")).toBe("");
+  });
+});
+
+describe("extractDiffStats", () => {
+  test("counts added and removed lines for Bash returns null", () => {
+    expect(extractDiffStats("Bash", { command: "ls" })).toBe(null);
+  });
+
+  test("counts added and removed lines for Write returns null", () => {
+    expect(extractDiffStats("Write", { filePath: "a.txt", content: "x" })).toBe(null);
+  });
+
+  test("counts added and removed lines for Read returns null", () => {
+    expect(extractDiffStats("Read", { filePath: "a.txt" })).toBe(null);
+  });
+
+  test("counts added/removed lines for Edit single line", () => {
+    const stats = extractDiffStats("Edit", {
+      old_string: "old line",
+      new_string: "new line",
+    });
+    expect(stats).toEqual({ added: 1, removed: 1 });
+  });
+
+  test("counts added/removed lines for Edit multiline", () => {
+    const stats = extractDiffStats("Edit", {
+      old_string: "a\nb\nc",
+      new_string: "x\ny\nz",
+    });
+    expect(stats).toEqual({ added: 3, removed: 3 });
+  });
+
+  test("Edit with only new_string addition counts added only", () => {
+    const stats = extractDiffStats("Edit", { new_string: "a\nb\nc" });
+    expect(stats).toEqual({ added: 3, removed: 0 });
+  });
+
+  test("Edit with only old_string removal counts removed only", () => {
+    const stats = extractDiffStats("Edit", { old_string: "a\nb" });
+    expect(stats).toEqual({ added: 0, removed: 2 });
+  });
+
+  test("Edit with neither string returns null", () => {
+    expect(extractDiffStats("Edit", { command: "no-op" })).toBe(null);
+  });
+});
+
+describe("formatDuration", () => {
+  test("formats sub-second as < 1s", () => {
+    expect(formatDuration(500)).toBe("< 1s");
+  });
+
+  test("formats zero as < 1s", () => {
+    expect(formatDuration(0)).toBe("< 1s");
+  });
+
+  test("formats single seconds", () => {
+    expect(formatDuration(3000)).toBe("3s");
+  });
+
+  test("formats minutes and seconds", () => {
+    expect(formatDuration(770000)).toBe("12m 50s");
+  });
+
+  test("formats minutes boundary", () => {
+    expect(formatDuration(60000)).toBe("1m 0s");
+  });
+
+  test("formats hours", () => {
+    expect(formatDuration(3600000)).toBe("1h 0m");
+  });
+
+  test("formats hours minutes", () => {
+    expect(formatDuration(3780000)).toBe("1h 3m");
+  });
+
+  test("does not show seconds in hours mode", () => {
+    expect(formatDuration(3661000)).toBe("1h 1m");
+  });
+});
+
+describe("deriveChatTurns — historical messages", () => {
+  test("parses a plain string user prompt into a UserTurn", () => {
+    const turns = deriveChatTurns([userMsg({ content: "Hello, agent!" })], []);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "history-u-1",
+      text: "Hello, agent!",
+    });
+  });
+
+  test("cleans <command-message> wrappers in user prompt", () => {
+    const turns = deriveChatTurns(
+      [userMsg({ content: "<command-message>List files please</command-message>" })],
+      [],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ kind: "user", text: "List files please" });
+  });
+
+  test("reads user content as text block array", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({
+          content: [{ type: "text", text: "Tell me a story." }],
+        }),
+      ],
+      [],
+    );
+    expect((turns[0] as { text: string }).text).toBe("Tell me a story.");
+  });
+
+  test("parses assistant message with thinking block into AgentTurn with ThinkingStep", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [
+            { type: "thinking", thinking: "Let me reason about this..." },
+            { type: "text", text: "Done!" },
+          ],
+        }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ kind: "agent", status: "done", text: "Done!" });
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({ kind: "thinking", text: "Let me reason about this..." });
+  });
+
+  test("parses assistant message with Bash tool_use and tool_result", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "run it" }),
+        assistantMsg({
+          type: "assistant",
+          content: [
+            { type: "text", text: "Running" },
+            toolUseBlock("toolu-1", "Bash", { command: "ls -la" }),
+          ],
+        }),
+        userMsg(
+          {
+            type: "tool_result",
+            tool_use_id: "toolu-1",
+            content: "total 0\n-rw-r--r--",
+          },
+          "u-2",
+        ),
+      ],
+      [],
+    );
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({ kind: "user", text: "run it" });
+    expect(turns[1]).toMatchObject({ kind: "agent", text: "Running" });
+    const steps = (turns[1] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Bash",
+      toolCallId: "toolu-1",
+      command: "ls -la",
+      state: "done",
+      outputSummary: "total 0\n-rw-r--r--",
+    });
+  });
+
+  test("extracts filePath for Write tool", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [
+            toolUseBlock("toolu-w1", "Write", {
+              filePath: "/home/user/file.txt",
+              content: "hello",
+            }),
+          ],
+        }),
+      ],
+      [],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      toolName: "Write",
+      filePath: "/home/user/file.txt",
+    });
+  });
+
+  test("extracts filePath for Read tool", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [toolUseBlock("toolu-r1", "Read", { filePath: "/etc/config.json" })],
+        }),
+      ],
+      [],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      toolName: "Read",
+      filePath: "/etc/config.json",
+    });
+  });
+
+  test("calculates diffStats for Edit tool with old_string/new_string", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [
+            toolUseBlock("toolu-e1", "Edit", {
+              old_string: "line1\nline2",
+              new_string: "newline1\nnewline2\nnewline3",
+              filePath: "file.txt",
+            }),
+          ],
+        }),
+        userMsg({ type: "tool_result", tool_use_id: "toolu-e1", content: "Done" }, "u-edit"),
+      ],
+      [],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      toolName: "Edit",
+      filePath: "file.txt",
+      diffStats: { added: 3, removed: 2 },
+    });
+  });
+
+  test("tool_result error state is captured", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [toolUseBlock("toolu-err", "Bash", { command: "false" })],
+        }),
+        userMsg(
+          { type: "tool_result", tool_use_id: "toolu-err", content: "boom", is_error: true },
+          "u-err",
+        ),
+      ],
+      [],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({ toolName: "Bash", state: "error", outputSummary: "boom" });
+  });
+
+  test("alternating user/assistant messages produce separate turns", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "q1" }),
+        assistantMsg({
+          type: "assistant",
+          content: [{ type: "text", text: "a1" }],
+        }),
+        userMsg({ content: "q2" }),
+        assistantMsg({
+          type: "assistant",
+          content: [{ type: "text", text: "a2" }],
+        }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(4);
+    expect((turns[0] as { kind: string }).kind).toBe("user");
+    expect((turns[1] as { kind: string }).kind).toBe("agent");
+    expect((turns[2] as { kind: string }).kind).toBe("user");
+    expect((turns[3] as { kind: string }).kind).toBe("agent");
+  });
+
+  test("system messages are skipped (not user/assistant)", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "hi" }),
+        { type: "system", uuid: "s-1", message: { content: "be helpful" } },
+        assistantMsg({ type: "assistant", content: [{ type: "text", text: "hello" }] }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(2);
+    expect((turns[0] as { kind: string }).kind).toBe("user");
+    expect((turns[1] as { kind: string }).kind).toBe("agent");
+  });
+
+  test("tool_result without a pending tool_use is ignored", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg(
+          { type: "tool_result", tool_use_id: "orph-1", content: "no matching tool" },
+          "u-orch",
+        ),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(0);
+  });
+
+  test("an assistant message with only thinking produces an agent turn with thinking step", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [{ type: "thinking", thinking: "hmm" }],
+        }),
+      ],
+      [],
+    );
+    expect((turns[0] as { kind: string }).kind).toBe("agent");
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ kind: "thinking", text: "hmm" });
+    expect((turns[0] as { text: string }).text).toBe("");
+  });
+});
+
+describe("deriveChatTurns — live events", () => {
+  test("run.started opens a running agent turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns([], [liveEvent("run.started", { runId: "run-1" })]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      kind: "agent",
+      status: "running",
+      runId: "run-1",
+      isStreaming: true,
+    });
+  });
+
+  test("run.finished marks the turn done with duration text", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("run.finished", { runId: "run-1", durationMs: 770000 }),
+      ],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      kind: "agent",
+      status: "done",
+      durationText: "12m 50s",
+      isStreaming: false,
+    });
+  });
+
+  test("run.failed marks the turn error with duration", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("run.failed", { runId: "run-1", durationMs: 5000 }),
+      ],
+    );
+    expect(turns[0]).toMatchObject({ kind: "agent", status: "error", durationText: "5s" });
+  });
+
+  test("run.interrupted marks the turn interrupted", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("run.interrupted", { runId: "run-1", durationMs: 200 }),
+      ],
+    );
+    expect(turns[0]).toMatchObject({ kind: "agent", status: "interrupted", durationText: "< 1s" });
+  });
+
+  test("message.started/delta accumulate prose text", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("message.started", { messageId: "msg_1" }),
+        liveEvent("message.delta", { messageId: "msg_1", text: "Hel" }),
+        liveEvent("message.delta", { messageId: "msg_1", text: "lo" }),
+      ],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ kind: "agent", text: "Hello", isStreaming: true });
+  });
+
+  test("tool.started/completed create a ToolStep in the agent turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+        liveEvent("tool.completed", {
+          toolCallId: "toolu-1",
+          isError: false,
+          outputSummary: "ok",
+          input: { command: "ls" },
+        }),
+      ],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Bash",
+      command: "ls",
+      state: "done",
+      outputSummary: "ok",
+    });
+  });
+
+  test("approval.requested adds an ApprovalStep", () => {
+    resetSeq();
+    const approvalPayload = { approvalId: "appr-1", type: "command" };
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("approval.requested", approvalPayload),
+      ],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({ kind: "approval" });
+    expect((steps[0] as { event: BrowserReplayEvent }).event.type).toBe("approval.requested");
+  });
+});
+
+describe("deriveChatTurns — merging historical and live", () => {
+  test("historical messages render before live events", () => {
+    const turns = deriveChatTurns(
+      [userMsg({ content: "past question" })],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("run.finished", { runId: "run-1", durationMs: 3000 }),
+      ],
+    );
+    expect(turns).toHaveLength(2);
+    expect((turns[0] as { kind: string }).kind).toBe("user");
+    expect((turns[0] as { text: string }).text).toBe("past question");
+    expect((turns[1] as { kind: string }).kind).toBe("agent");
+  });
+
+  test("tool_result from history pairs with tool_use in the same agent turn", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "compute" }),
+        assistantMsg({
+          type: "assistant",
+          content: [toolUseBlock("toolu-2", "Bash", { command: "echo hi" })],
+        }),
+        userMsg({ type: "tool_result", tool_use_id: "toolu-2", content: "hi" }, "u-2"),
+        userMsg({ content: "next question" }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(3);
+    const agentTurn = turns[1] as { kind: string; steps: unknown[] };
+    expect(agentTurn.kind).toBe("agent");
+    expect(agentTurn.steps[0]).toMatchObject({
+      kind: "tool",
+      state: "done",
+      outputSummary: "hi",
+    });
+  });
+
+  test("live tool.started with input creates a running tool step with inputSummary", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("message.completed", {
+          type: "assistant",
+          message: {
+            id: "msg_1",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu-1",
+                name: "Bash",
+                input: { command: "echo hello" },
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+        }),
+        liveEvent("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+        liveEvent("tool.completed", {
+          toolCallId: "toolu-1",
+          isError: false,
+          outputSummary: "hello",
+        }),
+      ],
+    );
+    const steps = (turns[0] as { steps: unknown[] }).steps;
+    expect(steps[0]).toMatchObject({
+      kind: "tool",
+      command: "echo hello",
+      state: "done",
+      outputSummary: "hello",
+    });
+  });
+
+  test("empty historical and no live events yields no turns", () => {
+    expect(deriveChatTurns([], [])).toEqual([]);
+  });
+
+  test("an agent turn collects multiple tools and prose before the next user turn", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [
+            { type: "text", text: "First tool" },
+            toolUseBlock("t1", "Bash", { command: "a" }),
+            toolUseBlock("t2", "Write", { filePath: "b.txt", content: "x" }),
+          ],
+        }),
+        userMsg({ type: "tool_result", tool_use_id: "t1", content: "a-output" }, "ur-1"),
+        userMsg({ type: "tool_result", tool_use_id: "t2", content: "b-output" }, "ur-2"),
+        userMsg({ content: "done?" }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(2);
+    const agentTurn = turns[0] as { kind: string; steps: unknown[]; text: string };
+    expect(agentTurn.text).toBe("First tool");
+    expect(agentTurn.steps).toHaveLength(2);
+    expect(agentTurn.steps[0]).toMatchObject({
+      toolCallId: "t1",
+      command: "a",
+      outputSummary: "a-output",
+    });
+    expect(agentTurn.steps[1]).toMatchObject({
+      toolCallId: "t2",
+      filePath: "b.txt",
+      outputSummary: "b-output",
+    });
+  });
+});
