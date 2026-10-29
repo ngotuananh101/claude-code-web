@@ -14,7 +14,7 @@
 import type { Database } from "bun:sqlite";
 import { CommandOutbox, verifyRunnerCredential } from "@cc-web/control-db";
 import { AuthService } from "./auth/auth-service.ts";
-import { verifyPassword } from "./auth/password.ts";
+import { hashPassword, verifyPassword } from "./auth/password.ts";
 import { createSigner } from "./auth/tokens.ts";
 import type { ServerOptions } from "./server.ts";
 
@@ -44,6 +44,7 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
         : { ok: false, reason: "unknown" };
     },
     verifyPassword,
+    hashPassword,
     // The real outbox. Without it a runner that reaches `ready` is never sent
     // anything: the scheduler's commands are written durably and then sit there.
     outbox: new CommandOutbox(config.db),

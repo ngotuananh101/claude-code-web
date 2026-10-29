@@ -34,7 +34,13 @@ import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
-import { COOKIE_NAME, handleLogin, handleLogout } from "./routes/auth-routes.ts";
+import {
+  COOKIE_NAME,
+  handleLogin,
+  handleLogout,
+  handleSetup,
+  handleSetupStatus,
+} from "./routes/auth-routes.ts";
 import { handleBrowse, handleRegisterWorkspace } from "./routes/browse-routes.ts";
 import { handleInspect } from "./routes/inspect-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
@@ -80,6 +86,11 @@ export type ServerOptions = {
    * hashing; production gets `verifyPassword` from auth/password.ts.
    */
   verifyPassword?: (plain: string, hash: string) => Promise<boolean>;
+  /**
+   * Password hash for /auth/setup. Injectable so tests can stub hashing;
+   * production gets `hashPassword` from auth/password.ts.
+   */
+  hashPassword?: (plain: string) => Promise<string>;
   /**
    * The command outbox. When supplied, a runner that reaches `ready` is drained
    * immediately, so work queued while it was away goes out as part of the
@@ -277,6 +288,14 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/auth/logout" && request.method === "POST") {
         return handleLogout(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/auth/setup-status" && request.method === "GET") {
+        return handleSetupStatus(request, options);
+      }
+
+      if (url.pathname === "/auth/setup" && request.method === "POST") {
+        return handleSetup(request, options, allowed);
       }
 
       if (url.pathname === "/api/runners" && request.method === "POST") {
