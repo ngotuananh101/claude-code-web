@@ -47,7 +47,7 @@ export const sessions = reactive<SessionsStore>({
   loaded: false,
   sessions: [],
   activeId: null,
-  connection: "connecting",
+  connection: "closed",
   stream: null,
   account: null,
 });
@@ -151,7 +151,18 @@ export function startStore(): void {
     }
     void loadSessions();
   });
+  // Intentionally NOT connecting here: the socket stays closed until the
+  // authenticated shell opts in via connectSocket() (§16.2).
+}
+
+/** Opt in to the WebSocket now that the shell is authenticated. */
+export function connectSocket(): void {
   socket.connect();
+}
+
+/** Opt out: cancel reconnects, close the live socket, mark closed. */
+export function disconnectSocket(): void {
+  socket.disconnect();
 }
 
 export type { BrowserReplayEvent };

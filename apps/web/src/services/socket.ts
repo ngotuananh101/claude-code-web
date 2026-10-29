@@ -22,13 +22,26 @@ class SocketService {
   #stateListeners = new Set<(state: SocketState) => void>();
   #reopenListeners = new Set<() => void>();
   #attempt = 0;
-  #state: SocketState = "connecting";
+  #state: SocketState = "closed";
+  #enabled = false;
+  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   get state(): SocketState {
     return this.#state;
   }
 
+  /**
+   * Opt in to connectivity. Safe to call repeatedly: a live or in-flight socket
+   * is left alone, and the reconnect guard is armed. Components never reach for
+   * the socket directly — startStore() + connectSocket()/disconnectSocket() in
+   * the sessions store are the only call sites (§16.2).
+   */
   connect(): void {
+    this.#enabled = true;
+    // Already live or mid-handshake — a second call is a no-op so callers need
+    // not track whether we've dialed in yet.
+    if (this.#state === "live" || this.#state === "connecting") return;
+
     this.#setState("connecting");
     // Same-origin through the vite dev proxy in development, the control
     // server's own origin in production; the HttpOnly cookie rides along,
@@ -56,10 +69,32 @@ class SocketService {
       if (this.#ws !== ws) return; // a newer socket already took over
       this.#ws = null;
       this.#setState("closed");
+      // A user-initiated disconnect() clears #enabled, so the backoff below is
+      // never scheduled: the app explicitly walked away and we honor that.
+      if (!this.#enabled) return;
       const delay = Math.min(1000 * 2 ** this.#attempt, MAX_BACKOFF_MS);
       this.#attempt += 1;
-      setTimeout(() => this.connect(), delay);
+      this.#reconnectTimer = setTimeout(() => this.connect(), delay);
     });
+  }
+
+  /**
+   * Opt out of connectivity: cancel any pending reconnect, drop the live socket
+   * if one exists, and force state to "closed". After this returns the service
+   * will not dial back in on its own — the caller (a logged-out app shell) owns
+   * the decision to reconnect.
+   */
+  disconnect(): void {
+    this.#enabled = false;
+    if (this.#reconnectTimer !== null) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+    }
+    if (this.#ws !== null) {
+      this.#ws.close();
+      this.#ws = null;
+    }
+    this.#setState("closed");
   }
 
   onFrame(listener: FrameListener): () => void {
