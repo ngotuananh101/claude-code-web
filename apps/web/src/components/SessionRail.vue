@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import {
+  ArrowDownAZ,
+  ArrowDownWideNarrow,
+  ArrowUpWideNarrow,
   ChevronLeft,
   ChevronRight,
   Folder,
@@ -9,6 +12,7 @@ import {
   Server,
   SquarePen,
 } from "@lucide/vue";
+import type { Component } from "vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { Button } from "@/components/ui/button";
@@ -22,9 +26,14 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  type FolderSessionGroup,
-  groupSessionsByFolder,
-} from "../features/sessions/folder-tree.ts";
+  groupSessions,
+  nextGrouping,
+  nextSort,
+  parseGrouping,
+  parseSort,
+  type SessionGrouping,
+  type SessionSort,
+} from "../features/sessions/session-groups.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { stopTokenRefreshTimer } from "../services/auth-api.ts";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
@@ -41,9 +50,62 @@ async function refreshWorkspaces(): Promise<void> {
   if (result.ok) workspaces.value = result.workspaces;
 }
 
-const folderGroups = computed<FolderSessionGroup[]>(() =>
-  groupSessionsByFolder(sessions.sessions, workspaces.value),
+// The rail's two view choices outlive a reload, so an operator who grouped by
+// runner last week still finds that shape. Storage can be blocked (private
+// window); the choice then simply lasts for the visit.
+const GROUPING_KEY = "cc-web.sessions.grouping";
+const SORT_KEY = "cc-web.sessions.sort";
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // A blocked storage is not a broken rail — the preference is per-visit.
+  }
+}
+
+const grouping = ref<SessionGrouping>(parseGrouping(readStored(GROUPING_KEY)));
+const sort = ref<SessionSort>(parseSort(readStored(SORT_KEY)));
+watch(grouping, (value) => writeStored(GROUPING_KEY, value));
+watch(sort, (value) => writeStored(SORT_KEY, value));
+
+const groups = computed(() =>
+  groupSessions(sessions.sessions, workspaces.value, grouping.value, sort.value),
 );
+
+const groupingIcon = computed<Component>(() => (grouping.value === "runner" ? Server : Folder));
+const groupingTitle = computed(() =>
+  grouping.value === "runner"
+    ? "Đang gộp theo runner — bấm để gộp theo project"
+    : "Đang gộp theo project — bấm để gộp theo runner",
+);
+const sortIcon = computed<Component>(() => {
+  if (sort.value === "oldest") return ArrowUpWideNarrow;
+  if (sort.value === "name") return ArrowDownAZ;
+  return ArrowDownWideNarrow;
+});
+const sortLabels: Record<SessionSort, string> = {
+  recent: "mới nhất trước",
+  oldest: "cũ nhất trước",
+  name: "theo id",
+};
+const sortTitle = computed(() => `Sắp xếp: ${sortLabels[sort.value]} — bấm để đổi`);
+
+function toggleGrouping(): void {
+  grouping.value = nextGrouping(grouping.value);
+}
+
+function cycleSort(): void {
+  sort.value = nextSort(sort.value);
+}
 
 // vue-router writes {back, current, forward} into history.state; reading it
 // on every route change is what keeps the arrows honest.
@@ -190,50 +252,80 @@ async function signOut(): Promise<void> {
       <div class="px-2 pb-2">
       <div class="flex h-9 items-center justify-between px-2.5">
         <p class="text-sm font-semibold text-foreground">Phiên</p>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Tìm phiên"
-          title="Tìm phiên (Ctrl+K)"
-          @click="searchOpen = true"
-        >
-          <Search :size="15" />
-        </Button>
+        <span class="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Đổi cách gộp phiên"
+            :title="groupingTitle"
+            @click="toggleGrouping"
+          >
+            <component :is="groupingIcon" :size="15" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Đổi cách sắp xếp phiên"
+            :title="sortTitle"
+            @click="cycleSort"
+          >
+            <component :is="sortIcon" :size="15" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Tìm phiên"
+            title="Tìm phiên (Ctrl+K)"
+            @click="searchOpen = true"
+          >
+            <Search :size="15" />
+          </Button>
+        </span>
       </div>
-      <!-- Groups sessions by folder: never an un-scoped flat list -->
-      <div v-if="folderGroups.length > 0" class="space-y-3">
-        <div v-for="group in folderGroups" :key="group.compositeId" class="space-y-0.5">
+      <!-- Grouped by project or by runner, per the two buttons above — never an
+           un-scoped flat list. -->
+      <div v-if="groups.length > 0" class="space-y-3">
+        <div v-for="group in groups" :key="group.key" class="space-y-0.5">
           <div
             class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider"
-            :title="`${group.path} (${group.runnerId})`"
+            :title="group.title"
           >
-            <Folder :size="12" class="shrink-0 text-primary" />
-            <span class="truncate font-mono">{{ group.displayName }}</span>
-            <span
-              v-if="group.shortRunnerId"
-              class="ml-auto font-mono text-[10px] text-muted-foreground/70"
-            >
-              {{ group.shortRunnerId }}
+            <component
+              :is="grouping === 'runner' ? Server : Folder"
+              :size="12"
+              class="shrink-0 text-primary"
+            />
+            <span class="truncate font-mono">{{ group.label }}</span>
+            <span class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/70">
+              {{ group.detail }}
             </span>
           </div>
           <ul class="grid grid-cols-1 content-start gap-0.5 pl-1.5">
-            <li v-for="s in group.sessions" :key="s.sessionId">
+            <li v-for="row in group.sessions" :key="row.session.sessionId">
               <Button
                 variant="ghost"
                 class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
                 :class="
-                  s.sessionId === sessions.activeId &&
+                  row.session.sessionId === sessions.activeId &&
                   'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
                 "
-                @click="router.push(`/sessions/${s.sessionId}`)"
+                @click="router.push(`/sessions/${row.session.sessionId}`)"
               >
-                <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
-                  {{ s.sessionId }}
+                <span class="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span
+                    v-if="grouping === 'runner' && row.folder"
+                    class="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+                  >
+                    {{ row.folder }}
+                  </span>
+                  <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
+                    {{ row.session.sessionId }}
+                  </span>
                 </span>
                 <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {{ relativeTime(s.lastIngestedAt, now) }}
+                  {{ relativeTime(row.session.lastIngestedAt, now) }}
                   <span
-                    v-if="s.live"
+                    v-if="row.session.live"
                     class="size-[7px] animate-pulse rounded-full bg-primary"
                     title="Có một run đang chạy"
                   />
@@ -282,19 +374,27 @@ async function signOut(): Promise<void> {
       <CommandList>
         <CommandEmpty>Không có phiên nào khớp.</CommandEmpty>
         <CommandGroup
-          v-for="group in folderGroups"
-          :key="group.compositeId"
-          :heading="`${group.displayName} (${group.shortRunnerId})`"
+          v-for="group in groups"
+          :key="group.key"
+          :heading="`${group.label} (${group.detail})`"
         >
           <CommandItem
-            v-for="s in group.sessions"
-            :key="s.sessionId"
-            :value="s.sessionId"
-            @select="goToSession(s.sessionId)"
+            v-for="row in group.sessions"
+            :key="row.session.sessionId"
+            :value="row.session.sessionId"
+            @select="goToSession(row.session.sessionId)"
           >
-            <span class="min-w-0 flex-1 truncate font-mono text-xs">{{ s.sessionId }}</span>
+            <span
+              v-if="grouping === 'runner' && row.folder"
+              class="mr-1.5 shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+            >
+              {{ row.folder }}
+            </span>
+            <span class="min-w-0 flex-1 truncate font-mono text-xs">
+              {{ row.session.sessionId }}
+            </span>
             <span class="shrink-0 text-[11px] text-muted-foreground">
-              {{ relativeTime(s.lastIngestedAt, now) }}
+              {{ relativeTime(row.session.lastIngestedAt, now) }}
             </span>
           </CommandItem>
         </CommandGroup>

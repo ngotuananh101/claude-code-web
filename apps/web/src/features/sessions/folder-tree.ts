@@ -8,7 +8,6 @@
  */
 
 import type { OwnerWorkspace } from "@/services/workspaces-api.ts";
-import type { SessionSummary } from "@/stores/sessions.ts";
 
 /** One folder a runner serves, addressed the way the API addresses it. */
 export type FolderItem = {
@@ -24,17 +23,6 @@ export type RunnerGroup = {
   /** The first eight characters of the runner uuid — enough to tell runners apart. */
   shortId: string;
   folders: FolderItem[];
-};
-
-/** A folder and its sessions, grouped for sidebar navigation. */
-export type FolderSessionGroup = {
-  compositeId: string;
-  runnerId: string;
-  workspaceId: string;
-  path: string;
-  displayName: string;
-  shortRunnerId: string;
-  sessions: SessionSummary[];
 };
 
 /** The `(runnerId, workspaceId)` pair as the composite id the API takes. */
@@ -139,63 +127,4 @@ export function recentFolderActivity(
   }
 
   return [...activity.values()].sort((a, b) => b.lastActivity - a.lastActivity).slice(0, limit);
-}
-
-/**
- * Group sessions under their owning folders.
- *
- * Never presents sessions as an un-scoped flat list. Each group is headed by
- * its folder, showing the folder path / basename and short runner id, with its
- * sessions sorted newest first.
- *
- * A session with no folder pin (one written before pins existed) has no folder
- * to appear under and is left out: showing it alone — under a "Khác" heading or
- * anywhere else — is exactly the flat list this navigation exists to prevent.
- * It stays reachable by its own URL.
- */
-export function groupSessionsByFolder(
-  sessions: readonly SessionSummary[],
-  workspaces: readonly OwnerWorkspace[],
-): FolderSessionGroup[] {
-  const workspaceMap = new Map<string, OwnerWorkspace>();
-  for (const w of workspaces) {
-    workspaceMap.set(compositeIdFor(w.runnerId, w.workspaceId), w);
-  }
-
-  const byComposite = new Map<string, SessionSummary[]>();
-
-  for (const s of sessions) {
-    if (!s.runnerId || !s.workspaceId) continue;
-    const key = compositeIdFor(s.runnerId, s.workspaceId);
-    const list = byComposite.get(key) ?? [];
-    list.push(s);
-    byComposite.set(key, list);
-  }
-
-  const groups: FolderSessionGroup[] = [];
-
-  for (const [key, sessionList] of byComposite.entries()) {
-    const ws = workspaceMap.get(key);
-    const path = ws?.path ?? key;
-    const slashIdx = key.indexOf("/");
-    const rId = slashIdx !== -1 ? key.slice(0, slashIdx) : "";
-    const wId = slashIdx !== -1 ? key.slice(slashIdx + 1) : "";
-    groups.push({
-      compositeId: key,
-      runnerId: rId,
-      workspaceId: wId,
-      path,
-      displayName: folderBasename(path),
-      shortRunnerId: shortRunnerId(rId),
-      sessions: [...sessionList].sort((a, b) => b.lastIngestedAt - a.lastIngestedAt),
-    });
-  }
-
-  groups.sort((a, b) => {
-    const aTime = a.sessions[0]?.lastIngestedAt ?? 0;
-    const bTime = b.sessions[0]?.lastIngestedAt ?? 0;
-    return bTime - aTime;
-  });
-
-  return groups;
 }
