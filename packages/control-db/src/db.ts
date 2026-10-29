@@ -234,10 +234,12 @@ export function migrate(db: Database): void {
       path          TEXT NOT NULL,
       branches      TEXT NOT NULL DEFAULT '[]',
       registered_at INTEGER NOT NULL,
+      is_custom     INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (runner_id, workspace_id)
     );
   `);
   addColumnIfMissing(db, "workspaces", "branches", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "workspaces", "is_custom", "INTEGER NOT NULL DEFAULT 0");
 
   // Where each session lives (§2.3, ADR-006): the (workspace, runner) pin an
   // accepted dispatch records, so every later run of the session rides it

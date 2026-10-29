@@ -134,7 +134,10 @@ export function createBrowseHandler(
 
     const entries = kept.map((dirent) => {
       const entryPath = join(currentPath, dirent.name);
-      const isDir = dirent.isDirectory();
+      const isDir =
+        dirent.isDirectory() ||
+        (dirent.isSymbolicLink() &&
+          statSync(entryPath, { throwIfNoEntry: false })?.isDirectory() === true);
       const isGitRepo = isDir && existsSync(join(entryPath, ".git"));
       const hasClaudeProject = isDir && existsSync(join(entryPath, ".claude"));
       return {

@@ -62,6 +62,11 @@ export type DispatchRequest = {
    */
   branch?: string;
   /**
+   * The canonical workspace path (§15.1). When present the runner uses it as a
+   * fallback if its own `workspacePathFor` cannot resolve the workspace id.
+   */
+  workspacePath?: string;
+  /**
    * The Claude session id to resume (§10.4). When present the runner's executor
    * passes it to the SDK stream as `resume` instead of the last-known session id.
    * Carries in the run.start payload, next to `prompt`.
@@ -142,6 +147,7 @@ export class Scheduler {
         attemptId: request.attemptId,
         workspaceId: request.workspaceId,
         prompt: request.prompt,
+        ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
         ...(request.model === undefined ? {} : { model: request.model }),
         ...(request.branch === undefined ? {} : { branch: request.branch }),

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { SessionMessage } from "@cc-web/protocol";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
+import { fetchSessionMessages } from "../services/sessions-api.ts";
 import {
   closeSession,
   loadSessions,
@@ -32,6 +34,9 @@ const routeSession = computed(() => {
 const active = computed(() => sessions.sessions.find((s) => s.sessionId === sessions.activeId));
 
 const activeLive = computed(() => resolveSessionLive(active.value?.live, sessions.stream?.live));
+
+/** Preloaded historical messages when resuming an existing session (§16.1, Task 13). */
+const historicalMessages = ref<SessionMessage[]>([]);
 
 /** The run this page started, until its terminal event clears it. */
 const startedRunId = ref<string | null>(null);
@@ -74,6 +79,51 @@ watch(
           event.type === "run.interrupted"),
     );
     if (terminal) startedRunId.value = null;
+  },
+);
+
+// When a resumed session's first `run.started` event carries a `resumeSessionId`,
+// fetch the historical messages from the runner so they render above the live
+// journal (§16.1, Task 13). Gated on the pin being available so the runner can
+// resolve the workspace path.
+const fetchedResume = ref<string | null>(null);
+watch(
+  () => sessions.stream?.events,
+  () => {
+    const stream = sessions.stream;
+    if (stream === null) return;
+    // Find the first run.started event's resumeSessionId.
+    const started = stream.events.find((e) => e.type === "run.started");
+    const resumeSessionId =
+      started !== undefined
+        ? ((started.payload ?? {}) as Record<string, unknown>)["resumeSessionId"]
+        : undefined;
+    const payloadResume =
+      typeof resumeSessionId === "string" && resumeSessionId.trim() !== ""
+        ? resumeSessionId.trim()
+        : undefined;
+
+    // Prefer the session's own pin; fall back to the first run.started's
+    // resumeSessionId. Avoid re-fetching the same session.
+    const targetResume = active.value?.sdkSessionId ?? payloadResume;
+    if (targetResume === undefined || targetResume === "") return;
+    if (fetchedResume.value === targetResume) return;
+    if (active.value?.runnerId === null || active.value?.workspaceId === null) return;
+
+    const compositeId = `${active.value.runnerId}/${active.value.workspaceId}`;
+    fetchedResume.value = targetResume;
+    void (async () => {
+      const result = await fetchSessionMessages(
+        compositeId,
+        targetResume,
+        active.value?.runnerId ?? undefined,
+      );
+      if (result.ok) {
+        historicalMessages.value = result.messages;
+      } else {
+        toast.error(result.message);
+      }
+    })();
   },
 );
 
@@ -135,6 +185,7 @@ async function refreshNow(): Promise<void> {
           :events="sessions.stream.events"
           :needs-resync="sessions.stream.needsResync"
           :session-live="activeLive"
+          :historical-messages="historicalMessages"
         />
         <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
           Đang chờ journal…

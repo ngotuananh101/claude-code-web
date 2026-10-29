@@ -61,7 +61,7 @@ async function resolveWorkspaceOwnership(
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
   compositeId: string,
-): Promise<{ runnerId: string; workspaceId: string } | Response> {
+): Promise<{ runnerId: string; workspaceId: string; path: string } | Response> {
   const origin = request.headers.get("origin");
   if (origin !== null && !allowedOrigins.has(origin)) {
     return new Response("forbidden", { status: 403 });
@@ -80,15 +80,20 @@ async function resolveWorkspaceOwnership(
     return jsonError("WORKSPACE_AMBIGUOUS", "malformed workspace id", 400);
   }
 
-  const owned = workspacesForOwner(options.db, authorized.userId).some(
+  // Resolve the workspace row to forward its canonical path to the runner.
+  const ownedWorkspace = workspacesForOwner(options.db, authorized.userId).find(
     (workspace) =>
       workspace.runnerId === parsed.runnerId && workspace.workspaceId === parsed.workspaceId,
   );
-  if (!owned) {
+  if (ownedWorkspace === undefined) {
     return jsonError("WORKSPACE_NOT_FOUND", "workspace not found", 404);
   }
 
-  return parsed;
+  return {
+    runnerId: ownedWorkspace.runnerId,
+    workspaceId: ownedWorkspace.workspaceId,
+    path: ownedWorkspace.path,
+  };
 }
 
 /**
@@ -126,7 +131,7 @@ export async function handleWorkspaceSessionsList(
 
   const payload: { op: "sessions.list"; dir: string; limit?: number; offset?: number } = {
     op: "sessions.list",
-    dir: owned.workspaceId,
+    dir: owned.path,
   };
   if (limitParam !== null) {
     const limit = Number.parseInt(limitParam, 10);
@@ -186,7 +191,7 @@ export async function handleWorkspaceSessionMessages(
   } = {
     op: "sessions.messages",
     sessionId,
-    dir: owned.workspaceId,
+    dir: owned.path,
   };
   if (limitParam !== null) {
     const limit = Number.parseInt(limitParam, 10);

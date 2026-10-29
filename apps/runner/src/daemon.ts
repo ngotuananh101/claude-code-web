@@ -17,6 +17,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { homedir } from "node:os";
 import { createSdkStream } from "@cc-web/agent-adapter";
 import { type DeclaredWorkspace, PROTOCOL_VERSION, type RpcResultFrame } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
@@ -328,7 +329,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const browse =
     options.browse ??
     createBrowseHandler({
-      homeDir: options.identityDir,
+      homeDir: process.env["HOME"] ?? homedir(),
     });
 
   const sessions =

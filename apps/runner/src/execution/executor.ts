@@ -91,6 +91,11 @@ export type ExecuteOptions = {
   sdk: SdkStream;
   signal?: AbortSignal;
   /**
+   * The SDK session id to resume (§10.4). When present it is forwarded in the
+   * `run.started` event payload so the web UI can fetch historical messages.
+   */
+  resumeSessionId?: string;
+  /**
    * The workspace-preparation gate (M4): runs after `run.started` and before
    * anything touches the SDK, under the workspace lock the caller already
    * holds. The daemon wires the branch checkout gate here; tests inject
@@ -288,7 +293,12 @@ export async function executeRun(
     // taken by a second writer), and a throw there would escape past the
     // `finally` — leaving the attempt `starting` and the workspace locked with
     // no owner.
-    append("run.started", { commandId: command.commandId });
+    append("run.started", {
+      commandId: command.commandId,
+      ...(options.resumeSessionId !== undefined
+        ? { resumeSessionId: options.resumeSessionId }
+        : {}),
+    });
 
     // §12.6: the attempt's own append, offered once the run is observable and
     // before anything that could warn about the spool. The caller may journal

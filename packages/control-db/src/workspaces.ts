@@ -47,8 +47,8 @@ export function registerWorkspace(
   path: string,
 ): void {
   db.prepare(
-    `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at)
-     VALUES (?, ?, ?, '[]', ?)
+    `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at, is_custom)
+     VALUES (?, ?, ?, '[]', ?, 1)
      ON CONFLICT (runner_id, workspace_id) DO UPDATE SET path = excluded.path`,
   ).run(runnerId, workspaceId, path, Date.now());
 }
@@ -65,10 +65,10 @@ export function upsertRunnerWorkspaces(
   workspaces: readonly DeclaredWorkspaceRow[],
 ): void {
   const replace = db.transaction(() => {
-    db.prepare("DELETE FROM workspaces WHERE runner_id = ?").run(runnerId);
+    db.prepare("DELETE FROM workspaces WHERE runner_id = ? AND is_custom = 0").run(runnerId);
     const insert = db.prepare(
-      `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at, is_custom)
+       VALUES (?, ?, ?, ?, ?, 0)`,
     );
     const now = Date.now();
     for (const workspace of workspaces) {

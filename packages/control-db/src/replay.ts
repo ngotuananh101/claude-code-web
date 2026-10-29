@@ -148,6 +148,11 @@ export type SessionSummary = {
    */
   runnerId: string | null;
   workspaceId: string | null;
+  /**
+   * The SDK session id to resume (§10.4), extracted from the session.updated
+   * event payload. Null when not yet observed.
+   */
+  sdkSessionId: string | null;
 };
 
 /**
@@ -211,6 +216,7 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
       live: row.live === 1,
       runnerId: row.runner_id,
       workspaceId: row.workspace_id,
+      sdkSessionId: null,
     });
   }
   for (const row of dispatched) {
@@ -224,6 +230,7 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
       live: true,
       runnerId: row.runner_id,
       workspaceId: row.workspace_id,
+      sdkSessionId: null,
     });
   }
 
@@ -238,6 +245,25 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
       )
       .get(summary.sessionId) as { type: string } | null;
     summary.lastEventType = tail?.type ?? null;
+
+    // Extract the SDK session id from the most recent session.updated event,
+    // if any. The payload is { sdkSessionId?: string }.
+    const updated = db
+      .prepare(
+        "SELECT payload FROM run_events WHERE session_id = ? AND type = 'session.updated' ORDER BY session_sequence DESC LIMIT 1",
+      )
+      .get(summary.sessionId) as { payload: string } | null;
+    if (updated !== null) {
+      try {
+        const parsed = JSON.parse(updated.payload) as Record<string, unknown>;
+        const id = parsed["sdkSessionId"];
+        if (typeof id === "string" && id !== "") {
+          summary.sdkSessionId = id;
+        }
+      } catch {
+        // Malformed payload — leave null.
+      }
+    }
   }
 
   return summaries.sort((a, b) => b.lastIngestedAt - a.lastIngestedAt);

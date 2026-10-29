@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Check,
   ChevronRight,
+  File,
   Folder,
   FolderGit2,
   HardDrive,
@@ -107,6 +108,13 @@ function onGoUp(): void {
 
 function onFolderSelect(entry: { name: string; path: string }): void {
   controller.selectFolder(entry.path);
+}
+
+/** Navigate into a directory row on click. */
+function onRowClick(entry: { path: string; isDir: boolean }): void {
+  if (entry.isDir) {
+    void controller.navigate(entry.path);
+  }
 }
 </script>
 
@@ -220,9 +228,11 @@ function onFolderSelect(entry: { name: string; path: string }): void {
               v-for="entry in state.entries"
               :key="entry.path"
               class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+              @click="entry.isDir ? onRowClick(entry) : undefined"
             >
               <div class="flex items-center gap-2">
-                <Folder :size="16" class="text-primary" />
+                <Folder v-if="entry.isDir" :size="16" class="text-primary" />
+                <File v-else :size="16" class="text-muted-foreground" />
                 <span class="truncate">{{ entry.name }}</span>
                 <Badge
                   v-if="entry.isGitRepo"
@@ -240,6 +250,7 @@ function onFolderSelect(entry: { name: string; path: string }): void {
                 </Badge>
               </div>
               <Button
+                v-if="entry.isDir"
                 variant="ghost"
                 size="sm"
                 class="h-6 shrink-0 px-1.5"

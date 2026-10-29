@@ -277,6 +277,15 @@ export async function handleDispatchRun(
   // The payload carries the pin's workspace for a pinned session: a
   // prompt-only rerun must run where the session lives, not where a fresh
   // session would have landed.
+  // Resolve the workspace path to forward as a fallback for runners that may not
+  // have the workspace registered on this boot (§4.1).
+  const workspace = workspacesForOwner(options.db, authorized.userId).find(
+    (w) =>
+      (pin !== undefined ? w.workspaceId === pin.workspaceId : w.workspaceId === workspaceId) &&
+      (pin !== undefined ? w.runnerId === pin.runnerId : true),
+  );
+  const workspacePath = workspace?.path;
+
   const decision = await scheduler.dispatch(
     {
       sessionId,
@@ -285,6 +294,7 @@ export async function handleDispatchRun(
       workspaceId: pin !== undefined ? pin.workspaceId : workspaceId,
       prompt,
       ownerId: authorized.userId,
+      ...(workspacePath === undefined ? {} : { workspacePath }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(model === undefined ? {} : { model }),
       ...(branch === undefined ? {} : { branch }),

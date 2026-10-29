@@ -254,7 +254,7 @@ describe("GET /api/workspaces/:workspaceId/sessions", () => {
       kind: "workspace.sessions.list",
       runnerId: "runner-a",
       workspaceId: "default",
-      payload: { op: "sessions.list", dir: "default", limit: 20 },
+      payload: { op: "sessions.list", dir: "/srv/proj", limit: 20 },
     });
   });
 

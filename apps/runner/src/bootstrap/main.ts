@@ -136,12 +136,20 @@ async function start(): Promise<void> {
   // and writes to the same file, which SQLite supports concurrently for reads
   // from this handle.
   const db = openRunnerDb(dir);
-  const discoveredWorkspaces = () =>
-    discoverWorkspaces({
-      ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
-      ...(db === undefined ? {} : { db }),
-      ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
-    });
+  // Cache discovery so repeated lookups (every reconnect hello, every
+  // workspacePathFor call) don't rescan the disk. Discovery is recomputed
+  // lazily when custom workspaces are registered.
+  let cachedDiscovered: DeclaredWorkspace[] | undefined;
+  const discoveredWorkspaces = () => {
+    if (cachedDiscovered === undefined) {
+      cachedDiscovered = discoverWorkspaces({
+        ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
+        ...(db === undefined ? {} : { db }),
+        ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
+      });
+    }
+    return cachedDiscovered;
+  };
 
   const daemon = await startDaemon({
     identityDir: dir,

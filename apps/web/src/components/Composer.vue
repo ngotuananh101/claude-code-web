@@ -202,9 +202,9 @@ watch(selectedProject, (option) => {
 // prompt-only project never hits a runner endpoint.
 watch(
   [selectedProject, () => props.sessionId],
-  (option) => {
-    if (props.sessionId !== null) return; // sessions are fixed for an existing session
-    const ws = option.runnerId;
+  ([option, currentSessionId]) => {
+    if (currentSessionId !== null) return; // sessions are fixed for an existing session
+    const ws = option?.runnerId;
     if (ws === undefined) {
       workspaceSessions.value = null;
       selectedSession.value = NEW_SESSION;

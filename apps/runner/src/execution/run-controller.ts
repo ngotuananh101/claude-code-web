@@ -14,6 +14,7 @@
 import type { Database } from "bun:sqlite";
 import {
   acceptCommand,
+  addCustomWorkspace,
   beginAttempt,
   type CommandEnvelope,
   finishAttempt,
@@ -236,14 +237,36 @@ export class RunController {
     }
 
     const attemptId = parsed.attemptId ?? parsed.commandId;
-    const workspacePath =
+    const record = (parsed.payload ?? {}) as Record<string, unknown>;
+    const resolvedWorkspacePath =
       parsed.workspaceId === undefined ? undefined : this.#workspacePathFor(parsed.workspaceId);
+    // §4.1: fall back to the run.start payload's `workspacePath` when the
+    // workspace id is not registered this boot. The custom path is persisted so
+    // the runner remembers it across restarts.
+    const workspacePath =
+      resolvedWorkspacePath ??
+      (typeof record?.["workspacePath"] === "string" && record["workspacePath"].trim() !== ""
+        ? record["workspacePath"].trim()
+        : undefined);
 
     if (workspacePath === undefined) {
       // Refusing here — before an attempt row exists — leaves nothing for
       // reconciliation to explain. The command stays accepted in the inbox,
       // which is honest: it was delivered, it just cannot run on this host.
       return { ...receipt(parsed, false), reason: "unknown_workspace" };
+    }
+
+    // Persist the fallback path as a custom workspace so the runner's resolver
+    // knows it on the next boot.
+    if (resolvedWorkspacePath === undefined && parsed.workspaceId !== undefined) {
+      try {
+        addCustomWorkspace(this.#db, {
+          workspaceId: parsed.workspaceId,
+          path: workspacePath,
+        });
+      } catch {
+        // Persistence failure is not fatal — the run can still proceed this boot.
+      }
     }
 
     const begun = beginAttempt(this.#db, {
@@ -274,6 +297,9 @@ export class RunController {
       promise: executeRun(this.#db, parsed, {
         workspacePath,
         sdk: this.#sdk,
+        ...(record?.resumeSessionId !== undefined && record?.resumeSessionId !== ""
+          ? { resumeSessionId: String(record.resumeSessionId) }
+          : {}),
         ...(this.#prepareWorkspace === undefined
           ? {}
           : { prepareWorkspace: this.#prepareWorkspace }),

@@ -123,7 +123,7 @@ export function createFolderBrowser(
     state.value.loading = true;
     state.value.error = null;
 
-    const outcome = await api.fetchDirectory(runnerId, path);
+    const outcome = await api.fetchDirectory(state.value.runnerId, path);
 
     // A faster second navigation made this response stale — drop it silently.
     if (current !== epoch) return;
@@ -177,7 +177,7 @@ export function createFolderBrowser(
      * `selectFolder` on every click so `selectedPath` always leads.
      */
     async registerWorkspace(): Promise<RegisterWorkspaceOutcome> {
-      return api.registerWorkspace(runnerId, state.value.selectedPath);
+      return api.registerWorkspace(state.value.runnerId, state.value.selectedPath);
     },
   };
 }
