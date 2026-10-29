@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { FsBrowseResult } from "@cc-web/protocol";
+import { isRef } from "vue";
 import {
   breadcrumbs,
   type Crumb,
@@ -45,6 +46,9 @@ describe("FolderBrowserModal contract — state shape", () => {
       fetchDirectory: () => Promise.resolve({ ok: false, code: "error", message: "" }),
       registerWorkspace: () => Promise.resolve({ ok: false, code: "error", message: "" }),
     });
+
+    // state MUST be a real Vue Ref so Vue template proxy unwraps it
+    expect(isRef(browser.state)).toBe(true);
 
     const s = browser.state.value;
     // Every field the .vue template reads must exist with the expected type.

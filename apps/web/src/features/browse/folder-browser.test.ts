@@ -111,14 +111,12 @@ describe("createFolderBrowser", () => {
 
     await browser.navigate("packages");
 
-    expect(browser.state.value).toMatchObject({
-      currentPath: "/srv/proj",
-      parentPath: "/",
-      entries: okResult.entries,
-      shortcuts: okResult.shortcuts,
-      loading: false,
-      error: null,
-    });
+    expect(browser.state.value.currentPath).toBe("/srv/proj");
+    expect(browser.state.value.parentPath).toBe("/");
+    expect(browser.state.value.entries).toEqual(okResult.entries);
+    expect(browser.state.value.shortcuts).toEqual(okResult.shortcuts);
+    expect(browser.state.value.loading).toBe(false);
+    expect(browser.state.value.error).toBeNull();
   });
 
   test("navigate sets loading=true while fetching and false on success", async () => {

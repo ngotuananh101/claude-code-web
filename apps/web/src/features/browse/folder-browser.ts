@@ -15,6 +15,7 @@
  */
 
 import type { FsBrowseResult, FsBrowseShortcut } from "@cc-web/protocol";
+import { type Ref, ref } from "vue";
 import type { BrowseOutcome, RegisterWorkspaceOutcome } from "@/services/browse-api.ts";
 
 export type Crumb = { name: string; path: string };
@@ -33,7 +34,7 @@ export type FolderBrowserState = {
 };
 
 export type FolderBrowserApi = {
-  state: { value: FolderBrowserState };
+  state: Ref<FolderBrowserState>;
   navigate: (path: string) => Promise<void>;
   selectShortcut: (shortcut: FsBrowseShortcut) => Promise<void>;
   goUp: () => Promise<void>;
@@ -102,18 +103,16 @@ export function createFolderBrowser(
     registerWorkspace: (runnerId: string, path: string) => Promise<RegisterWorkspaceOutcome>;
   },
 ): FolderBrowserApi {
-  const state = {
-    value: {
-      runnerId,
-      currentPath: "",
-      parentPath: null as string | null,
-      entries: [] as FsBrowseResult["entries"],
-      shortcuts: [] as FsBrowseShortcut[],
-      loading: false,
-      error: null as string | null,
-      selectedPath: "",
-    },
-  };
+  const state = ref<FolderBrowserState>({
+    runnerId,
+    currentPath: "",
+    parentPath: null,
+    entries: [],
+    shortcuts: [],
+    loading: false,
+    error: null,
+    selectedPath: "",
+  });
 
   /** Epoch counter so a stale response from a previous navigation is ignored. */
   let epoch = 0;
