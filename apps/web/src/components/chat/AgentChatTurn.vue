@@ -21,6 +21,13 @@ const props = defineProps<{
 /** Whether the raw payload panel is open. */
 const showRaw = ref(false);
 
+/** Copy the assistant response prose to the clipboard. */
+async function copyResponse(): Promise<void> {
+  if (!props.turn.text) return;
+  await navigator.clipboard.writeText(props.turn.text);
+  toast.success("Đã sao chép câu trả lời.");
+}
+
 /** Copy the raw payload JSON to the clipboard with a toast. */
 async function copyRawPayload(): Promise<void> {
   const text = JSON.stringify(props.turn.rawPayload, null, 2);
@@ -33,7 +40,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
 </script>
 
 <template>
-  <div class="flex flex-col gap-2.5 w-full max-w-full text-foreground">
+  <div class="group flex flex-col gap-2.5 w-full max-w-full text-foreground">
     <!-- Turn Header -->
     <div class="flex items-center gap-2 text-sm">
       <!-- Status display -->
@@ -105,40 +112,55 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       <span>Đang soạn câu trả lời…</span>
     </div>
 
-    <!-- Raw Payload Toggle (Advanced Feature) -->
-    <div v-if="turn.rawPayload !== undefined" class="mt-2">
+    <!-- Actions row (Copy response, Raw JSON toggle) - icon only, visible on hover -->
+    <div
+      class="mt-1 flex items-center gap-1 transition-opacity"
+      :class="showRaw ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+    >
       <button
+        v-if="turn.text"
+        type="button"
+        @click="copyResponse"
+        title="Sao chép câu trả lời"
+        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+      >
+        <Copy :size="13" />
+      </button>
+      <button
+        v-if="turn.rawPayload !== undefined"
         type="button"
         :aria-expanded="showRaw"
         @click="showRaw = !showRaw"
-        class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        :title="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
+        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+        :class="{ 'text-foreground bg-muted/60': showRaw }"
       >
-        <Braces :size="12" />
-        <span>{{ showRaw ? "Ẩn JSON gốc" : "Xem JSON gốc" }}</span>
+        <Braces :size="13" />
       </button>
-
-      <transition
-        enter-active-class="transition-all duration-150 ease-out"
-        enter-from-class="opacity-0 max-h-0"
-        enter-to-class="opacity-100 max-h-80"
-        leave-active-class="transition-all duration-100 ease-in"
-        leave-from-class="opacity-100 max-h-80"
-        leave-to-class="opacity-0 max-h-0"
-      >
-        <div v-if="showRaw" class="overflow-hidden">
-          <pre
-            class="mt-2 max-h-80 overflow-auto rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground"
-          >{{ rawJson }}</pre>
-          <button
-            type="button"
-            @click.stop="copyRawPayload"
-            class="mt-1.5 flex items-center gap-1 rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Copy :size="11" />
-            <span>Sao chép</span>
-          </button>
-        </div>
-      </transition>
     </div>
+
+    <!-- Raw Payload Viewer -->
+    <transition
+      enter-active-class="transition-all duration-150 ease-out"
+      enter-from-class="opacity-0 max-h-0"
+      enter-to-class="opacity-100 max-h-80"
+      leave-active-class="transition-all duration-100 ease-in"
+      leave-from-class="opacity-100 max-h-80"
+      leave-to-class="opacity-0 max-h-0"
+    >
+      <div v-if="showRaw && turn.rawPayload !== undefined" class="overflow-hidden">
+        <pre
+          class="mt-1 max-h-80 overflow-auto rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all text-muted-foreground"
+        >{{ rawJson }}</pre>
+        <button
+          type="button"
+          @click.stop="copyRawPayload"
+          class="mt-1.5 flex items-center gap-1 rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Copy :size="11" />
+          <span>Sao chép JSON</span>
+        </button>
+      </div>
+    </transition>
   </div>
 </template>

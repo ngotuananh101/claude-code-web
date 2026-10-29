@@ -310,7 +310,6 @@ async function send(): Promise<void> {
   if (result.ok) {
     prompt.value = "";
     attachments.value = [];
-    toast.success("Đã gửi prompt — run đang tới runner.");
     emit("started", sessionId, result.runId);
     return;
   }

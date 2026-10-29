@@ -295,6 +295,7 @@ export async function executeRun(
     // no owner.
     append("run.started", {
       commandId: command.commandId,
+      ...(prompt !== "" ? { prompt } : {}),
       ...(options.resumeSessionId !== undefined
         ? { resumeSessionId: options.resumeSessionId }
         : {}),

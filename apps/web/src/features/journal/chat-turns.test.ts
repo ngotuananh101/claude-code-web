@@ -77,6 +77,32 @@ describe("cleanUserPrompt", () => {
     ).toBe("outer inner");
   });
 
+  test("extracts clean CLI command from full command wrapper with args", () => {
+    const raw =
+      "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>";
+    expect(cleanUserPrompt(raw)).toBe("/clear");
+  });
+
+  test("extracts command name and arguments", () => {
+    const raw =
+      "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>prime</command-args>";
+    expect(cleanUserPrompt(raw)).toBe("/model prime");
+  });
+
+  test("strips local-command-caveat and system-reminder completely", () => {
+    const raw =
+      "<local-command-caveat>Caveat: The messages below were generated...</local-command-caveat>";
+    expect(cleanUserPrompt(raw)).toBe("");
+  });
+
+  test("unwraps local-command-stdout content", () => {
+    const raw =
+      "<local-command-stdout>Set model to `prime` and saved as your default for new sessions</local-command-stdout>";
+    expect(cleanUserPrompt(raw)).toBe(
+      "Set model to `prime` and saved as your default for new sessions",
+    );
+  });
+
   test("returns empty string for empty input", () => {
     expect(cleanUserPrompt("")).toBe("");
   });
@@ -745,6 +771,142 @@ describe("deriveChatTurns — merging historical and live", () => {
       toolCallId: "t2",
       filePath: "b.txt",
       outputSummary: "b-output",
+    });
+  });
+
+  test("parses Anthropic content-array tool_result in historical messages without creating empty user bubble", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "pwd" }),
+        assistantMsg({
+          type: "assistant",
+          content: [toolUseBlock("toolu-pwd", "Bash", { command: "pwd" })],
+        }),
+        userMsg(
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu-pwd",
+                content: "/home/user/project",
+                is_error: false,
+              },
+            ],
+          },
+          "u-res",
+        ),
+      ],
+      [],
+    );
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({ kind: "user", text: "pwd" });
+    expect(turns[1]).toMatchObject({ kind: "agent" });
+    const steps = (turns[1] as AgentTurn).steps;
+    expect(steps[0]).toMatchObject({
+      kind: "tool",
+      toolCallId: "toolu-pwd",
+      state: "done",
+      outputSummary: "/home/user/project",
+    });
+  });
+
+  test("live run.started with prompt emits a UserTurn immediately before the running agent turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns([], [liveEvent("run.started", { prompt: "show status" }, "r-1")]);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "live-user-r-1",
+      text: "show status",
+    });
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      key: "live-r-1",
+      status: "running",
+      isStreaming: true,
+    });
+  });
+
+  test("deduplicates overlapping historical messages and live events on F5 reload", () => {
+    resetSeq();
+    const historicalMessages: SessionMessage[] = [
+      userMsg({ content: "pwd" }, "u-pwd"),
+      assistantMsg(
+        {
+          id: "msg-pwd",
+          type: "assistant",
+          content: [
+            toolUseBlock("toolu-pwd", "Bash", { command: "pwd" }),
+            { type: "text", text: "Tôi hiện đang ở thư mục /mnt/Data" },
+          ],
+        },
+        "a-pwd",
+      ),
+      userMsg(
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu-pwd",
+              content: "/mnt/Data",
+              is_error: false,
+            },
+          ],
+        },
+        "u-res-pwd",
+      ),
+    ];
+
+    const liveEvents: BrowserReplayEvent[] = [
+      liveEvent("run.started", { prompt: "pwd" }, "run-f5"),
+      liveEvent("tool.started", { toolCallId: "toolu-pwd", toolName: "Bash" }, "run-f5"),
+      liveEvent(
+        "tool.completed",
+        {
+          toolCallId: "toolu-pwd",
+          isError: false,
+          outputSummary: "/mnt/Data",
+          input: { command: "pwd" },
+        },
+        "run-f5",
+      ),
+      liveEvent(
+        "message.completed",
+        {
+          type: "assistant",
+          message: {
+            id: "msg-pwd",
+            content: [{ type: "text", text: "Tôi hiện đang ở thư mục /mnt/Data" }],
+          },
+        },
+        "run-f5",
+      ),
+      liveEvent("run.finished", { durationMs: 3000 }, "run-f5"),
+    ];
+
+    const turns = deriveChatTurns(historicalMessages, liveEvents);
+
+    // Must NOT have duplicates! Exactly 2 turns: 1 user, 1 agent.
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      text: "pwd",
+    });
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      status: "done",
+      durationText: "3s",
+      text: "Tôi hiện đang ở thư mục /mnt/Data",
+    });
+    const agent = turns[1] as AgentTurn;
+    expect(agent.steps[0]).toMatchObject({
+      kind: "tool",
+      toolCallId: "toolu-pwd",
+      state: "done",
+      outputSummary: "/mnt/Data",
     });
   });
 });
