@@ -208,6 +208,7 @@ async function refreshNow(): Promise<void> {
 
         <EventJournal
           v-if="sessions.stream !== null"
+          :key="active.sessionId"
           class="z-10"
           :events="sessions.stream.events"
           :needs-resync="sessions.stream.needsResync"
