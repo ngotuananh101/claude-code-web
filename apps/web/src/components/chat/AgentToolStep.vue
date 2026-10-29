@@ -124,7 +124,7 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
         </span>
         <span
           v-else-if="step.state === 'done'"
-          class="inline-flex items-center gap-0.5 rounded border border-border/40 bg-muted/30 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
+          class="inline-flex items-center gap-0.5 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.25 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
           title="Hoàn thành"
         >
           <Check :size="10" />

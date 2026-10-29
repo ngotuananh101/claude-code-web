@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Brain, ChevronDown, ChevronRight } from "@lucide/vue";
+import { Braces, ChevronDown, ChevronRight } from "@lucide/vue";
 import { ref } from "vue";
 import type { ThinkingStep } from "@/features/journal/chat-turns";
 import { formatDuration } from "@/features/journal/chat-turns";
@@ -25,7 +25,7 @@ const durationText =
       @click="isOpen = !isOpen"
       class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
     >
-      <Brain :size="13" />
+      <Braces :size="13" />
       <span>Suy nghĩ</span>
       <span v-if="durationText" class="text-muted-foreground/70">{{ durationText }}</span>
       <ChevronRight v-if="!isOpen" :size="12" />

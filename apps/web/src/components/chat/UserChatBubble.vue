@@ -24,7 +24,7 @@ async function copyRawPayload(): Promise<void> {
 <template>
   <div class="flex w-full justify-end">
     <div
-      class="group relative max-w-[85%] rounded-2xl bg-secondary/80 px-4 py-2.5 text-[13px] text-foreground shadow-xs"
+      class="group relative max-w-[85%] rounded-2xl border border-border bg-secondary/80 px-4 py-2.5 text-[13px] text-foreground shadow-xs"
     >
       <div v-html="renderMarkdown(turn.text)" :class="proseClasses" />
 
