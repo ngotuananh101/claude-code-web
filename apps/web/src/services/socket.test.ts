@@ -135,11 +135,14 @@ describe("SocketService lifecycle", () => {
   });
 
   afterEach(() => {
-    // Ensure no reconnect timer from a prior test fires into the next one.
-    socket.disconnect();
-    globalThis.WebSocket = originalWebSocket;
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
+    try {
+      // Ensure no reconnect timer from a prior test fires into the next one.
+      socket.disconnect();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
   });
 
   // Restore the stubbed DOM global once, after the suite. The per-test restore

@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { socket } from "../services/socket.ts";
+import { openSession, resolveSessionLive, sessions } from "./sessions.ts";
 
 /**
  * The store is the reactive boundary between the socket singleton and the
- * components. The socket is mocked here: the store's contract under test is
+ * components. The socket is spied on here: the store's contract under test is
  * what a delivered frame does to the reactive copy Vue reads — not how the
  * socket produces frames (services/socket is its own unit) and not how the
  * machine absorbs them (services/session-stream is its own unit).
@@ -10,27 +12,16 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const frameListeners = new Set<(frame: Record<string, unknown>) => void>();
 
-mock.module("../services/socket.ts", () => ({
-  socket: {
-    get state(): "connecting" {
-      return "connecting";
-    },
-    connect(): void {},
-    send(): void {},
-    onFrame(listener: (frame: Record<string, unknown>) => void): () => boolean {
-      frameListeners.add(listener);
-      return () => frameListeners.delete(listener);
-    },
-    onState(): () => void {
-      return () => {};
-    },
-    onReopen(): () => void {
-      return () => {};
-    },
+const onFrameSpy = spyOn(socket, "onFrame").mockImplementation(
+  (listener: (frame: Record<string, unknown>) => void) => {
+    frameListeners.add(listener);
+    return () => frameListeners.delete(listener);
   },
-}));
+);
 
-const { openSession, resolveSessionLive, sessions } = await import("./sessions.ts");
+afterAll(() => {
+  onFrameSpy.mockRestore();
+});
 
 function deliver(frame: Record<string, unknown>): void {
   for (const listener of frameListeners) listener(frame);
