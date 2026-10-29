@@ -173,8 +173,22 @@ export function createServer(options: ServerOptions): ServerHandle {
     // §15.1: the runner's hello/reconcile declaration replaces its rows — the
     // registration path §11.1 defers to, so the composer can list real
     // workspaces without a separate registration API.
+    //
+    // A storage failure is logged here, where the runner and the failure are
+    // both in hand, and then rethrown: the gateway answers the hello/reconcile
+    // with `workspaces_unavailable` instead of negotiating a declaration this
+    // server could not keep.
     onWorkspaces: (runnerId, workspaces) => {
-      upsertRunnerWorkspaces(options.db, runnerId, workspaces);
+      try {
+        upsertRunnerWorkspaces(options.db, runnerId, workspaces);
+      } catch (error) {
+        console.error(
+          `workspace declaration from runner ${runnerId} was not stored: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        throw error;
+      }
     },
     // §23: a well-formed `rpc.result` answers the HTTP request that is waiting
     // for it. The gateway deliberately knows nothing about the registry; a
