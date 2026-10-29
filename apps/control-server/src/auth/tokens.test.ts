@@ -30,6 +30,18 @@ describe("token signing", () => {
     }
   });
 
+  test("a token can carry and verify an explicit type claim", async () => {
+    const tokens = signer();
+    const token = await tokens.sign({ sub: "user-1", tokenVersion: 3, type: "refresh" }, 60);
+
+    const result = await tokens.verify(token);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.claims.type).toBe("refresh");
+    }
+  });
+
   test("an expired token is refused", async () => {
     const tokens = signer();
     // Negative TTL: the token was valid an hour ago and is not now.

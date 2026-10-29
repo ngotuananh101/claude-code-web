@@ -10,7 +10,18 @@ import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
  */
 
 export const COOKIE_NAME = "cc_session";
+export const REFRESH_COOKIE_NAME = "cc_refresh";
 const ACCESS_TTL_SECONDS = 15 * 60;
+const REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+export function readCookie(cookie: string | undefined, name: string): string | undefined {
+  if (cookie === undefined) return undefined;
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(`${name}=`)) return trimmed.slice(name.length + 1);
+  }
+  return undefined;
+}
 
 /**
  * First-time setup (§19.1): whether the owner account still needs seeding.
@@ -123,15 +134,24 @@ export async function handleSetup(
   }
 
   const token = await options.auth.issueAccessToken(id);
+  const refreshToken = await options.auth.issueRefreshToken(id);
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  headers.set("Cache-Control", "no-store");
+  headers.append(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
+  );
+  headers.append(
+    "Set-Cookie",
+    `${REFRESH_COOKIE_NAME}=${refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
+  );
 
   return new Response(JSON.stringify({ ok: true, user: { id, username: trimmedUsername } }), {
     status: 201,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-    },
+    headers,
   });
 }
 
@@ -172,6 +192,7 @@ export async function handleLogin(
   }
 
   const token = await options.auth.issueAccessToken(row.id);
+  const refreshToken = await options.auth.issueRefreshToken(row.id);
 
   // Secure only when the request is actually https: on a plain-http origin
   // (local dev, self-hosted LAN) a Secure cookie is dropped by the browser,
@@ -179,14 +200,63 @@ export async function handleLogin(
   // its real work wherever TLS terminates at this server.
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
 
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  headers.append(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
+  );
+  headers.append(
+    "Set-Cookie",
+    `${REFRESH_COOKIE_NAME}=${refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
+  );
+
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      // ADR-0001: HttpOnly so script cannot read it, SameSite=Lax so a
-      // cross-site form post does not carry it.
-      "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-    },
+    headers,
+  });
+}
+
+/**
+ * Token refresh (§19.1, ADR-0001). Reads the refresh cookie, validates and
+ * rotates both the access token and the refresh token.
+ */
+export async function handleRefresh(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+): Promise<Response> {
+  const origin = request.headers.get("origin") ?? undefined;
+  if (origin !== undefined && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const rawCookie = request.headers.get("cookie") ?? undefined;
+  const refreshToken = readCookie(rawCookie, REFRESH_COOKIE_NAME);
+  if (!refreshToken) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const result = await options.auth.refresh(refreshToken);
+  if (!result.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  headers.append(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${result.accessToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
+  );
+  headers.append(
+    "Set-Cookie",
+    `${REFRESH_COOKIE_NAME}=${result.refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
+  );
+
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers,
   });
 }
 
@@ -218,11 +288,19 @@ export async function handleLogout(
   browserGateway.revoke(authorized.userId);
 
   const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const headers = new Headers();
+  headers.set("Content-Type", "application/json");
+  headers.append(
+    "Set-Cookie",
+    `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+  );
+  headers.append(
+    "Set-Cookie",
+    `${REFRESH_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+  );
+
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Set-Cookie": `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
-    },
+    headers,
   });
 }

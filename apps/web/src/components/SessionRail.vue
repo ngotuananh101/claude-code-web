@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { relativeTime } from "../lib/relative-time.ts";
+import { stopTokenRefreshTimer } from "../services/auth-api.ts";
 import { closeSession, disconnectSocket, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 
@@ -78,6 +79,7 @@ async function signOut(): Promise<void> {
   // frames land past the redirect. The server bumps the token version and
   // revokes outstanding tokens (§19.1).
   disconnectSocket();
+  stopTokenRefreshTimer();
   await fetch("/auth/logout", { method: "POST" });
   await router.push("/login");
 }

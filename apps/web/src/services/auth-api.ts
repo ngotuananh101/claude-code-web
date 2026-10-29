@@ -65,3 +65,89 @@ export function submitSetup(payload: {
     })
     .catch(() => ({ ok: false as const, message: UNREACHABLE }));
 }
+
+let refreshPromise: Promise<boolean> | null = null;
+
+/**
+ * Attempt to refresh the access token via POST /auth/refresh.
+ * Deduplicates in-flight calls so multiple simultaneous 401s only trigger
+ * a single token refresh round-trip.
+ */
+export async function refreshAuthToken(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch("/auth/refresh", { method: "POST" });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+/**
+ * Transparent fetch wrapper that attempts token refresh on 401 and retries once.
+ */
+export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, init);
+  const urlStr =
+    typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url;
+
+  if (response.status === 401 && !urlStr.includes("/auth/refresh")) {
+    const refreshed = await refreshAuthToken();
+    if (refreshed) {
+      return fetch(input, init);
+    }
+  }
+
+  return response;
+}
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let boundFocusListener: (() => void) | null = null;
+
+/**
+ * Periodically refreshes the auth token while the user is active in the app.
+ * Also triggers refresh on window focus / visibility change.
+ */
+export function startTokenRefreshTimer(): void {
+  if (refreshTimer !== null) return;
+
+  // Refresh every 5 minutes while active (token expires in 15 minutes)
+  refreshTimer = setInterval(
+    () => {
+      void refreshAuthToken();
+    },
+    5 * 60 * 1000,
+  );
+
+  if (typeof window !== "undefined") {
+    boundFocusListener = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void refreshAuthToken();
+      }
+    };
+    window.addEventListener("focus", boundFocusListener);
+    document.addEventListener("visibilitychange", boundFocusListener);
+  }
+}
+
+/**
+ * Stops the token refresh timer and removes window event listeners.
+ */
+export function stopTokenRefreshTimer(): void {
+  if (refreshTimer !== null) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  if (typeof window !== "undefined" && boundFocusListener !== null) {
+    window.removeEventListener("focus", boundFocusListener);
+    document.removeEventListener("visibilitychange", boundFocusListener);
+    boundFocusListener = null;
+  }
+}

@@ -91,4 +91,41 @@ describe("owner authentication", () => {
     // second call must observe the change.
     expect(await auth.authenticate(token)).toEqual({ ok: false, reason: "revoked" });
   });
+
+  test("issueRefreshToken mints a refresh token that verifies with verifyRefreshToken", async () => {
+    const { db, auth } = service();
+    addUser(db);
+    const refreshToken = await auth.issueRefreshToken("user-1");
+
+    const result = await auth.verifyRefreshToken(refreshToken);
+    expect(result).toEqual({ ok: true, userId: "user-1" });
+  });
+
+  test("authenticate refuses a refresh token (prevents type confusion)", async () => {
+    const { db, auth } = service();
+    addUser(db);
+    const refreshToken = await auth.issueRefreshToken("user-1");
+
+    const result = await auth.authenticate(refreshToken);
+    expect(result).toEqual({ ok: false, reason: "invalid_token" });
+  });
+
+  test("verifyRefreshToken refuses an access token (prevents type confusion)", async () => {
+    const { db, auth } = service();
+    addUser(db);
+    const accessToken = await auth.issueAccessToken("user-1");
+
+    const result = await auth.verifyRefreshToken(accessToken);
+    expect(result).toEqual({ ok: false, reason: "invalid_token" });
+  });
+
+  test("bumping token version invalidates refresh tokens", async () => {
+    const { db, auth } = service();
+    addUser(db);
+    const refreshToken = await auth.issueRefreshToken("user-1");
+
+    db.query("UPDATE users SET token_version = token_version + 1 WHERE id = ?").run("user-1");
+
+    expect(await auth.verifyRefreshToken(refreshToken)).toEqual({ ok: false, reason: "revoked" });
+  });
 });

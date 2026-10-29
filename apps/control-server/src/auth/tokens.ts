@@ -22,6 +22,7 @@ export type TokenClaims = {
   sub: string;
   /** The user's version at issuance; a mismatch with the DB means revoked. */
   tokenVersion: number;
+  type?: "access" | "refresh";
 };
 
 export type VerifyResult =
@@ -47,7 +48,11 @@ export function createSigner(secret: Uint8Array): Signer {
   return {
     async sign(claims, ttlSeconds) {
       const now = Math.floor(Date.now() / 1000);
-      return new SignJWT({ tokenVersion: claims.tokenVersion } satisfies JWTPayload)
+      const payload: JWTPayload = { tokenVersion: claims.tokenVersion };
+      if (claims.type !== undefined) {
+        payload["type"] = claims.type;
+      }
+      return new SignJWT(payload)
         .setProtectedHeader({ alg: ALGORITHM })
         .setSubject(claims.sub)
         .setIssuedAt(now)
@@ -72,9 +77,18 @@ export function createSigner(secret: Uint8Array): Signer {
           return { ok: false, reason: "missing_claims" };
         }
 
+        const type =
+          payload["type"] === "access" || payload["type"] === "refresh"
+            ? (payload["type"] as "access" | "refresh")
+            : undefined;
+
         return {
           ok: true,
-          claims: { sub: payload.sub, tokenVersion: payload["tokenVersion"] },
+          claims: {
+            sub: payload.sub,
+            tokenVersion: payload["tokenVersion"],
+            ...(type !== undefined ? { type } : {}),
+          },
         };
       } catch (error) {
         if (error instanceof errors.JWTExpired) {

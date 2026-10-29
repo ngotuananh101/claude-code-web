@@ -1,5 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { fetchSetupStatus } from "../services/auth-api.ts";
+import {
+  fetchSetupStatus,
+  startTokenRefreshTimer,
+  stopTokenRefreshTimer,
+} from "../services/auth-api.ts";
 import { connectSocket, disconnectSocket, loadAccount, loadSessions } from "../stores/sessions.ts";
 import { evaluateNavigation } from "./navigation-guard.ts";
 
@@ -49,11 +53,13 @@ router.beforeEach(async (to) => {
   });
 
   // The WebSocket follows the navigation: live while inside the authenticated
-  // shell, closed for everything else.
+  // shell, closed for everything else. Token auto-refresh mirrors the same lifecycle.
   if (decision.socketAction === "connect") {
     connectSocket();
+    startTokenRefreshTimer();
   } else {
     disconnectSocket();
+    stopTokenRefreshTimer();
   }
 
   if (decision.redirect) {

@@ -38,8 +38,10 @@ import {
   COOKIE_NAME,
   handleLogin,
   handleLogout,
+  handleRefresh,
   handleSetup,
   handleSetupStatus,
+  readCookie,
 } from "./routes/auth-routes.ts";
 import { handleBrowse, handleRegisterWorkspace } from "./routes/browse-routes.ts";
 import { handleInspect } from "./routes/inspect-routes.ts";
@@ -126,15 +128,6 @@ function createJwtSessionResolver(auth: AuthService): SessionResolver {
     const result = await auth.authenticate(readCookie(cookie, COOKIE_NAME));
     return result.ok ? result.userId : null;
   };
-}
-
-function readCookie(cookie: string | undefined, name: string): string | undefined {
-  if (cookie === undefined) return undefined;
-  for (const part of cookie.split(";")) {
-    const trimmed = part.trim();
-    if (trimmed.startsWith(`${name}=`)) return trimmed.slice(name.length + 1);
-  }
-  return undefined;
 }
 
 export function createServer(options: ServerOptions): ServerHandle {
@@ -288,6 +281,10 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/auth/logout" && request.method === "POST") {
         return handleLogout(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/auth/refresh" && request.method === "POST") {
+        return handleRefresh(request, options, allowed);
       }
 
       if (url.pathname === "/auth/setup-status" && request.method === "GET") {

@@ -5,6 +5,8 @@
  * (§19.4, same rule as the prompt).
  */
 
+import { authFetch } from "./auth-api.ts";
+
 export type ApprovalDecision = "allow" | "deny";
 
 export type DecisionOutcome = "decided" | "conflict" | "not_found" | "unauthorized" | "error";
@@ -16,7 +18,7 @@ export async function submitApprovalDecision(
 ): Promise<DecisionOutcome> {
   let response: Response;
   try {
-    response = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/decision`, {
+    response = await authFetch(`/api/approvals/${encodeURIComponent(approvalId)}/decision`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(answers === undefined ? { decision } : { decision, answers }),

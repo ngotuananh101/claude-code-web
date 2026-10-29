@@ -7,6 +7,8 @@
  * must never appear in a URL (§19.4).
  */
 
+import { authFetch } from "./auth-api.ts";
+
 export type StartRunResult =
   | { ok: true; runId: string; attemptId: string; sessionId: string }
   | {
@@ -45,7 +47,7 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.model !== undefined) body["model"] = run.model;
     if (run.branch !== undefined) body["branch"] = run.branch;
     if (run.resumeSessionId !== undefined) body["resumeSessionId"] = run.resumeSessionId;
-    response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
+    response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -77,7 +79,7 @@ export type CancelOutcome = "accepted" | "not_found" | "unauthorized" | "error";
 export async function cancelRun(runId: string): Promise<CancelOutcome> {
   let response: Response;
   try {
-    response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    response = await authFetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
       method: "POST",
     });
   } catch {

@@ -23,6 +23,7 @@ import type {
   SnapshotStatusResult,
   WorkspaceRevertResult,
 } from "@cc-web/protocol";
+import { authFetch } from "./auth-api.ts";
 
 export type InspectOutcome<T> =
   | { ok: true; value: T }
@@ -100,7 +101,7 @@ async function failure(response: Response): Promise<InspectOutcome<never>> {
 async function request<T>(url: string, init?: RequestInit): Promise<InspectOutcome<T>> {
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await authFetch(url, init);
   } catch {
     return { ok: false, ...UNREACHABLE };
   }

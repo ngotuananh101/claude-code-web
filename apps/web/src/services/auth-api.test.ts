@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchSetupStatus, submitSetup } from "./auth-api.ts";
+import {
+  authFetch,
+  fetchSetupStatus,
+  refreshAuthToken,
+  startTokenRefreshTimer,
+  stopTokenRefreshTimer,
+  submitSetup,
+} from "./auth-api.ts";
 
 /**
  * First-time setup HTTP surface (§19.1, Task 3).
@@ -102,5 +109,115 @@ describe("submitSetup", () => {
     const result = await submitSetup({ username: "ngotuananh2101", password: "hunter2" });
 
     expect(result).toEqual({ ok: false, message: "Không kết nối được máy chủ." });
+  });
+});
+
+describe("refreshAuthToken", () => {
+  test("returns true when POST /auth/refresh returns 200", async () => {
+    const captured = capture(200, { ok: true });
+
+    const ok = await refreshAuthToken();
+
+    expect(ok).toBe(true);
+    expect(captured.url).toBe("/auth/refresh");
+    expect(captured.method).toBe("POST");
+  });
+
+  test("returns false when POST /auth/refresh returns 401", async () => {
+    capture(401, "unauthorized", { json: false });
+
+    const ok = await refreshAuthToken();
+
+    expect(ok).toBe(false);
+  });
+
+  test("returns false on network failure", async () => {
+    globalThis.fetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+
+    const ok = await refreshAuthToken();
+
+    expect(ok).toBe(false);
+  });
+
+  test("deduplicates concurrent refresh calls into one request", async () => {
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount++;
+      await new Promise((r) => setTimeout(r, 10));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const [r1, r2, r3] = await Promise.all([
+      refreshAuthToken(),
+      refreshAuthToken(),
+      refreshAuthToken(),
+    ]);
+
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(r3).toBe(true);
+    expect(callCount).toBe(1);
+  });
+});
+
+describe("authFetch", () => {
+  test("returns successful response directly if status is not 401", async () => {
+    capture(200, { data: "test" });
+
+    const res = await authFetch("/api/sessions");
+
+    expect(res.status).toBe(200);
+  });
+
+  test("refreshes token and retries request on 401", async () => {
+    const urls: string[] = [];
+    let attempts = 0;
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url === "/auth/refresh") {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      attempts++;
+      if (attempts === 1) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await authFetch("/api/sessions");
+
+    expect(res.status).toBe(200);
+    expect(urls).toEqual(["/api/sessions", "/auth/refresh", "/api/sessions"]);
+  });
+
+  test("returns 401 if refresh fails", async () => {
+    const urls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url === "/auth/refresh") {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return new Response("unauthorized", { status: 401 });
+    }) as unknown as typeof fetch;
+
+    const res = await authFetch("/api/sessions");
+
+    expect(res.status).toBe(401);
+    expect(urls).toEqual(["/api/sessions", "/auth/refresh"]);
+  });
+});
+
+describe("token refresh timer", () => {
+  test("start and stop do not throw", () => {
+    expect(() => {
+      startTokenRefreshTimer();
+      stopTokenRefreshTimer();
+    }).not.toThrow();
   });
 });

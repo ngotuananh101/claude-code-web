@@ -14,6 +14,7 @@
  */
 
 import type { FsBrowseResult } from "@cc-web/protocol";
+import { authFetch } from "./auth-api.ts";
 
 export type BrowseOutcome =
   | { ok: true; value: FsBrowseResult }
@@ -108,7 +109,7 @@ export async function request<T>(
 ): Promise<{ ok: true; value: T } | ApiError> {
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await authFetch(url, init);
   } catch {
     return { ok: false, ...UNREACHABLE };
   }

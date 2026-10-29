@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { authFetch } from "@/services/auth-api.ts";
 
 /**
  * The runners console (§6.1): the owner's connectors and the one-time token
@@ -59,7 +60,7 @@ function fmt(ms: number): string {
 }
 
 async function load(): Promise<void> {
-  const response = await fetch("/api/runners");
+  const response = await authFetch("/api/runners");
   if (!response.ok) {
     toast.error(await response.text());
     return;
@@ -70,7 +71,7 @@ async function load(): Promise<void> {
 async function mint(): Promise<void> {
   mintBusy.value = true;
   try {
-    const response = await fetch("/api/runners", { method: "POST" });
+    const response = await authFetch("/api/runners", { method: "POST" });
     if (!response.ok) {
       toast.error(await response.text());
       return;
@@ -106,7 +107,7 @@ async function revoke(runnerId: string): Promise<void> {
   }
   revokeBusy.value = true;
   try {
-    const response = await fetch(`/api/runners/${encodeURIComponent(runnerId)}/revoke`, {
+    const response = await authFetch(`/api/runners/${encodeURIComponent(runnerId)}/revoke`, {
       method: "POST",
     });
     if (!response.ok) {

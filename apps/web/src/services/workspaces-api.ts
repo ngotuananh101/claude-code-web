@@ -5,6 +5,8 @@
  * decided here so a component never parses a body meant for a person.
  */
 
+import { authFetch } from "./auth-api.ts";
+
 export type OwnerWorkspace = {
   workspaceId: string;
   runnerId: string;
@@ -21,7 +23,7 @@ export type WorkspacesResult =
 export async function fetchWorkspaces(): Promise<WorkspacesResult> {
   let response: Response;
   try {
-    response = await fetch("/api/workspaces");
+    response = await authFetch("/api/workspaces");
   } catch {
     return { ok: false, reason: "error" };
   }

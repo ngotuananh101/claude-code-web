@@ -1,5 +1,6 @@
 import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { reactive } from "vue";
+import { authFetch } from "../services/auth-api.ts";
 import {
   createSessionStream,
   type SessionStreamState,
@@ -57,7 +58,7 @@ let unsubscribeFrames: (() => void) | null = null;
 
 /** Reads the owner's session list. False means the cookie is no good. */
 export async function loadSessions(): Promise<boolean> {
-  const response = await fetch("/api/sessions");
+  const response = await authFetch("/api/sessions");
   if (response.status === 401) return false;
   if (!response.ok) return sessions.loaded; // a hiccup keeps what we had
   const body = (await response.json()) as { sessions: SessionSummary[] };
@@ -72,7 +73,7 @@ export async function loadSessions(): Promise<boolean> {
  * keeps whatever we had: the name is cosmetic, not an auth signal.
  */
 export async function loadAccount(): Promise<void> {
-  const response = await fetch("/api/me");
+  const response = await authFetch("/api/me");
   if (!response.ok) return;
   sessions.account = ((await response.json()) as { username: string }).username;
 }

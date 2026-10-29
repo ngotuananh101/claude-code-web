@@ -8,6 +8,7 @@ import { toast } from "vue-sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatTokens } from "../lib/format-tokens.ts";
 import { relativeTime } from "../lib/relative-time.ts";
+import { authFetch } from "../services/auth-api.ts";
 import { sessions } from "../stores/sessions.ts";
 
 /**
@@ -20,7 +21,7 @@ const stats = ref<UsageStats | null>(null);
 const runnersEnrolled = ref<number | null>(null);
 
 async function load(): Promise<void> {
-  const response = await fetch("/api/stats/usage");
+  const response = await authFetch("/api/stats/usage");
   if (!response.ok) {
     toast.error(await response.text());
     return;
@@ -29,7 +30,7 @@ async function load(): Promise<void> {
 }
 
 async function loadRunners(): Promise<void> {
-  const response = await fetch("/api/runners");
+  const response = await authFetch("/api/runners");
   if (!response.ok) return; // the runners console shows the error properly
   const body = (await response.json()) as { runners: unknown[] };
   runnersEnrolled.value = body.runners.length;

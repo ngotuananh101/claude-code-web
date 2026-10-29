@@ -17,6 +17,8 @@ export type AuthOptions = {
   signer: Signer;
   /** Access-token lifetime. Short by design; the refresh path extends it. */
   accessTtlSeconds?: number;
+  /** Refresh-token lifetime (ADR-0001). Default 7 days. */
+  refreshTtlSeconds?: number;
 };
 
 export type AuthenticateResult =
@@ -32,11 +34,13 @@ export class AuthService {
   readonly #db: Database;
   readonly #signer: Signer;
   readonly #accessTtl: number;
+  readonly #refreshTtl: number;
 
   constructor(options: AuthOptions) {
     this.#db = options.db;
     this.#signer = options.signer;
     this.#accessTtl = options.accessTtlSeconds ?? 15 * 60;
+    this.#refreshTtl = options.refreshTtlSeconds ?? 7 * 24 * 60 * 60;
   }
 
   async issueAccessToken(userId: string): Promise<string> {
@@ -46,7 +50,21 @@ export class AuthService {
       // never authenticate; failing here points at the real problem.
       throw new Error(`unknown user: ${userId}`);
     }
-    return this.#signer.sign({ sub: user.id, tokenVersion: user.token_version }, this.#accessTtl);
+    return this.#signer.sign(
+      { sub: user.id, tokenVersion: user.token_version, type: "access" },
+      this.#accessTtl,
+    );
+  }
+
+  async issueRefreshToken(userId: string): Promise<string> {
+    const user = this.#readUser(userId);
+    if (!user) {
+      throw new Error(`unknown user: ${userId}`);
+    }
+    return this.#signer.sign(
+      { sub: user.id, tokenVersion: user.token_version, type: "refresh" },
+      this.#refreshTtl,
+    );
   }
 
   async authenticate(token: string | undefined): Promise<AuthenticateResult> {
@@ -54,6 +72,11 @@ export class AuthService {
 
     const verified = await this.#signer.verify(token);
     if (!verified.ok) return { ok: false, reason: "invalid_token" };
+
+    // Refresh tokens cannot be used as access tokens.
+    if (verified.claims.type === "refresh") {
+      return { ok: false, reason: "invalid_token" };
+    }
 
     let user: UserRow | null;
     try {
@@ -71,6 +94,54 @@ export class AuthService {
     }
 
     return { ok: true, userId: user.id };
+  }
+
+  async verifyRefreshToken(token: string | undefined): Promise<AuthenticateResult> {
+    if (!token) return { ok: false, reason: "missing_token" };
+
+    const verified = await this.#signer.verify(token);
+    if (!verified.ok) return { ok: false, reason: "invalid_token" };
+
+    // Must carry type: "refresh" to prevent access token reuse here.
+    if (verified.claims.type !== "refresh") {
+      return { ok: false, reason: "invalid_token" };
+    }
+
+    let user: UserRow | null;
+    try {
+      user = this.#readUser(verified.claims.sub);
+    } catch {
+      return { ok: false, reason: "unavailable" };
+    }
+
+    if (!user) return { ok: false, reason: "unknown_user" };
+
+    if (user.token_version !== verified.claims.tokenVersion) {
+      return { ok: false, reason: "revoked" };
+    }
+
+    return { ok: true, userId: user.id };
+  }
+
+  async refresh(refreshToken: string | undefined): Promise<
+    | { ok: true; userId: string; accessToken: string; refreshToken: string }
+    | {
+        ok: false;
+        reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
+      }
+  > {
+    const verified = await this.verifyRefreshToken(refreshToken);
+    if (!verified.ok) return verified;
+
+    const accessToken = await this.issueAccessToken(verified.userId);
+    const newRefreshToken = await this.issueRefreshToken(verified.userId);
+
+    return {
+      ok: true,
+      userId: verified.userId,
+      accessToken,
+      refreshToken: newRefreshToken,
+    };
   }
 
   /** Invalidates every outstanding access token for this user. */

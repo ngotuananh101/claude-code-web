@@ -30,6 +30,7 @@ import {
   registerCustomWorkspace,
 } from "@/features/composer/composer-logic.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
+import { authFetch } from "../services/auth-api";
 import { cancelRun, startRun } from "../services/runs-api";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api";
 import FolderBrowserModal from "./FolderBrowserModal.vue";
@@ -104,7 +105,7 @@ const workspaces = ref<OwnerWorkspace[]>([]);
 
 onMounted(() => {
   void (async () => {
-    const response = await fetch("/api/runners");
+    const response = await authFetch("/api/runners");
     if (!response.ok) return;
     const body = (await response.json()) as {
       runners: Array<{ runnerId: string; revokedAt: number | null }>;
