@@ -291,7 +291,7 @@ export function createServer(options: ServerOptions): ServerHandle {
       }
 
       if (url.pathname === "/auth/setup-status" && request.method === "GET") {
-        return handleSetupStatus(request, options);
+        return handleSetupStatus(request, options, allowed);
       }
 
       if (url.pathname === "/auth/setup" && request.method === "POST") {

@@ -69,6 +69,16 @@ describe("auth setup endpoints", () => {
     expect(body).toEqual({ setupRequired: false });
   });
 
+  test("GET /auth/setup-status rejects foreign origin", async () => {
+    const { url } = await startServer(freshDb());
+
+    const response = await fetch(`${url}/auth/setup-status`, {
+      method: "GET",
+      headers: { Origin: "https://evil.example.test" },
+    });
+    expect(response.status).toBe(403);
+  });
+
   test("POST /auth/setup creates the first user and sets session cookie", async () => {
     const stored = await startServer(freshDb(), async (plain) => `hash:${plain}`);
 
@@ -162,5 +172,30 @@ describe("auth setup endpoints", () => {
       body: JSON.stringify({ username: "ngotuananh2101", password: "" }),
     });
     expect(emptyPassword.status).toBe(400);
+  });
+
+  test("POST /auth/setup race condition: concurrent calls result in exactly one winner", async () => {
+    const stored = await startServer(freshDb(), async (plain) => `hash:${plain}`);
+
+    const [res1, res2] = await Promise.all([
+      fetch(`${stored.url}/auth/setup`, {
+        method: "POST",
+        headers: { Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "winner1", password: "password123" }),
+      }),
+      fetch(`${stored.url}/auth/setup`, {
+        method: "POST",
+        headers: { Origin: origin, "Content-Type": "application/json" },
+        body: JSON.stringify({ username: "winner2", password: "password123" }),
+      }),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([201, 403]);
+
+    const usersCount = (
+      stored.db.query("SELECT COUNT(*) AS count FROM users").get() as { count: number }
+    ).count;
+    expect(usersCount).toBe(1);
   });
 });

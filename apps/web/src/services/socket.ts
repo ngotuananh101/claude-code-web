@@ -86,6 +86,7 @@ class SocketService {
    */
   disconnect(): void {
     this.#enabled = false;
+    this.#attempt = 0;
     if (this.#reconnectTimer !== null) {
       clearTimeout(this.#reconnectTimer);
       this.#reconnectTimer = null;

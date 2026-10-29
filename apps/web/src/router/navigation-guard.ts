@@ -53,7 +53,7 @@ export function evaluateNavigation(params: NavigationParams): NavigationDecision
 
   // 2. Authenticated: the console rail is open, the socket is live.
   if (isAuthorized) {
-    if (toPath === "/login") {
+    if (toPath === "/login" || toPath === "/setup") {
       return { redirect: "/", allow: false, socketAction: "connect" };
     }
     return { allow: true, socketAction: "connect" };

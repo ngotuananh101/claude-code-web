@@ -39,5 +39,8 @@ describe("evaluateNavigation", () => {
     expect(
       evaluateNavigation({ toPath: "/login", isAuthorized: true, isSetupRequired: false }),
     ).toEqual({ redirect: "/", allow: false, socketAction: "connect" });
+    expect(
+      evaluateNavigation({ toPath: "/setup", isAuthorized: true, isSetupRequired: false }),
+    ).toEqual({ redirect: "/", allow: false, socketAction: "connect" });
   });
 });

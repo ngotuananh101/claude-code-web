@@ -20,7 +20,16 @@ const ACCESS_TTL_SECONDS = 15 * 60;
  * is not identity-bearing. `no-store` so a cached "true" never hides a seed that
  * happened to land a moment later.
  */
-export function handleSetupStatus(_request: Request, options: ServerOptions): Response {
+export function handleSetupStatus(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins?: ReadonlySet<string>,
+): Response {
+  const origin = request.headers.get("origin") ?? undefined;
+  if (origin !== undefined && allowedOrigins !== undefined && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
   const count = options.db.query("SELECT COUNT(*) AS count FROM users").get() as { count: number };
 
   return new Response(JSON.stringify({ setupRequired: count.count === 0 }), {
