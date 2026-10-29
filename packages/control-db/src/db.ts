@@ -227,12 +227,15 @@ export function migrate(db: Database): void {
   // placement can never pick a workspace the current boot does not vouch for.
   // `branches` (M4) is a JSON array of the workspace's local heads at the
   // last declaration; the JSON column keeps the declarative replace whole.
+  // `current_branch` is the head HEAD pointed at then — display only, NULL
+  // when unknown.
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
-      runner_id     TEXT NOT NULL REFERENCES runners (id),
-      workspace_id  TEXT NOT NULL,
-      path          TEXT NOT NULL,
-      branches      TEXT NOT NULL DEFAULT '[]',
+      runner_id      TEXT NOT NULL REFERENCES runners (id),
+      workspace_id   TEXT NOT NULL,
+      path           TEXT NOT NULL,
+      branches       TEXT NOT NULL DEFAULT '[]',
+      current_branch TEXT,
       registered_at INTEGER NOT NULL,
       is_custom     INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (runner_id, workspace_id)
@@ -240,6 +243,7 @@ export function migrate(db: Database): void {
   `);
   addColumnIfMissing(db, "workspaces", "branches", "TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "workspaces", "is_custom", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "workspaces", "current_branch", "TEXT");
 
   // Where each session lives (§2.3, ADR-006): the (workspace, runner) pin an
   // accepted dispatch records, so every later run of the session rides it

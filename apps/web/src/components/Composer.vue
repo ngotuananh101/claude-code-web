@@ -43,12 +43,12 @@ import FolderBrowserModal from "./FolderBrowserModal.vue";
  * The toolbar mirrors the desktop composer: context selectors above, the
  * prompt in the middle, actions below. The context row belongs to the
  * new-session screen alone — an existing session already fixed its
- * runner/project/branch when it was created. The project select offers the
+ * runner/project when it was created. The project select offers the
  * workspaces the runners declared (§15.1); picking one pins the dispatch
  * through it, and a specific runner narrows the choices to that runner's
- * workspaces. The branch select offers the local heads the project's runner
- * declared (M4); "Hiện tại" sends no branch, and the workspace runs on
- * whatever HEAD it already holds.
+ * workspaces. The branch is information, not a choice: the chip shows the
+ * branch the project's HEAD was on at the runner's last declaration, the run
+ * sends no branch, and the workspace runs on whatever HEAD it holds.
  */
 
 const props = defineProps<{
@@ -67,7 +67,6 @@ const sending = ref(false);
 
 const runnerId = ref("auto");
 const project = ref("default");
-const branch = ref("current");
 const permission = ref("default");
 const model = ref("default");
 
@@ -131,7 +130,8 @@ type ProjectOption = {
   workspaceId: string;
   runnerId: string | undefined;
   path: string;
-  branches: string[];
+  /** The branch HEAD was on at the last declaration; null when unknown. */
+  currentBranch: string | null;
 };
 
 const projectOptions = computed<ProjectOption[]>(() => {
@@ -146,7 +146,7 @@ const projectOptions = computed<ProjectOption[]>(() => {
         workspaceId: "default",
         runnerId: undefined,
         path: "default",
-        branches: [],
+        currentBranch: null,
       },
     ];
   }
@@ -155,10 +155,9 @@ const projectOptions = computed<ProjectOption[]>(() => {
     workspaceId: w.workspaceId,
     runnerId: w.runnerId,
     path: w.path,
-    // A control server older than M4 serves this row without the field, and
-    // the select only ever has an empty list to offer — never an undefined
-    // that the template would try to iterate.
-    branches: w.branches ?? [],
+    // An older control server serves this row without the field; the chip
+    // then simply stays hidden.
+    currentBranch: w.currentBranch ?? null,
   }));
 });
 
@@ -187,15 +186,6 @@ watch(project, () => {
     runnerId.value !== option.runnerId
   ) {
     runnerId.value = option.runnerId;
-  }
-});
-
-// A branch is a property of the project: switching projects (or the
-// declarations arriving late) drops a picked branch the new project does not
-// declare, back to the honest "current HEAD" default rather than a guess.
-watch(selectedProject, (option) => {
-  if (branch.value !== "current" && !(option.branches ?? []).includes(branch.value)) {
-    branch.value = "current";
   }
 });
 
@@ -239,10 +229,6 @@ async function onBrowseSelect(path: string): Promise<void> {
   }
   const result = await registerCustomWorkspace(runner, path);
   if (result.ok) {
-    // Reset branch to "current" — the freshly registered workspace may not
-    // declare the same heads the previous project did, and "Hiện tại" is the
-    // honest default rather than guessing.
-    branch.value = "current";
     // Refresh the workspaces list so the new entry is selectable, then pick it.
     void refreshWorkspacesAndSelect(result.compositeId);
   } else {
@@ -302,10 +288,8 @@ async function send(): Promise<void> {
     workspaceId: selectedProject.value.workspaceId,
     projectRunnerId: selectedProject.value.runnerId,
     runnerId: runnerId.value,
-    branch: branch.value,
     selectedSession: selectedSession.value,
     isNewSessionPage: props.sessionId === null,
-    branchOptions: selectedProject.value.branches,
   });
   const promptText = prompt.value;
   const result = await startRun(sessionId, body);
@@ -444,27 +428,14 @@ async function stop(): Promise<void> {
           </SelectItem>
         </SelectContent>
       </Select>
-      <Select v-model="branch">
-        <SelectTrigger
-          size="sm"
-          aria-label="Chọn branch"
-          class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-        >
-          <GitBranch :size="13" />
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent position="popper">
-          <SelectItem value="current">Hiện tại</SelectItem>
-          <SelectItem
-            v-for="name in selectedProject.branches"
-            :key="name"
-            :value="name"
-            class="font-mono text-xs"
-          >
-            {{ name }}
-          </SelectItem>
-        </SelectContent>
-      </Select>
+      <span
+        v-if="selectedProject.currentBranch"
+        class="flex h-7 items-center gap-1.5 px-2 text-xs text-muted-foreground"
+        :title="`Branch hiện tại: ${selectedProject.currentBranch}`"
+      >
+        <GitBranch :size="13" />
+        <span class="max-w-[160px] truncate font-mono">{{ selectedProject.currentBranch }}</span>
+      </span>
     </InputGroupAddon>
 
     <InputGroupTextarea

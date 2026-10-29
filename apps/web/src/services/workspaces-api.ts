@@ -13,6 +13,8 @@ export type OwnerWorkspace = {
   path: string;
   /** The local heads the runner declared for this workspace (M4). */
   branches: string[];
+  /** The branch HEAD pointed at when declared; null/absent = unknown. */
+  currentBranch?: string | null;
   createdAt: number;
 };
 

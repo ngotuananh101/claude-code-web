@@ -107,6 +107,7 @@ describe("workspacesForOwner", () => {
         runnerId: "runner-a",
         path: "/srv/proj",
         branches: [],
+        currentBranch: null,
         createdAt: expect.any(Number),
       },
       {
@@ -114,6 +115,7 @@ describe("workspacesForOwner", () => {
         runnerId: "runner-b",
         path: "/srv/other",
         branches: [],
+        currentBranch: null,
         createdAt: expect.any(Number),
       },
     ]);
@@ -148,6 +150,7 @@ describe("declared branches (M4)", () => {
         runnerId: "runner-a",
         path: "/srv/proj",
         branches: ["main", "dev"],
+        currentBranch: null,
         createdAt: expect.any(Number),
       },
     ]);
@@ -170,6 +173,17 @@ describe("declared branches (M4)", () => {
     ]);
 
     expect(workspacesForOwner(db, "owner-1")[0]!.branches).toEqual(["main"]);
+  });
+
+  test("a declared current branch round-trips; a re-declaration without one clears it", () => {
+    seedRunner(db, "runner-a");
+    upsertRunnerWorkspaces(db, "runner-a", [
+      { workspaceId: "default", path: "/srv/proj", branches: ["main"], currentBranch: "main" },
+    ]);
+    expect(workspacesForOwner(db, "owner-1")[0]!.currentBranch).toBe("main");
+
+    upsertRunnerWorkspaces(db, "runner-a", [{ workspaceId: "default", path: "/srv/proj" }]);
+    expect(workspacesForOwner(db, "owner-1")[0]!.currentBranch).toBeNull();
   });
 
   test("garbage stored in the column reads as an empty list, never throws", () => {

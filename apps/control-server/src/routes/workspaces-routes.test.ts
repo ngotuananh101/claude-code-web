@@ -84,6 +84,7 @@ describe("GET /api/workspaces", () => {
         runnerId: string;
         path: string;
         branches: string[];
+        currentBranch: string | null;
         createdAt: number;
       }>;
     };
@@ -93,6 +94,7 @@ describe("GET /api/workspaces", () => {
         runnerId: "runner-a",
         path: "/srv/proj",
         branches: [],
+        currentBranch: null,
         createdAt: 1,
       },
       {
@@ -100,6 +102,7 @@ describe("GET /api/workspaces", () => {
         runnerId: "runner-b",
         path: "/srv/other",
         branches: ["dev"],
+        currentBranch: null,
         createdAt: 2,
       },
     ]);

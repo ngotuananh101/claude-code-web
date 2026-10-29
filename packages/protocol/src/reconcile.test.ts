@@ -373,4 +373,29 @@ describe("parseDeclaredWorkspaces", () => {
     ]);
     expect(parsed![0]!.branches).toEqual(["a", "b"]);
   });
+
+  test("a current branch parses onto the workspace", () => {
+    expect(
+      parseDeclaredWorkspaces([
+        { workspaceId: "w", path: "/srv", branches: ["main"], currentBranch: "main" },
+      ]),
+    ).toEqual([{ workspaceId: "w", path: "/srv", branches: ["main"], currentBranch: "main" }]);
+  });
+
+  test("an absent current branch leaves the property absent", () => {
+    const parsed = parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", branches: [] }]);
+    expect("currentBranch" in parsed![0]!).toBe(false);
+  });
+
+  test("a current branch outside the shape is malformed, not coerced", () => {
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", currentBranch: "" }]),
+    ).toBeUndefined();
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", currentBranch: 42 }]),
+    ).toBeUndefined();
+    expect(
+      parseDeclaredWorkspaces([{ workspaceId: "w", path: "/srv", currentBranch: "x".repeat(257) }]),
+    ).toBeUndefined();
+  });
 });

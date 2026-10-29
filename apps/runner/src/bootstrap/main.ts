@@ -16,7 +16,7 @@ import { rm, writeFile } from "node:fs/promises";
 import type { DeclaredWorkspace } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
-import { listBranches } from "../git/branches.ts";
+import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
 import { runnerInfo } from "../index.ts";
 import {
@@ -161,10 +161,14 @@ async function start(): Promise<void> {
       return resolve(workspaceId);
     },
     declaredWorkspaces: () =>
-      discoveredWorkspaces().map((workspace: DeclaredWorkspace) => ({
-        ...workspace,
-        branches: listBranches(workspace.path),
-      })),
+      discoveredWorkspaces().map((workspace: DeclaredWorkspace) => {
+        const head = currentBranch(workspace.path);
+        return {
+          ...workspace,
+          branches: listBranches(workspace.path),
+          ...(head === undefined ? {} : { currentBranch: head }),
+        };
+      }),
     onEvent: (event) => {
       // Connection lifecycle only. Never log the credential, and never log
       // command payloads — they can contain prompt text (§19.4).

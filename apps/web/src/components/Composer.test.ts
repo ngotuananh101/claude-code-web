@@ -233,10 +233,8 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     workspaceId: "ws-proj",
     projectRunnerId: "runner-a",
     runnerId: "runner-a",
-    branch: "current",
     selectedSession: NEW_SESSION,
     isNewSessionPage: true,
-    branchOptions: ["main", "dev"],
   };
 
   test("when 'new' is selected, resumeSessionId is omitted from the payload", () => {
@@ -248,7 +246,7 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     // Workspace context rides on the new-session page.
     expect(body.workspaceId).toBe("ws-proj");
     expect(body.runnerId).toBe("runner-a");
-    // "current" branch is not sent.
+    // The composer never picks a branch.
     expect(body.branch).toBeUndefined();
   });
 
@@ -283,15 +281,9 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     expect(withModel.model).toBe("opus");
   });
 
-  test("branch is sent only when a real branch is chosen on the new-session page", () => {
-    const current = buildRunRequest(baseInputs);
-    expect(current.branch).toBeUndefined();
-
-    const realBranch = buildRunRequest({
-      ...baseInputs,
-      branch: "dev",
-    });
-    expect(realBranch.branch).toBe("dev");
+  test("branch is never sent — the run uses the workspace's current HEAD", () => {
+    expect(buildRunRequest(baseInputs).branch).toBeUndefined();
+    expect(buildRunRequest({ ...baseInputs, runnerId: "auto" }).branch).toBeUndefined();
   });
 
   test("on an existing session page, workspace/runner/branch context is omitted", () => {

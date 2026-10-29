@@ -91,11 +91,16 @@ const TERMINAL: ReadonlySet<RunState> = new Set(["completed", "failed", "cancell
  * `branches` (M4) are the workspace's local heads (`refs/heads/`), listed by
  * the runner itself. Absent means the runner predates the field or serves a
  * non-repo directory — "no branches known", not "no branches exist".
+ *
+ * `currentBranch` is the local head HEAD points at, shown to the operator as
+ * read-only context. Absent means unknown: an older runner, a non-repo
+ * directory, or a detached HEAD.
  */
 export type DeclaredWorkspace = {
   workspaceId: string;
   path: string;
   branches?: string[];
+  currentBranch?: string;
 };
 
 /** Bounds a declared branch list: past this the dropdown is unusable anyway. */
@@ -125,6 +130,18 @@ function parseBranches(value: unknown): string[] | undefined {
 }
 
 /**
+ * Parse the `currentBranch` field of one declared workspace. `null` is the
+ * malformed signal; `undefined` leaves the property absent. A branch name is
+ * held to the same bounds as a `branches` entry.
+ */
+function parseCurrentBranch(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value === "") return null;
+  if (value.length > MAX_BRANCH_NAME) return null;
+  return value;
+}
+
+/**
  * Parse the `workspaces` field of a hello or reconcile message. Absent means
  * the runner predates the field and declares nothing (§6.4 back-compat);
  * anything present but outside the shape is malformed — an object that is not
@@ -142,13 +159,16 @@ export function parseDeclaredWorkspaces(value: unknown): DeclaredWorkspace[] | u
     const path = record["path"];
     if (typeof workspaceId !== "string" || workspaceId === "") return undefined;
     if (typeof path !== "string" || path === "") return undefined;
-    if (record["branches"] === undefined) {
-      workspaces.push({ workspaceId, path });
-      continue;
+    const currentBranch = parseCurrentBranch(record["currentBranch"]);
+    if (currentBranch === null) return undefined;
+    const declared: DeclaredWorkspace = { workspaceId, path };
+    if (record["branches"] !== undefined) {
+      const branches = parseBranches(record["branches"]);
+      if (branches === undefined) return undefined;
+      declared.branches = branches;
     }
-    const branches = parseBranches(record["branches"]);
-    if (branches === undefined) return undefined;
-    workspaces.push({ workspaceId, path, branches });
+    if (currentBranch !== undefined) declared.currentBranch = currentBranch;
+    workspaces.push(declared);
   }
   return workspaces;
 }

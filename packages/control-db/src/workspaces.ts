@@ -15,6 +15,8 @@ export type DeclaredWorkspaceRow = {
   path: string;
   /** The workspace's local heads at declaration time (M4); absent = none known. */
   branches?: string[];
+  /** The head HEAD pointed at when declared; absent = unknown. Display only. */
+  currentBranch?: string;
 };
 
 export type OwnerWorkspace = {
@@ -22,6 +24,8 @@ export type OwnerWorkspace = {
   runnerId: string;
   path: string;
   branches: string[];
+  /** Null when the runner did not say (older runner, non-repo, detached HEAD). */
+  currentBranch: string | null;
   createdAt: number;
 };
 
@@ -67,8 +71,9 @@ export function upsertRunnerWorkspaces(
   const replace = db.transaction(() => {
     db.prepare("DELETE FROM workspaces WHERE runner_id = ? AND is_custom = 0").run(runnerId);
     const insert = db.prepare(
-      `INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at, is_custom)
-       VALUES (?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO workspaces
+         (runner_id, workspace_id, path, branches, current_branch, registered_at, is_custom)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
     );
     const now = Date.now();
     for (const workspace of workspaces) {
@@ -77,6 +82,7 @@ export function upsertRunnerWorkspaces(
         workspace.workspaceId,
         workspace.path,
         JSON.stringify(workspace.branches ?? []),
+        workspace.currentBranch ?? null,
         now,
       );
     }
@@ -106,7 +112,7 @@ function branchesOf(raw: string): string[] {
 export function workspacesForOwner(db: Database, ownerId: string): OwnerWorkspace[] {
   const rows = db
     .prepare(
-      `SELECT w.workspace_id, w.runner_id, w.path, w.branches, r.created_at
+      `SELECT w.workspace_id, w.runner_id, w.path, w.branches, w.current_branch, r.created_at
        FROM workspaces w
        JOIN runners r ON r.id = w.runner_id
        WHERE r.owner_id = ? AND r.revoked_at IS NULL
@@ -117,6 +123,7 @@ export function workspacesForOwner(db: Database, ownerId: string): OwnerWorkspac
     runner_id: string;
     path: string;
     branches: string;
+    current_branch: string | null;
     created_at: number;
   }>;
   return rows.map((row) => ({
@@ -124,6 +131,7 @@ export function workspacesForOwner(db: Database, ownerId: string): OwnerWorkspac
     runnerId: row.runner_id,
     path: row.path,
     branches: branchesOf(row.branches),
+    currentBranch: row.current_branch,
     createdAt: row.created_at,
   }));
 }

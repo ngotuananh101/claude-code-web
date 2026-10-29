@@ -116,13 +116,10 @@ export type RunPayloadInputs = {
   projectRunnerId: string | undefined;
   /** The runner select's current value ("auto" or a specific runner id). */
   runnerId: string;
-  branch: string;
   /** The selected session value: "new" or a session id. */
   selectedSession: string;
   /** Whether this is a fresh session (the new-session page) or an existing one. */
   isNewSessionPage: boolean;
-  /** The branch option's known branches, used to decide whether to send branch. */
-  branchOptions: string[];
 };
 
 /**
@@ -130,25 +127,19 @@ export type RunPayloadInputs = {
  * rules Composer.vue enforces:
  *
  * - `resumeSessionId` is included only when `selectedSession` is not "new".
- * - Workspace/runner/branch context rides only on the new-session page, and
- *   only when the project has a declared runner (legacy fallback projects send
- *   a prompt-only body).
+ * - Workspace/runner context rides only on the new-session page, and only
+ *   when the project has a declared runner (legacy fallback projects send a
+ *   prompt-only body).
+ * - No branch is ever sent: the run uses whatever HEAD the workspace holds,
+ *   and the composer only displays that branch.
  * - Model travels only when not "default".
  *
  * Extracting this into a pure function lets the test suite assert the payload
  * shape without mounting the Vue SFC.
  */
 export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
-  const {
-    prompt,
-    permission,
-    model,
-    workspaceId,
-    projectRunnerId,
-    runnerId,
-    branch,
-    selectedSession,
-  } = inputs;
+  const { prompt, permission, model, workspaceId, projectRunnerId, runnerId, selectedSession } =
+    inputs;
 
   const body: StartRunRequest = {
     prompt: prompt.trim(),
@@ -158,14 +149,11 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   // Model travels only when not "default" — nothing sent means the SDK's own default.
   if (model !== "default") body.model = model;
 
-  // Workspace / runner / branch context rides only on the new-session page,
-  // and only when the project was declared by a runner (not the legacy fallback).
+  // Workspace / runner context rides only on the new-session page, and only
+  // when the project was declared by a runner (not the legacy fallback).
   if (inputs.isNewSessionPage && projectRunnerId !== undefined) {
     body.workspaceId = workspaceId;
     if (runnerId !== "auto") body.runnerId = runnerId;
-    if (branch !== "current" && inputs.branchOptions.includes(branch)) {
-      body.branch = branch;
-    }
   }
 
   // Resume: only when an existing session is selected.

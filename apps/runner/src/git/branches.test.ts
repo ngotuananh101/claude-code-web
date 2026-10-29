@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listBranches, parseBranchLines } from "./branches.ts";
+import { currentBranch, listBranches, parseBranchLines } from "./branches.ts";
 
 /**
  * The declaration half of M4: the branches a workspace offers are its local
@@ -49,6 +49,28 @@ describe("listBranches", () => {
 
   test("a directory that is not a repository lists no branches", () => {
     expect(listBranches(tempDir())).toEqual([]);
+  });
+});
+
+describe("currentBranch", () => {
+  test("names the branch HEAD points at", () => {
+    expect(currentBranch(repoWithDevBranch())).toBe("main");
+  });
+
+  test("follows a checkout", () => {
+    const dir = repoWithDevBranch();
+    run(["git", "checkout", "dev"], dir);
+    expect(currentBranch(dir)).toBe("dev");
+  });
+
+  test("a detached HEAD names no branch", () => {
+    const dir = repoWithDevBranch();
+    run(["git", "checkout", "--detach"], dir);
+    expect(currentBranch(dir)).toBeUndefined();
+  });
+
+  test("a directory that is not a repository names no branch", () => {
+    expect(currentBranch(tempDir())).toBeUndefined();
   });
 });
 

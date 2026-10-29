@@ -106,8 +106,13 @@ export type ReconnectLoopOptions = {
    * workspace's heads are re-listed on every reconnect.
    */
   workspaces?:
-    | Array<{ workspaceId: string; path: string; branches?: string[] }>
-    | (() => Array<{ workspaceId: string; path: string; branches?: string[] }>);
+    | Array<{ workspaceId: string; path: string; branches?: string[]; currentBranch?: string }>
+    | (() => Array<{
+        workspaceId: string;
+        path: string;
+        branches?: string[];
+        currentBranch?: string;
+      }>);
   sleep: (ms: number) => Promise<void>;
   onEvent: (event: LoopEvent) => void;
   /**
