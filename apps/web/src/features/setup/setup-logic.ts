@@ -14,9 +14,7 @@
  */
 
 /** A single result from validating the setup form. */
-export type SetupFormResult =
-  | { valid: true; error?: undefined }
-  | { valid: false; error: string };
+export type SetupFormResult = { valid: true; error?: undefined } | { valid: false; error: string };
 
 /** The fields a first-time-setup form collects. */
 export interface SetupFormData {
