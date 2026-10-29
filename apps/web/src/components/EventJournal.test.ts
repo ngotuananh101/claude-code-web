@@ -127,4 +127,5 @@ describe("EventJournal contract — historical message replay", () => {
     // live message share one escaping/security boundary.
     const row = deriveHistoryRows([message("user", "u-1", { content: "**hi**" })])[0]!;
     expect(renderMarkdown(row.text)).toContain("<strong>hi</strong>");
-  });});
+  });
+});
