@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
-import { loadAccount, loadSessions } from "../stores/sessions.ts";
+import { fetchSetupStatus } from "../services/auth-api.ts";
+import { connectSocket, disconnectSocket, loadAccount, loadSessions } from "../stores/sessions.ts";
+import { evaluateNavigation } from "./navigation-guard.ts";
 
 /**
  * The console's pages behind one rail: the usage dashboard (the default
@@ -7,6 +9,10 @@ import { loadAccount, loadSessions } from "../stores/sessions.ts";
  * stands alone — no rail before authentication. The guard is the only auth
  * check the client makes: the cookie is HttpOnly, so "am I signed in?" can
  * only be asked by calling the server (§19.1) and reading the status.
+ *
+ * The /setup route mirrors the front door on first deploy: before an owner
+ * account exists, the server answers `setupRequired: true` and the guard
+ * steers every visitor to /setup, never to /login.
  */
 export const router = createRouter({
   history: createWebHistory(),
@@ -25,18 +31,39 @@ export const router = createRouter({
       ],
     },
     { path: "/login", component: () => import("../views/LoginView.vue") },
+    { path: "/setup", component: () => import("../views/SetupView.vue") },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });
 
 router.beforeEach(async (to) => {
-  // The login route must not probe: an unauthorized visitor landing on it
-  // would have the guard redirect to /login from /login, forever.
-  if (to.path === "/login") return true;
-  const authorized = await loadSessions();
-  if (!authorized) return "/login";
-  // The rail's footer shows the account the cookie belongs to; a fresh boot
-  // and a just-completed login both land here first.
-  void loadAccount();
+  // Probe authentication first (HttpOnly cookie → server round-trip), then
+  // whether the owner account still needs seeding on an unauthenticated visit.
+  const isAuthorized = await loadSessions();
+  const isSetupRequired = !isAuthorized ? (await fetchSetupStatus()).setupRequired : false;
+
+  const decision = evaluateNavigation({
+    toPath: to.path,
+    isAuthorized,
+    isSetupRequired,
+  });
+
+  // The WebSocket follows the navigation: live while inside the authenticated
+  // shell, closed for everything else.
+  if (decision.socketAction === "connect") {
+    connectSocket();
+  } else {
+    disconnectSocket();
+  }
+
+  if (decision.redirect) {
+    return decision.redirect;
+  }
+
+  // Past the gate: warm the account name for the rail footer.
+  if (isAuthorized) {
+    void loadAccount();
+  }
+
   return true;
 });
