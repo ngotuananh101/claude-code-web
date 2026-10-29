@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { relativeTime } from "../lib/relative-time.ts";
-import { closeSession, sessions } from "../stores/sessions.ts";
+import { closeSession, disconnectSocket, sessions } from "../stores/sessions.ts";
 import ConnectionChip from "./ConnectionChip.vue";
 
 const route = useRoute();
@@ -74,9 +74,10 @@ function newSession(): void {
 }
 
 async function signOut(): Promise<void> {
-  // The server bumps the token version (killing every outstanding token) and
-  // revokes the owner's live socket (§19.1); the journal then reconnects
-  // into the login page.
+  // Opt out of WebSocket updates before leaving the authenticated shell so no
+  // frames land past the redirect. The server bumps the token version and
+  // revokes outstanding tokens (§19.1).
+  disconnectSocket();
   await fetch("/auth/logout", { method: "POST" });
   await router.push("/login");
 }

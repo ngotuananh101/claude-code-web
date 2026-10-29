@@ -5,6 +5,7 @@ import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { connectSocket } from "@/stores/sessions.ts";
 
 const router = useRouter();
 const username = ref("");
@@ -25,6 +26,7 @@ async function submit(): Promise<void> {
       toast.error("Sai tên đăng nhập hoặc mật khẩu.");
       return;
     }
+    connectSocket();
     await router.push("/");
   } finally {
     busy.value = false;
