@@ -245,7 +245,7 @@ async function refreshNow(): Promise<void> {
         <div class="grid justify-items-center gap-1.5 text-center">
           <h1 class="text-[26px] font-medium tracking-tight">{{ greeting }}</h1>
           <p class="text-sm text-muted-foreground">
-            Chọn runner và thư mục để bắt đầu phiên mới hoặc tiếp tục phiên cũ.
+            Chọn runner, bấm Duyệt… để mở thư mục, rồi chọn phiên trong đó hoặc tạo phiên mới.
           </p>
         </div>
 

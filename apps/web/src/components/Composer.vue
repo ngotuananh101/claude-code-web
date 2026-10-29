@@ -47,12 +47,12 @@ import FolderBrowserModal from "./FolderBrowserModal.vue";
  * new-session screen alone — an existing session already fixed its
  * runner/project when it was created. Creating a session is three explicit
  * steps: pick a runner (nothing is preselected, and no run is placed on "any
- * ready runner"), pick a folder on that runner (a workspace it already
- * declared, or one found through the directory browser, which registers it so
- * its Claude Code sessions become addressable), then pick a session in that
- * folder or start a new one. The branch is information, not a choice: the chip
- * shows the branch the folder's HEAD was on at the runner's last declaration,
- * the run sends no branch, and the workspace runs on whatever HEAD it holds.
+ * ready runner"), browse to a folder on that runner ("Duyệt…", the only way to
+ * name a directory — the composer never offers a list of folders the control
+ * plane already knew about), then pick a session in that folder or start a new
+ * one. The branch is information, not a choice: the chip shows the branch the
+ * folder's HEAD was on at the runner's declaration, the run sends no branch,
+ * and the workspace runs on whatever HEAD it holds.
  */
 
 defineOptions({ inheritAttrs: false });
@@ -73,8 +73,6 @@ const sending = ref(false);
 
 /** The chosen runner; empty until the operator picks one. */
 const runnerId = ref("");
-/** The chosen folder's composite id, or empty until a folder is picked. */
-const folderKey = ref("");
 const permission = ref("default");
 const model = ref("default");
 
@@ -125,39 +123,24 @@ onMounted(() => {
 });
 
 /**
- * One folder the chosen runner offers. The value is the composite
- * `${runnerId}/${workspaceId}` — UUIDs contain no `/`, so it round-trips.
+ * The folder the operator picked through the directory browser.
+ *
+ * There is deliberately no list of ready-made folders to choose from: the
+ * composer never offers the workspaces the control plane already knows about,
+ * because that silently turns "where does this run go" into "which of my
+ * existing projects do I reuse". "Duyệt…" is the only way in — the operator
+ * names a directory on the runner, and a folder that was never declared is
+ * registered so the run and its sessions can address it by id.
  */
-type FolderOption = {
-  value: string;
-  workspaceId: string;
+type ChosenFolder = {
   runnerId: string;
+  workspaceId: string;
   path: string;
   /** The branch HEAD was on at the last declaration; null when unknown. */
   currentBranch: string | null;
 };
 
-/**
- * The folders the chosen runner serves (§15.1). Empty until a runner is
- * picked: the operator names the runner first, so no order of picking can
- * dispatch a run onto a runner they did not choose.
- */
-const folderOptions = computed<FolderOption[]>(() => {
-  if (runnerId.value === "") return [];
-  return workspaces.value
-    .filter((w) => w.runnerId === runnerId.value)
-    .map((w) => ({
-      value: `${w.runnerId}/${w.workspaceId}`,
-      workspaceId: w.workspaceId,
-      runnerId: w.runnerId,
-      path: w.path,
-      // An older control server serves this row without the field; the chip
-      // then simply stays hidden.
-      currentBranch: w.currentBranch ?? null,
-    }));
-});
-
-const selectedFolder = computed(() => folderOptions.value.find((o) => o.value === folderKey.value));
+const selectedFolder = ref<ChosenFolder | null>(null);
 
 const selectedSessionLabel = computed(() => {
   if (selectedSession.value === NEW_SESSION) return "Phiên mới";
@@ -165,26 +148,28 @@ const selectedSessionLabel = computed(() => {
   return found ? found.summary || found.sessionId : selectedSession.value;
 });
 
-// A folder that falls out of the option list — a re-declaration dropped it, or
-// the runner changed — clears the selection rather than silently pointing the
-// send button at a folder the select no longer holds.
-watch(folderOptions, () => {
-  if (!folderOptions.value.some((o) => o.value === folderKey.value)) {
-    folderKey.value = "";
-  }
-});
-
-// The runner owns the folder list: switching runners drops the folder and the
-// session picked under the old one. Loading the new runner's declarations is
-// the same fetch that keeps the list fresh.
+// The runner owns the folder: switching runners drops the folder and the
+// session picked under the old one. The declarations are re-read too, so a
+// browsed path can still be matched to the workspace row that already exists
+// for it instead of minting a second id for one directory.
 watch(runnerId, () => {
-  folderKey.value = "";
+  selectedFolder.value = null;
   void refreshWorkspaces();
 });
 
 async function refreshWorkspaces(): Promise<void> {
   const result = await fetchWorkspaces();
-  if (result.ok) workspaces.value = result.workspaces;
+  if (!result.ok) return;
+  workspaces.value = result.workspaces;
+  // The chosen folder survives a refresh even before the declaration that
+  // carries it lands; when it does, take the branch it names. The object keeps
+  // its identity so the session list is not re-fetched for an equal folder.
+  const current = selectedFolder.value;
+  if (current === null) return;
+  const fresh = workspaceForPath(result.workspaces, current.runnerId, current.path);
+  if (fresh !== undefined) {
+    current.currentBranch = fresh.currentBranch ?? null;
+  }
 }
 
 // On the new-session page, choosing a folder (or a refresh that keeps it)
@@ -194,9 +179,9 @@ async function refreshWorkspaces(): Promise<void> {
 let sessionsEpoch = 0;
 watch(
   [selectedFolder, () => props.sessionId],
-  ([option, currentSessionId]) => {
+  ([folder, currentSessionId]) => {
     if (currentSessionId !== null) return; // sessions are fixed for an existing session
-    if (option === undefined) {
+    if (folder === null) {
       sessionsEpoch++;
       workspaceSessions.value = null;
       selectedSession.value = NEW_SESSION;
@@ -204,7 +189,7 @@ watch(
     }
     const epoch = ++sessionsEpoch;
     void (async () => {
-      const result = await loadWorkspaceSessions(option.workspaceId, option.runnerId);
+      const result = await loadWorkspaceSessions(folder.workspaceId, folder.runnerId);
       if (epoch !== sessionsEpoch) return;
       if (result.ok) {
         workspaceSessions.value = result.sessions;
@@ -232,7 +217,7 @@ async function onBrowseSelect(path: string): Promise<void> {
   const known = workspaceForPath(workspaces.value, runner, path);
   if (known !== undefined) {
     browserOpen.value = false;
-    folderKey.value = `${known.runnerId}/${known.workspaceId}`;
+    selectFolder(known.runnerId, known.workspaceId, known.path, known.currentBranch ?? null);
     return;
   }
 
@@ -244,24 +229,24 @@ async function onBrowseSelect(path: string): Promise<void> {
     return;
   }
   browserOpen.value = false;
-  // The control plane wrote the row, so it is addressable right away; mirror
-  // it locally instead of refetching the whole declaration.
-  workspaces.value = [
-    ...workspaces.value,
-    {
-      workspaceId: result.workspaceId,
-      runnerId: runner,
-      path,
-      branches: [],
-      currentBranch: null,
-      createdAt: Date.now(),
-    },
-  ];
-  folderKey.value = result.compositeId;
+  selectFolder(runner, result.workspaceId, path, null);
+  // The control plane wrote the row and the runner re-declares it on its next
+  // reconcile, so pick up whatever the declaration adds (branches, HEAD).
+  void refreshWorkspaces();
+}
+
+/** Holds the folder a run may target; clearing it hides the session step. */
+function selectFolder(
+  folderRunnerId: string,
+  workspaceId: string,
+  path: string,
+  currentBranch: string | null,
+): void {
+  selectedFolder.value = { runnerId: folderRunnerId, workspaceId, path, currentBranch };
 }
 
 /** The new-session page cannot send before a folder names where the run goes. */
-const needsFolder = computed(() => props.sessionId === null && selectedFolder.value === undefined);
+const needsFolder = computed(() => props.sessionId === null && selectedFolder.value === null);
 
 const canSend = computed(() => prompt.value.trim() !== "" && !sending.value && !needsFolder.value);
 
@@ -385,33 +370,8 @@ async function stop(): Promise<void> {
         </SelectContent>
       </Select>
 
-      <!-- Bước 2: Chọn folder trên runner đã chọn -->
-      <Select v-if="runnerId !== ''" v-model="folderKey">
-        <SelectTrigger
-          size="sm"
-          aria-label="Chọn folder"
-          class="h-7! max-w-[220px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-          :title="selectedFolder ? selectedFolder.path : 'Chọn folder'"
-        >
-          <FolderOpen :size="13" class="shrink-0" />
-          <span v-if="selectedFolder" class="max-w-[170px] truncate font-mono text-xs">
-            {{ selectedFolder.path }}
-          </span>
-          <span v-else class="text-xs">Chọn folder</span>
-        </SelectTrigger>
-        <SelectContent position="popper">
-          <SelectItem
-            v-for="option in folderOptions"
-            :key="option.value"
-            :value="option.value"
-            class="max-w-[360px]"
-          >
-            <span class="max-w-[300px] truncate font-mono text-xs">{{ option.path }}</span>
-          </SelectItem>
-        </SelectContent>
-      </Select>
-
-      <!-- Duyệt thư mục trên runner -->
+      <!-- Bước 2: Duyệt tới một thư mục trên runner đã chọn. Đây là cách duy
+           nhất để chọn thư mục — composer không bày sẵn danh sách workspace. -->
       <Button
         v-if="runnerId !== ''"
         variant="ghost"
@@ -424,6 +384,25 @@ async function stop(): Promise<void> {
         <FolderGit2 :size="13" class="shrink-0" />
         Duyệt…
       </Button>
+
+      <!-- Thư mục đã duyệt tới; bỏ chọn để duyệt lại chỗ khác -->
+      <span
+        v-if="selectedFolder"
+        class="flex h-7 max-w-[280px] shrink-0 items-center gap-1.5 rounded-lg bg-muted/60 px-2 text-xs text-muted-foreground"
+        :title="selectedFolder.path"
+      >
+        <FolderOpen :size="13" class="shrink-0" />
+        <span class="truncate font-mono">{{ selectedFolder.path }}</span>
+        <button
+          type="button"
+          class="shrink-0 cursor-pointer rounded p-0.5 hover:bg-background hover:text-foreground"
+          aria-label="Bỏ thư mục đã chọn"
+          title="Bỏ thư mục đã chọn"
+          @click="selectedFolder = null"
+        >
+          <X :size="11" />
+        </button>
+      </span>
 
       <!-- Bước 3: Chọn phiên theo thư mục được chọn hoặc tạo mới (chỉ hiện sau khi đã chọn folder) -->
       <Select v-if="selectedFolder" v-model="selectedSession" :disabled="!workspaceSessions">
