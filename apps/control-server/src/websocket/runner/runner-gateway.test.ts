@@ -671,3 +671,59 @@ describe("declared workspaces reach the projection", () => {
     expect(seen).toEqual([{ runnerId: "runner-a", workspaces: [] }]);
   });
 });
+
+describe("a failing workspace projection is refused, never fatal", () => {
+  // Storing the declaration is the server's job; a throw there (a constraint
+  // the migration missed, a locked database) must not escape handleMessage —
+  // Bun closes the socket on a throwing message callback, and the runner would
+  // reconnect straight into the same throw.
+  function makeGateway(throws: (call: number) => boolean = () => true): RunnerGateway {
+    let calls = 0;
+    return new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      onWorkspaces: () => {
+        if (throws(++calls)) throw new Error("UNIQUE constraint failed");
+      },
+    });
+  }
+
+  test("a hello whose declaration cannot be stored is refused, not negotiated", () => {
+    const gateway = makeGateway();
+    const { socket, sent, closed } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "hello",
+        hello: { ...hello, workspaces: [{ workspaceId: "default", path: "/srv/proj" }] },
+      }),
+    );
+
+    expect(result).toEqual({ ok: false, reason: "workspaces_unavailable" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "workspaces_unavailable" });
+    expect(closed).toEqual([]);
+    // Nothing was promoted, so the runner can retry the hello on this socket.
+    expect(gateway.stateOf("runner-a")).not.toBe("ready");
+  });
+
+  test("a reconcile whose declaration cannot be stored is refused, never promoted", () => {
+    // The hello stores fine; the second store — the reconcile — is the one that
+    // fails, which is the shape that used to drop a live runner's socket.
+    const gateway = makeGateway((call) => call > 1);
+    const { socket, sent, closed } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+
+    const result = gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "reconcile", runner: [], workspaces: [] }),
+    );
+
+    expect(result).toEqual({ ok: false, reason: "workspaces_unavailable" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "workspaces_unavailable" });
+    expect(closed).toEqual([]);
+    expect(gateway.stateOf("runner-a")).not.toBe("ready");
+  });
+});

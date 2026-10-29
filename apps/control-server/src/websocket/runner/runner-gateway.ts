@@ -59,7 +59,8 @@ export type RefusalReason =
   | "not_negotiated"
   | "already_negotiated"
   | "not_ready"
-  | "unknown_message";
+  | "unknown_message"
+  | "workspaces_unavailable";
 
 export type HandleResult =
   | { ok: true }
@@ -453,15 +454,22 @@ export class RunnerGateway {
       return { ok: false, reason: "malformed" };
     }
 
+    // §15.1: the hello carries the boot's full declaration. Handed over before
+    // hello.ok — a declaration the server refused to store must not be visible
+    // in a frame that says "negotiated". Storage is the server's, so a throw is
+    // a fault here, not a protocol violation by the runner: refuse over the
+    // still-open socket (nothing was promoted, so the hello can be retried) and
+    // never let it escape the message handler and drop the connection.
+    try {
+      this.#onWorkspaces?.(connection.socket.data.runnerId, result.workspaces);
+    } catch {
+      return this.#refuse(connection, "workspaces_unavailable");
+    }
+
     connection.negotiated = true;
     connection.capabilities = [...result.capabilities];
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
-
-    // §15.1: the hello carries the boot's full declaration. Handed over before
-    // hello.ok — a declaration the server refused to store must not be visible
-    // in a frame that says "negotiated".
-    this.#onWorkspaces?.(connection.socket.data.runnerId, result.workspaces);
 
     this.#send(connection, {
       type: "hello.ok",
@@ -495,7 +503,14 @@ export class RunnerGateway {
       this.#send(connection, { type: "error", reason: "malformed" });
       return { ok: false, reason: "malformed" };
     }
-    this.#onWorkspaces?.(runnerId, workspaces);
+    // A declaration the server could not store is not reconciled at all: the
+    // early return leaves the runner `connected` (never `ready`), so placement
+    // cannot act on an inventory half of which the control plane refused.
+    try {
+      this.#onWorkspaces?.(runnerId, workspaces);
+    } catch {
+      return this.#refuse(connection, "workspaces_unavailable");
+    }
 
     // Stored even when reconciliation then blocks (contradictory_inventory):
     // a blocked runner is never `ready`, so placement cannot act on it.
