@@ -12,6 +12,7 @@
 import type { SessionSummary } from "@cc-web/protocol";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { type RegisterWorkspaceOutcome, registerWorkspace } from "@/services/browse-api.ts";
+import type { StartRunRequest } from "@/services/runs-api.ts";
 import { fetchWorkspaceSessions, type WorkspaceSessionsOutcome } from "@/services/sessions-api.ts";
 
 /** The "new session" sentinel value the session select offers as its first option. */
@@ -137,7 +138,7 @@ export type RunPayloadInputs = {
  * Extracting this into a pure function lets the test suite assert the payload
  * shape without mounting the Vue SFC.
  */
-export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequestBody {
+export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   const {
     prompt,
     permission,
@@ -149,7 +150,7 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequestBody {
     selectedSession,
   } = inputs;
 
-  const body: StartRunRequestBody = {
+  const body: StartRunRequest = {
     prompt: prompt.trim(),
     permissionMode: permission,
   };
@@ -174,14 +175,3 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequestBody {
 
   return body;
 }
-
-/** The shape passed to startRun(). */
-export type StartRunRequestBody = {
-  prompt: string;
-  permissionMode: string;
-  workspaceId?: string;
-  runnerId?: string;
-  model?: string;
-  branch?: string;
-  resumeSessionId?: string;
-};

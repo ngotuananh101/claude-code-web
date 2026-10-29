@@ -236,6 +236,10 @@ async function onBrowseSelect(path: string): Promise<void> {
   }
   const result = await registerCustomWorkspace(runner, path);
   if (result.ok) {
+    // Reset branch to "current" — the freshly registered workspace may not
+    // declare the same heads the previous project did, and "Hiện tại" is the
+    // honest default rather than guessing.
+    branch.value = "current";
     // Refresh the workspaces list so the new entry is selectable, then pick it.
     void refreshWorkspacesAndSelect(result.compositeId);
   } else {
