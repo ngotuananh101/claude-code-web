@@ -13,6 +13,7 @@ import {
   loadSessions,
   openSession,
   resolveSessionLive,
+  type SessionSummary,
   sessions,
 } from "../stores/sessions.ts";
 
@@ -31,7 +32,24 @@ const routeSession = computed(() => {
   return typeof id === "string" && id !== "" ? id : null;
 });
 
-const active = computed(() => sessions.sessions.find((s) => s.sessionId === sessions.activeId));
+const active = computed<SessionSummary | undefined>(() => {
+  const currentId = routeSession.value ?? sessions.activeId;
+  if (!currentId) return undefined;
+  const found = sessions.sessions.find((s) => s.sessionId === currentId);
+  if (found) return found;
+  // Synthesize session summary so the journal mounts immediately for new sessions
+  return {
+    sessionId: currentId,
+    watermark: sessions.stream?.through ?? 0,
+    eventCount: sessions.stream?.events.length ?? 0,
+    lastEventType: null,
+    lastIngestedAt: Date.now(),
+    live: true,
+    runnerId: null,
+    workspaceId: null,
+    sdkSessionId: null,
+  };
+});
 
 const activeLive = computed(() => resolveSessionLive(active.value?.live, sessions.stream?.live));
 
@@ -40,6 +58,9 @@ const historicalMessages = ref<SessionMessage[]>([]);
 
 /** The run this page started, until its terminal event clears it. */
 const startedRunId = ref<string | null>(null);
+
+/** Optimistic pending run state while events stream from the runner. */
+const pendingRun = ref<{ runId: string; prompt: string } | null>(null);
 
 /**
  * The run a stop request would target. Prefer the one started here (it may not
@@ -78,7 +99,10 @@ watch(
           event.type === "run.failed" ||
           event.type === "run.interrupted"),
     );
-    if (terminal) startedRunId.value = null;
+    if (terminal) {
+      startedRunId.value = null;
+      pendingRun.value = null;
+    }
   },
 );
 
@@ -127,8 +151,12 @@ watch(
 );
 
 /** A run started from the composer opens the journal it will stream into. */
-function onStarted(sessionId: string, runId: string): void {
+function onStarted(sessionId: string, runId: string, promptText?: string): void {
   startedRunId.value = runId;
+  if (promptText) {
+    pendingRun.value = { runId, prompt: promptText };
+  }
+  void loadSessions();
   if (sessionId !== routeSession.value) router.push(`/sessions/${sessionId}`);
 }
 
@@ -185,6 +213,7 @@ async function refreshNow(): Promise<void> {
           :needs-resync="sessions.stream.needsResync"
           :session-live="activeLive"
           :historical-messages="historicalMessages"
+          :pending-run="pendingRun ?? undefined"
         />
         <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
           Đang chờ journal…

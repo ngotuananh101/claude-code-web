@@ -302,6 +302,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // §13: a suspended run never settles, so the gate triggers the flush
     // itself — the approval request must ship the moment it is appended.
     onApprovalEvent: () => pump.flush(),
+    onEvent: () => pump.flush(),
   });
 
   // Ruling 11: the handler resolves the workspace path from the runner's own

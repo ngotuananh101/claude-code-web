@@ -390,6 +390,7 @@ function findHistoricalOverlapIndex(
 export function deriveChatTurns(
   historicalMessages: readonly SessionMessage[],
   liveEvents: readonly BrowserReplayEvent[],
+  pendingRun?: { runId: string; prompt: string },
 ): ChatTurn[] {
   // Collect identifiers from liveEvents to detect overlap with historicalMessages.
   const liveToolIds = new Set<string>();
@@ -755,6 +756,28 @@ export function deriveChatTurns(
   if (liveAgentTurn !== null) {
     finalizeAgentTurn(liveAgentTurn, livePendingTools, liveToolInputs);
     turns.push(liveAgentTurn);
+  }
+
+  // If a run was just started from the composer but run.started has not reached
+  // the live event stream yet, render an optimistic user prompt and running agent turn.
+  if (
+    pendingRun !== undefined &&
+    pendingRun.prompt.trim() !== "" &&
+    !liveEvents.some((e) => e.runId === pendingRun.runId)
+  ) {
+    turns.push({
+      key: `user-pending-${pendingRun.runId}`,
+      kind: "user",
+      text: cleanUserPrompt(pendingRun.prompt),
+    });
+    turns.push({
+      key: `agent-pending-${pendingRun.runId}`,
+      kind: "agent",
+      status: "running",
+      isStreaming: true,
+      steps: [],
+      text: "",
+    });
   }
 
   return turns;

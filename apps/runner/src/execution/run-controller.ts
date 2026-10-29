@@ -65,6 +65,11 @@ export type ControllerOptions = {
    * is being waited on — the gate triggers the flush itself.
    */
   onApprovalEvent?: () => void;
+  /**
+   * Called after any event is appended to the outbox (§12.2). Used to flush
+   * frames (run.started, message.delta, tool.*) to the server in real time.
+   */
+  onEvent?: () => void;
 };
 
 /** One tracked run: what shutdown or cancel needs to reach it. */
@@ -85,6 +90,7 @@ export class RunController {
   readonly #now: () => number;
   readonly #onSettled: ((attemptId: string) => void) | undefined;
   readonly #onApprovalEvent: (() => void) | undefined;
+  readonly #onEvent: (() => void) | undefined;
 
   /** Every run in flight, keyed by attempt id, so shutdown can wait or cancel. */
   readonly #inFlight = new Map<string, InFlightRun>();
@@ -121,6 +127,7 @@ export class RunController {
     this.#now = options.now ?? Date.now;
     this.#onSettled = options.onSettled;
     this.#onApprovalEvent = options.onApprovalEvent;
+    this.#onEvent = options.onEvent;
 
     // §9.7: whatever was in flight when the previous process died is
     // interrupted, not resumed. Doing it here means it happens before the first
@@ -311,6 +318,7 @@ export class RunController {
           return router;
         },
         onApprovalEvent: () => this.#onApprovalEvent?.(),
+        onEvent: () => this.#onEvent?.(),
         // §12.6: the executor owns this attempt's sequence space, so it offers
         // the one closure anything else may journal through. Held only while
         // the run is in flight, like the router.

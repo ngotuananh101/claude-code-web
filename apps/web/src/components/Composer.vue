@@ -58,7 +58,9 @@ const props = defineProps<{
   activeRunId?: string | null;
 }>();
 
-const emit = defineEmits<{ started: [sessionId: string, runId: string] }>();
+const emit = defineEmits<{
+  started: [sessionId: string, runId: string, promptText?: string];
+}>();
 
 const prompt = ref("");
 const sending = ref(false);
@@ -305,12 +307,13 @@ async function send(): Promise<void> {
     isNewSessionPage: props.sessionId === null,
     branchOptions: selectedProject.value.branches,
   });
+  const promptText = prompt.value;
   const result = await startRun(sessionId, body);
 
   if (result.ok) {
     prompt.value = "";
     attachments.value = [];
-    emit("started", sessionId, result.runId);
+    emit("started", sessionId, result.runId, promptText);
     return;
   }
   if (result.reason === "session_busy") {

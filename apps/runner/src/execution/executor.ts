@@ -126,6 +126,8 @@ export type ExecuteOptions = {
   /** Called after every `approval.*` append: a suspended run never settles,
    * so the pump must be flushed by the gate itself, not by onSettled. */
   onApprovalEvent?: () => void;
+  /** Called after any event is appended to the local outbox (§12.2). */
+  onEvent?: () => void;
   /**
    * Offers the attempt's own sequenced append to the caller, once, as soon as
    * the run is observable (§12.6).
@@ -210,6 +212,7 @@ export async function executeRun(
       throw new Error(`duplicate event sequence ${next} for attempt ${attemptId}`);
     }
     sequence = next;
+    options.onEvent?.();
   };
 
   // §11.4: one managed writer per workspace. Another attempt holding the

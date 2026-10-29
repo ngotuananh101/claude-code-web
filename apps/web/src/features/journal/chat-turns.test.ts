@@ -909,4 +909,49 @@ describe("deriveChatTurns — merging historical and live", () => {
       outputSummary: "/mnt/Data",
     });
   });
+
+  test("renders optimistic pending user turn and agent spinner before liveEvents arrive", () => {
+    const turns = deriveChatTurns([], [], {
+      runId: "run-pending-1",
+      prompt: "Tôi muốn kiểm tra file",
+    });
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "user-pending-run-pending-1",
+      text: "Tôi muốn kiểm tra file",
+    });
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      key: "agent-pending-run-pending-1",
+      status: "running",
+      isStreaming: true,
+    });
+  });
+
+  test("supersedes pendingRun when liveEvents contains run.started for that runId", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { prompt: "Tôi muốn kiểm tra file" }, "run-pending-1")],
+      {
+        runId: "run-pending-1",
+        prompt: "Tôi muốn kiểm tra file",
+      },
+    );
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "live-user-run-pending-1",
+      text: "Tôi muốn kiểm tra file",
+    });
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      key: "live-run-pending-1",
+      status: "running",
+      isStreaming: true,
+    });
+  });
 });

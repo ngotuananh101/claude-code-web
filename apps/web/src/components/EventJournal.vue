@@ -14,13 +14,16 @@ const props = defineProps<{
   historicalMessages?: SessionMessage[];
   needsResync: boolean;
   sessionLive: boolean;
+  pendingRun?: { runId: string; prompt: string };
 }>();
 
 // Chat turns fuse the resumed session's historical `SessionMessage`s with the
 // live `BrowserReplayEvent` stream into a single chronological feed (§16.1).
 // The derivation is pure and deterministic so a resubscribed client's view is
 // identical to a live one — see the unit tests in chat-turns.test.ts.
-const turns = computed(() => deriveChatTurns(props.historicalMessages ?? [], props.events));
+const turns = computed(() =>
+  deriveChatTurns(props.historicalMessages ?? [], props.events, props.pendingRun),
+);
 
 // The journal is the authority on an approval's outcome (§13.2): a card is
 // read-only once a later `approval.resolved`/`approval.expired` with the same
