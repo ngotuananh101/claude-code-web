@@ -194,7 +194,7 @@ async function refreshNow(): Promise<void> {
     <template v-if="active">
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
         <header
-          class="z-10 flex items-baseline justify-between gap-4 px-7 pt-4 pb-3"
+          class="z-10 mx-auto flex w-full max-w-4xl items-baseline justify-between gap-4 px-4 pt-4 pb-3 md:px-6"
         >
           <span class="truncate font-mono text-[13px]">{{ active.sessionId }}</span>
           <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
@@ -220,8 +220,13 @@ async function refreshNow(): Promise<void> {
           Đang chờ journal…
         </div>
 
-        <div class="z-10 px-7 pt-2 pb-4.5">
-          <Composer :session-id="routeSession" :active-run-id="liveRunId" @started="onStarted" />
+        <div class="z-10 px-4 pt-2 pb-4.5 md:px-6">
+          <Composer
+            class="mx-auto max-w-4xl"
+            :session-id="routeSession"
+            :active-run-id="liveRunId"
+            @started="onStarted"
+          />
         </div>
       </div>
 
@@ -244,7 +249,12 @@ async function refreshNow(): Promise<void> {
           </p>
         </div>
 
-        <Composer class="w-full max-w-[660px]" :session-id="routeSession" :active-run-id="null" @started="onStarted" />
+        <Composer
+          class="w-full max-w-[660px]"
+          :session-id="routeSession"
+          :active-run-id="null"
+          @started="onStarted"
+        />
 
         <div class="flex flex-wrap items-center justify-center gap-2">
           <Button

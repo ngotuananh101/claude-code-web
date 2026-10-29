@@ -62,6 +62,13 @@ export function registerWorkspace(
  * delete and the insert must not leave the runner with no rows when it just
  * declared some (an empty declaration after a non-empty one is a real state,
  * but a crash-shaped hole is not).
+ *
+ * A declared id may collide with a custom row the owner registered earlier: the
+ * control plane mints that row's id, hands it to the runner with the run, and
+ * the runner redeclares the very same id at its next hello. The row becomes
+ * declared — the runner is the registration authority — so the insert upserts
+ * instead of throwing on the primary key (a throw here would escape the hello
+ * handler and drop the runner's socket).
  */
 export function upsertRunnerWorkspaces(
   db: Database,
@@ -73,7 +80,13 @@ export function upsertRunnerWorkspaces(
     const insert = db.prepare(
       `INSERT INTO workspaces
          (runner_id, workspace_id, path, branches, current_branch, registered_at, is_custom)
-       VALUES (?, ?, ?, ?, ?, ?, 0)`,
+       VALUES (?, ?, ?, ?, ?, ?, 0)
+       ON CONFLICT (runner_id, workspace_id) DO UPDATE SET
+         path = excluded.path,
+         branches = excluded.branches,
+         current_branch = excluded.current_branch,
+         registered_at = excluded.registered_at,
+         is_custom = 0`,
     );
     const now = Date.now();
     for (const workspace of workspaces) {

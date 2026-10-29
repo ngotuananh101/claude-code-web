@@ -28,9 +28,14 @@ import { fetchDirectory, registerWorkspace } from "@/services/browse-api.ts";
 
 /**
  * A modal directory browser for discovering a workspace on a runner (§15.1,
- * P3-B). The operator picks a runner, browses its host filesystem via the
- * never-throw browse RPC, and either confirms a folder (emits `select`) or
- * registers a custom path (POSTs `registerWorkspace`).
+ * P3-B). The operator browses the runner host's filesystem via the never-throw
+ * browse RPC and confirms a folder, which the modal emits as `select`.
+ *
+ * The modal only picks — it does not register. Registration is the caller's
+ * decision, because a folder the runner already declared must be selected
+ * rather than registered again under a fresh id (the control plane keys
+ * workspaces on `(runnerId, workspaceId)`), and only the caller holds the
+ * declared list to check against.
  *
  * All navigation state and the pure helpers live in `folder-browser.ts`; this
  * component only wires the DOM to the controller and renders with shadcn-vue
@@ -83,11 +88,10 @@ function onCancel(): void {
   emit("close");
 }
 
-async function onConfirm(): Promise<void> {
-  const outcome = await controller.registerWorkspace();
-  if (outcome.ok) {
-    emit("select", outcome.value.path);
-  }
+function onConfirm(): void {
+  const path = state.value.selectedPath;
+  if (path === "") return;
+  emit("select", path);
 }
 
 function onRetry(): void {

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
-import { upsertRunnerWorkspaces, workspacesForOwner } from "./workspaces.ts";
+import { registerWorkspace, upsertRunnerWorkspaces, workspacesForOwner } from "./workspaces.ts";
 
 /**
  * What each runner serves (§15.1). The runner is the registration authority —
@@ -61,6 +61,35 @@ describe("upsertRunnerWorkspaces", () => {
       .prepare("SELECT workspace_id FROM workspaces WHERE runner_id = 'runner-a'")
       .all() as Array<{ workspace_id: string }>;
     expect(rows).toEqual([{ workspace_id: "w-2" }]);
+  });
+
+  test("a runner redeclaring a custom workspace's id takes the row over instead of throwing", () => {
+    seedRunner(db, "runner-a");
+    // The control plane minted this id for a folder the owner browsed to; the
+    // runner learned it from a run and now declares it back.
+    registerWorkspace(db, "runner-a", "ws-custom", "/srv/browsed");
+    upsertRunnerWorkspaces(db, "runner-a", [
+      { workspaceId: "ws-custom", path: "/srv/browsed", currentBranch: "main" },
+    ]);
+
+    const rows = db
+      .prepare(
+        "SELECT workspace_id, path, is_custom, current_branch FROM workspaces WHERE runner_id = 'runner-a'",
+      )
+      .all() as Array<{
+      workspace_id: string;
+      path: string;
+      is_custom: number;
+      current_branch: string | null;
+    }>;
+    expect(rows).toEqual([
+      {
+        workspace_id: "ws-custom",
+        path: "/srv/browsed",
+        is_custom: 0,
+        current_branch: "main",
+      },
+    ]);
   });
 
   test("an empty declaration removes every row for the runner", () => {

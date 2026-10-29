@@ -7,6 +7,7 @@ import {
   resumeSessionIdFor,
   sessionOption,
   splitCompositeId,
+  workspaceForPath,
 } from "../features/composer/composer-logic.ts";
 
 /**
@@ -225,6 +226,33 @@ describe("splitCompositeId", () => {
   });
 });
 
+describe("workspaceForPath", () => {
+  const workspaces = [
+    { runnerId: "runner-a", workspaceId: "ws-1", path: "/srv/proj" },
+    { runnerId: "runner-b", workspaceId: "ws-2", path: "/srv/proj" },
+  ];
+
+  test("finds the workspace a browsed folder already is, on that runner", () => {
+    expect(workspaceForPath(workspaces, "runner-b", "/srv/proj")?.workspaceId).toBe("ws-2");
+  });
+
+  test("ignores a trailing slash on either side", () => {
+    expect(workspaceForPath(workspaces, "runner-a", "/srv/proj/")?.workspaceId).toBe("ws-1");
+    expect(
+      workspaceForPath(
+        [{ runnerId: "runner-a", workspaceId: "ws-1", path: "/srv/proj/" }],
+        "runner-a",
+        "/srv/proj",
+      )?.workspaceId,
+    ).toBe("ws-1");
+  });
+
+  test("returns undefined for a folder nobody declared on that runner", () => {
+    expect(workspaceForPath(workspaces, "runner-a", "/srv/other")).toBeUndefined();
+    expect(workspaceForPath(workspaces, "runner-c", "/srv/proj")).toBeUndefined();
+  });
+});
+
 describe("buildRunRequest — resumeSessionId handling", () => {
   const baseInputs = {
     prompt: "hello world",
@@ -283,7 +311,14 @@ describe("buildRunRequest — resumeSessionId handling", () => {
 
   test("branch is never sent — the run uses the workspace's current HEAD", () => {
     expect(buildRunRequest(baseInputs).branch).toBeUndefined();
-    expect(buildRunRequest({ ...baseInputs, runnerId: "auto" }).branch).toBeUndefined();
+    expect(buildRunRequest({ ...baseInputs, runnerId: "" }).branch).toBeUndefined();
+  });
+
+  test("the chosen runner always travels with the workspace — there is no 'auto'", () => {
+    const body = buildRunRequest({ ...baseInputs, runnerId: "runner-a" });
+
+    expect(body.workspaceId).toBe("ws-proj");
+    expect(body.runnerId).toBe("runner-a");
   });
 
   test("on an existing session page, workspace/runner/branch context is omitted", () => {

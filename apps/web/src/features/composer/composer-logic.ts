@@ -90,7 +90,9 @@ export function splitCompositeId(composite: string): { runnerId: string; workspa
 export async function registerCustomWorkspace(
   runnerId: string,
   path: string,
-): Promise<{ ok: true; compositeId: string } | { ok: false; message: string }> {
+): Promise<
+  { ok: true; workspaceId: string; compositeId: string } | { ok: false; message: string }
+> {
   const outcome: RegisterWorkspaceOutcome = await registerWorkspace(runnerId, path);
   if (!outcome.ok) {
     return { ok: false, message: outcome.message };
@@ -99,7 +101,33 @@ export async function registerCustomWorkspace(
   // id the UI selects on is `${runnerId}/${workspaceId}`.
   const workspaceId = outcome.value.workspaceId;
   const compositeId = `${runnerId}/${workspaceId}`;
-  return { ok: true, compositeId };
+  return { ok: true, workspaceId, compositeId };
+}
+
+/** A workspace row as the composer reasons about it. */
+export type KnownWorkspace = { runnerId: string; workspaceId: string; path: string };
+
+/** Two folder paths that name the same directory, ignoring trailing slashes. */
+function samePath(a: string, b: string): boolean {
+  const strip = (value: string): string => (value.length > 1 ? value.replace(/\/+$/, "") : value);
+  return strip(a) === strip(b);
+}
+
+/**
+ * The workspace a browsed folder already is, if any.
+ *
+ * Browsing to a folder a runner *declared* must select that row, not register a
+ * second one: the control plane keys workspaces on `(runnerId, workspaceId)`,
+ * so a fresh id for a known path would leave two rows for one directory.
+ */
+export function workspaceForPath<T extends KnownWorkspace>(
+  workspaces: readonly T[],
+  runnerId: string,
+  path: string,
+): T | undefined {
+  return workspaces.find(
+    (workspace) => workspace.runnerId === runnerId && samePath(workspace.path, path),
+  );
 }
 
 /**
@@ -110,11 +138,11 @@ export type RunPayloadInputs = {
   prompt: string;
   permission: string;
   model: string;
-  /** The selected project option's workspace id. */
-  workspaceId: string;
-  /** The selected project option's runner id, or undefined for the legacy fallback. */
+  /** The selected folder's workspace id; undefined when no folder is chosen. */
+  workspaceId: string | undefined;
+  /** The selected folder's runner id, or undefined when no folder is chosen. */
   projectRunnerId: string | undefined;
-  /** The runner select's current value ("auto" or a specific runner id). */
+  /** The runner select's current value; empty until the operator picks one. */
   runnerId: string;
   /** The selected session value: "new" or a session id. */
   selectedSession: string;
@@ -128,8 +156,8 @@ export type RunPayloadInputs = {
  *
  * - `resumeSessionId` is included only when `selectedSession` is not "new".
  * - Workspace/runner context rides only on the new-session page, and only
- *   when the project has a declared runner (legacy fallback projects send a
- *   prompt-only body).
+ *   when a folder is chosen: there is no "any ready runner" placement, the
+ *   operator names the runner, so `runnerId` always travels with it.
  * - No branch is ever sent: the run uses whatever HEAD the workspace holds,
  *   and the composer only displays that branch.
  * - Model travels only when not "default".
@@ -150,10 +178,10 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   if (model !== "default") body.model = model;
 
   // Workspace / runner context rides only on the new-session page, and only
-  // when the project was declared by a runner (not the legacy fallback).
-  if (inputs.isNewSessionPage && projectRunnerId !== undefined) {
+  // once the operator has chosen a folder to run in.
+  if (inputs.isNewSessionPage && projectRunnerId !== undefined && workspaceId !== undefined) {
     body.workspaceId = workspaceId;
-    if (runnerId !== "auto") body.runnerId = runnerId;
+    if (runnerId !== "") body.runnerId = runnerId;
   }
 
   // Resume: only when an existing session is selected.
