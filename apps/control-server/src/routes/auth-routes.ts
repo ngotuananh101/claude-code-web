@@ -63,8 +63,7 @@ export async function handleSetup(
   }
 
   const trimmedUsername = username.trim();
-  const trimmedPassword = password.trim();
-  if (trimmedUsername === "" || trimmedPassword === "") {
+  if (trimmedUsername === "" || password.trim() === "") {
     return new Response("bad request", { status: 400 });
   }
 
@@ -76,7 +75,7 @@ export async function handleSetup(
   if (!hashPassword) {
     return new Response("setup unavailable", { status: 503 });
   }
-  const passwordHash = await hashPassword(trimmedPassword);
+  const passwordHash = await hashPassword(password);
 
   const row = options.db.query("SELECT COUNT(*) AS count FROM users").get() as { count: number };
   if (row.count > 0) {
