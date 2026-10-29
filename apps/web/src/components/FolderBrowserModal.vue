@@ -120,17 +120,17 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
 
 <template>
   <Dialog :open="open" @update:open="val => { if (!val) emit('close'); }">
-    <DialogContent class="max-w-2xl p-0">
-      <DialogHeader class="border-b border-border px-6 py-4">
+    <DialogContent class="sm:max-w-2xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogHeader class="shrink-0 border-b border-border px-6 py-4">
         <DialogTitle class="flex items-center gap-2">
-          <FolderGit2 :size="20" class="text-primary" />
-          Chọn thư mục trên Runner
+          <FolderGit2 :size="20" class="text-primary shrink-0" />
+          <span>Chọn thư mục trên Runner</span>
         </DialogTitle>
         <div class="mt-2 flex items-center gap-2">
-          <Badge variant="secondary" class="font-mono text-xs">
+          <Badge variant="secondary" class="font-mono text-xs shrink-0">
             {{ state.runnerId }}
           </Badge>
-          <span class="text-xs text-muted-foreground">
+          <span class="text-xs text-muted-foreground truncate">
             /api/runners/{{ state.runnerId }}/browse
           </span>
         </div>
@@ -139,7 +139,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       <!-- Shortcuts bar: clickable badges to jump to common roots -->
       <div
         v-if="state.shortcuts.length > 0"
-        class="flex flex-wrap gap-1.5 border-b border-border px-6 py-2.5"
+        class="flex shrink-0 flex-wrap gap-1.5 border-b border-border px-6 py-2.5"
       >
         <button
           v-for="shortcut in state.shortcuts"
@@ -154,26 +154,26 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       </div>
 
       <!-- Breadcrumbs bar: clickable segments to jump to any ancestor -->
-      <div class="flex items-center gap-1 border-b border-border px-6 py-2 text-xs">
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-6 py-2 text-xs">
         <Button
           v-if="state.parentPath !== null"
           variant="ghost"
           size="sm"
-          class="h-6 px-1.5"
+          class="h-6 px-1.5 shrink-0"
           @click="onGoUp"
         >
           <ArrowUp :size="12" />
         </Button>
-        <div class="flex items-center gap-1 font-mono">
+        <div class="flex min-w-0 flex-1 items-center gap-1 font-mono overflow-x-auto">
           <span
-            class="text-muted-foreground hover:text-foreground"
+            class="text-muted-foreground hover:text-foreground shrink-0"
             style="cursor: pointer"
             @click="controller.navigate('')"
           >
             <Home :size="12" />
           </span>
           <template v-for="crumb in breadcrumbs(state.currentPath)" :key="crumb.path">
-            <ChevronRight :size="12" class="text-muted-foreground/50" />
+            <ChevronRight :size="12" class="text-muted-foreground/50 shrink-0" />
             <button
               type="button"
               class="truncate text-muted-foreground hover:text-foreground hover:underline"
@@ -186,7 +186,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       </div>
 
       <!-- Content area: loading / error / entries -->
-      <div class="px-6 py-4">
+      <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <div v-if="state.loading" class="flex items-center justify-center py-8">
           <Loader2 :size="24" class="animate-spin text-muted-foreground" />
           <span class="ml-2 text-sm text-muted-foreground">Đang tải…</span>
@@ -213,7 +213,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
           <button
             v-if="state.parentPath !== null"
             type="button"
-            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+            class="mb-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
             @click="controller.navigate(state.parentPath)"
           >
             <ArrowUp :size="14" class="text-muted-foreground" />
@@ -222,44 +222,45 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
           </button>
 
           <!-- Folder list -->
-          <ScrollArea v-if="state.entries.length > 0" class="max-h-72">
-            <ul class="grid gap-0.5">
-            <li
-              v-for="entry in state.entries"
-              :key="entry.path"
-              class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
-              @click="entry.isDir ? onRowClick(entry) : undefined"
-            >
-              <div class="flex items-center gap-2">
-                <Folder v-if="entry.isDir" :size="16" class="text-primary" />
-                <File v-else :size="16" class="text-muted-foreground" />
-                <span class="truncate">{{ entry.name }}</span>
-                <Badge
-                  v-if="entry.isGitRepo"
-                  variant="secondary"
-                  class="text-xs font-medium"
-                >
-                  <FolderGit2 :size="10" class="mr-0.5" />Git
-                </Badge>
-                <Badge
-                  v-if="entry.hasClaudeProject"
-                  variant="outline"
-                  class="text-xs font-medium"
-                >
-                  Claude Project
-                </Badge>
-              </div>
-              <Button
-                v-if="entry.isDir"
-                variant="ghost"
-                size="sm"
-                class="h-6 shrink-0 px-1.5"
-                @click="onFolderSelect(entry)"
+          <ScrollArea v-if="state.entries.length > 0" class="h-72 overflow-hidden">
+            <ul class="grid gap-0.5 pr-3">
+              <li
+                v-for="entry in state.entries"
+                :key="entry.path"
+                class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer transition-colors"
+                :class="state.selectedPath === entry.path ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-muted'"
+                @click="entry.isDir ? onRowClick(entry) : undefined"
               >
-                <Check :size="12" />
-              </Button>
-            </li>
-          </ul>
+                <div class="flex min-w-0 flex-1 items-center gap-2">
+                  <Folder v-if="entry.isDir" :size="16" class="text-primary shrink-0" />
+                  <File v-else :size="16" class="text-muted-foreground shrink-0" />
+                  <span class="truncate">{{ entry.name }}</span>
+                  <Badge
+                    v-if="entry.isGitRepo"
+                    variant="secondary"
+                    class="text-xs font-medium shrink-0"
+                  >
+                    <FolderGit2 :size="10" class="mr-0.5" />Git
+                  </Badge>
+                  <Badge
+                    v-if="entry.hasClaudeProject"
+                    variant="outline"
+                    class="text-xs font-medium shrink-0"
+                  >
+                    Claude Project
+                  </Badge>
+                </div>
+                <Button
+                  v-if="entry.isDir"
+                  variant="ghost"
+                  size="sm"
+                  class="h-6 shrink-0 px-1.5"
+                  @click.stop="onFolderSelect(entry)"
+                >
+                  <Check :size="12" />
+                </Button>
+              </li>
+            </ul>
           </ScrollArea>
 
           <!-- Empty state -->
@@ -272,25 +273,27 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
         </template>
       </div>
 
-      <DialogFooter class="border-t border-border px-6 py-4">
-        <div class="flex items-center gap-2 text-xs text-muted-foreground font-mono">
-          <span>Đang chọn:</span>
-          <code class="rounded border border-border/60 bg-muted/30 px-1.5 py-0.5">
+      <DialogFooter class="shrink-0 border-t border-border bg-popover px-6 py-4 sm:items-center sm:justify-between">
+        <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground font-mono sm:mr-auto">
+          <span class="shrink-0">Đang chọn:</span>
+          <code class="truncate rounded border border-border/60 bg-muted/30 px-1.5 py-0.5">
             {{ state.selectedPath || "—" }}
           </code>
         </div>
 
-        <Button variant="outline" @click="onCancel">
-          <X :size="14" />
-          Hủy
-        </Button>
-        <Button
-          :disabled="!state.selectedPath || state.loading"
-          @click="onConfirm"
-        >
-          <Check :size="14" />
-          Chọn thư mục này
-        </Button>
+        <div class="flex items-center justify-end gap-2 shrink-0">
+          <Button variant="outline" @click="onCancel">
+            <X :size="14" />
+            Hủy
+          </Button>
+          <Button
+            :disabled="!state.selectedPath || state.loading"
+            @click="onConfirm"
+          >
+            <Check :size="14" />
+            Chọn thư mục này
+          </Button>
+        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>
