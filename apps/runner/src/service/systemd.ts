@@ -34,7 +34,10 @@ export type UnitOptions = {
 
 export function userUnitPath(homeDir?: string): string {
   if (homeDir) {
-    return `${homeDir}/.config/systemd/user/${UNIT_NAME}`;
+    const baseHome = homeDir.endsWith("/.cc-web-runner")
+      ? homeDir.slice(0, -"/.cc-web-runner".length)
+      : homeDir;
+    return `${baseHome}/.config/systemd/user/${UNIT_NAME}`;
   }
   const configHome = process.env["XDG_CONFIG_HOME"] ?? `${process.env["HOME"]}/.config`;
   return `${configHome}/systemd/user/${UNIT_NAME}`;
@@ -111,10 +114,15 @@ export async function stopAndDisable(
   opts?: { scope?: UnitScope; homeDir?: string },
 ): Promise<string> {
   const isUser = opts?.scope === "user";
-  const unitPath = isUser && opts?.homeDir ? userUnitPath(opts.homeDir) : SYSTEM_UNIT_PATH;
+  const unitPath = isUser ? userUnitPath(opts?.homeDir) : SYSTEM_UNIT_PATH;
 
   const systemctlArgs = isUser ? ["--user"] : [];
-  await io.runCommand("systemctl", [...systemctlArgs, "disable", "--now", UNIT_NAME]);
+  try {
+    await io.runCommand("systemctl", [...systemctlArgs, "disable", "--now", UNIT_NAME]);
+  } catch {
+    // If unit was already disabled or does not exist, systemctl exits with non-zero.
+    // Proceed idempotently to remove the unit file so cleanup always finishes.
+  }
   await io.removeFile(unitPath);
   return unitPath;
 }

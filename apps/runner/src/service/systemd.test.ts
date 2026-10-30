@@ -4,6 +4,7 @@ import {
   stopAndDisable,
   UNIT_NAME,
   UNIT_PATH,
+  userUnitPath,
   writeUnitAndEnable,
 } from "./systemd.ts";
 
@@ -134,7 +135,7 @@ describe("writeUnitAndEnable", () => {
     await writeUnitAndEnable(
       {
         executablePath: "/usr/local/bin/cc-web-runner",
-        homeDir: "/home/anhnt",
+        homeDir: "/home/anhnt/.cc-web-runner",
         scope: "user",
       },
       io,
@@ -155,6 +156,20 @@ describe("writeUnitAndEnable", () => {
       target: "systemctl",
       args: ["--user", "enable", "--now", UNIT_NAME],
     });
+  });
+});
+
+describe("userUnitPath", () => {
+  test("strips .cc-web-runner suffix from runner home", () => {
+    expect(userUnitPath("/home/anhnt/.cc-web-runner")).toBe(
+      "/home/anhnt/.config/systemd/user/cc-web-runner.service",
+    );
+  });
+
+  test("uses user home directly when provided", () => {
+    expect(userUnitPath("/home/anhnt")).toBe(
+      "/home/anhnt/.config/systemd/user/cc-web-runner.service",
+    );
   });
 });
 
@@ -201,6 +216,34 @@ describe("stopAndDisable", () => {
 
     await stopAndDisable(io, { scope: "user", homeDir: "/home/anhnt" });
 
+    expect(calls[0]).toEqual({
+      kind: "run",
+      target: "systemctl",
+      args: ["--user", "disable", "--now", UNIT_NAME],
+    });
+    expect(calls[1]).toEqual({
+      kind: "remove",
+      target: "/home/anhnt/.config/systemd/user/cc-web-runner.service",
+    });
+  });
+
+  test("proceeds idempotently to remove unit file even if systemctl disable fails", async () => {
+    const calls: Array<{ kind: string; target: string; args?: string[] }> = [];
+    const io = {
+      writeFile: async (path: string) => {
+        calls.push({ kind: "write", target: path });
+      },
+      removeFile: async (path: string) => {
+        calls.push({ kind: "remove", target: path });
+      },
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ kind: "run", target: command, args });
+        throw new Error("systemctl disable failed (exit 1)");
+      },
+    };
+
+    const removedPath = await stopAndDisable(io, { scope: "user", homeDir: "/home/anhnt" });
+    expect(removedPath).toBe("/home/anhnt/.config/systemd/user/cc-web-runner.service");
     expect(calls[0]).toEqual({
       kind: "run",
       target: "systemctl",
