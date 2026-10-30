@@ -18,6 +18,7 @@
  * `..` here would be a second, weaker copy of the rule that actually matters.
  */
 
+import type { SessionCleanupResult } from "./attachments.ts";
 import type { MutationResult } from "./mutation.ts";
 
 /** The `capabilities` entry a runner must advertise before it is sent RPCs. */
@@ -280,7 +281,8 @@ export type RpcResultFrame = {
     | MutationResult
     | FsBrowseResult
     | SessionsListResult
-    | SessionMessagesResult;
+    | SessionMessagesResult
+    | SessionCleanupResult;
   error?: { code: string; message: string };
 };
 
@@ -448,7 +450,10 @@ export function parseRpcResultFrame(value: unknown): RpcResultFrame | undefined 
     const result = record["result"];
     if (typeof result !== "object" || result === null) return undefined;
     const op = (result as Record<string, unknown>)["op"];
-    if (typeof op !== "string") return undefined;
+    // SessionCleanupResult ({ ok: boolean; error?: string }) has no `op` —
+    // accept it alongside the op-carrying result shapes.
+    if (typeof op !== "string" && !isSessionCleanupResult(result as Record<string, unknown>))
+      return undefined;
     return {
       type: "rpc.result",
       commandId,
@@ -458,7 +463,8 @@ export function parseRpcResultFrame(value: unknown): RpcResultFrame | undefined 
         | MutationResult
         | FsBrowseResult
         | SessionsListResult
-        | SessionMessagesResult,
+        | SessionMessagesResult
+        | SessionCleanupResult,
     };
   }
 
@@ -469,4 +475,15 @@ export function parseRpcResultFrame(value: unknown): RpcResultFrame | undefined 
   const message = errorRecord["message"];
   if (typeof code !== "string" || typeof message !== "string") return undefined;
   return { type: "rpc.result", commandId, ok, error: { code, message } };
+}
+
+/**
+ * Recognises a `SessionCleanupResult` shape (`{ ok: boolean; error?: string }`)
+ * so `parseRpcResultFrame` can accept it alongside the `op`-carrying results.
+ */
+function isSessionCleanupResult(value: Record<string, unknown>): boolean {
+  if (typeof value["ok"] !== "boolean") return false;
+  if (!Object.keys(value).every((key) => key === "ok" || key === "error")) return false;
+  if (value["error"] !== undefined && typeof value["error"] !== "string") return false;
+  return true;
 }

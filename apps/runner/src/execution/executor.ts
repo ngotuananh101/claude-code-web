@@ -15,6 +15,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import type { AttachmentInfo, RunnerAttachmentItem } from "@cc-web/protocol";
 import {
   appendEvent,
   finishAttempt,
@@ -24,6 +25,7 @@ import {
   sdkSessionIdForSession,
 } from "@cc-web/runner-db";
 import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
+import { downloadRunnerAttachments, injectAttachmentsContext } from "./attachments.ts";
 import { boundEventPayload } from "./payload-bound.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 import { createStreamNormalizer } from "./stream-normalizer.ts";
@@ -121,6 +123,22 @@ export type ExecuteOptions = {
     sessionId: string,
   ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /**
+   * The runner's home directory, used as the base for downloading session
+   * attachments into `${runnerHome}/tmp/sessions/<sessionId>/attachments/`.
+   * Absent means attachment downloading is skipped (pre-attachment behavior).
+   */
+  runnerHome?: string;
+  /**
+   * The control server's URL, used to download attachments from
+   * `${serverUrl}/api/runner/attachments/<id>`. Paired with `token`.
+   */
+  serverUrl?: string;
+  /**
+   * The runner's credential token, sent as `Authorization: Bearer <token>`
+   * when downloading attachments. Paired with `serverUrl`.
+   */
+  token?: string;
+  /**
    * Builds the attempt's approval gate from the executor's own append closure
    * (§13) — the gate's events must share the attempt's sequence. Optional:
    * tests of non-approval paths omit it, and the production controller always
@@ -192,6 +210,14 @@ export async function executeRun(
     typeof record?.["branch"] === "string" && record["branch"] !== ""
       ? record["branch"]
       : undefined;
+
+  // Attachment items from the run.start payload (§attachments). Parsed defensively:
+  // the payload is unknown until the protocol parser validates each item.
+  const rawAttachments = record?.["attachments"];
+  const attachments: RunnerAttachmentItem[] =
+    Array.isArray(rawAttachments) && rawAttachments.every(isRunnerAttachmentItem)
+      ? (rawAttachments as RunnerAttachmentItem[])
+      : [];
 
   const now = () => new Date().toISOString();
   let sequence = 0;
@@ -301,6 +327,35 @@ export async function executeRun(
     append("run.interrupted", { reason: "aborted" });
   };
 
+  // Attachment download and context injection. Done before `run.started` so the
+  // event carries the attachment metadata, and before the SDK stream so the
+  // effective prompt includes the context block. When the runner lacks a server
+  // URL or token the pre-attachment behavior is preserved: no download, prompt
+  // unchanged.
+  let effectivePrompt = prompt;
+  let attachmentInfos: AttachmentInfo[] | undefined;
+  if (
+    attachments.length > 0 &&
+    options.runnerHome !== undefined &&
+    options.serverUrl !== undefined &&
+    options.token !== undefined
+  ) {
+    const downloaded = await downloadRunnerAttachments({
+      serverUrl: options.serverUrl,
+      token: options.token,
+      sessionId,
+      runnerHome: options.runnerHome,
+      attachments,
+    });
+    attachmentInfos = downloaded.map((f) => ({
+      id: attachments.find((a) => a.name === f.name)?.id ?? f.name,
+      name: f.name,
+      mimeType: f.mimeType,
+      size: 0,
+    }));
+    effectivePrompt = injectAttachmentsContext(prompt, downloaded);
+  }
+
   try {
     // Everything after the lock check is inside the guard, `run.started`
     // included: an append can fail (a database error, or a sequence already
@@ -309,9 +364,12 @@ export async function executeRun(
     // no owner.
     append("run.started", {
       commandId: command.commandId,
-      ...(prompt !== "" ? { prompt } : {}),
+      ...(effectivePrompt !== "" ? { prompt: effectivePrompt } : {}),
       ...(options.resumeSessionId !== undefined
         ? { resumeSessionId: options.resumeSessionId }
+        : {}),
+      ...(attachmentInfos !== undefined && attachmentInfos.length > 0
+        ? { attachments: attachmentInfos }
         : {}),
     });
 
@@ -384,7 +442,7 @@ export async function executeRun(
     // Building the stream is inside the guard for the same reason: loading the
     // SDK or resolving an option can fail before there is anything to iterate.
     const stream = options.sdk({
-      prompt,
+      prompt: effectivePrompt,
       cwd: options.workspacePath,
       ...(resume === undefined ? {} : { resume }),
       ...(options.signal ? { abort: options.signal } : {}),
@@ -494,6 +552,19 @@ function eventTypeOf(message: Record<string, unknown>): string {
     return message["subtype"] === "success" ? "run.finished" : "run.failed";
   }
   return "run.status";
+}
+
+/** Narrow `unknown` to a `RunnerAttachmentItem` without importing the protocol's
+ * parser — the shape is stable enough for a runtime type guard here. */
+function isRunnerAttachmentItem(value: unknown): value is RunnerAttachmentItem {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r["id"] === "string" &&
+    typeof r["name"] === "string" &&
+    typeof r["mimeType"] === "string" &&
+    typeof r["size"] === "number"
+  );
 }
 
 function sanitizeError(error: unknown): string {
