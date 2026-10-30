@@ -51,6 +51,23 @@ export type ControllerOptions = {
    * workspace lock it already holds. Absent means no baseline is captured.
    */
   captureBaseline?: ExecuteOptions["captureBaseline"];
+  /**
+   * The runner's home directory, the base for downloaded session attachments
+   * (`${runnerHome}/tmp/sessions/<sessionId>/attachments/`, §4.4). Paired with
+   * `serverUrl` and `token`: with any of the three absent the executor skips
+   * attachment downloads and the prompt carries no files.
+   */
+  runnerHome?: string;
+  /**
+   * The control server's http(s) origin — where the runner's attachment
+   * downloads go. Not the socket URL: `identity.controlUrl` is `ws(s)://…/ws/runner`.
+   */
+  serverUrl?: string;
+  /**
+   * The runner's own credential, sent as `Authorization: Bearer <token>` on
+   * attachment downloads. Never logged (§19.4).
+   */
+  token?: string;
   /** Injected clock, so expiry is testable without waiting for it. */
   now?: () => number;
   /**
@@ -87,6 +104,9 @@ export class RunController {
   readonly #sdk: SdkStream;
   readonly #prepareWorkspace: ExecuteOptions["prepareWorkspace"] | undefined;
   readonly #captureBaseline: ExecuteOptions["captureBaseline"] | undefined;
+  readonly #runnerHome: string | undefined;
+  readonly #serverUrl: string | undefined;
+  readonly #token: string | undefined;
   readonly #now: () => number;
   readonly #onSettled: ((attemptId: string) => void) | undefined;
   readonly #onApprovalEvent: (() => void) | undefined;
@@ -124,6 +144,9 @@ export class RunController {
     this.#sdk = options.sdk;
     this.#prepareWorkspace = options.prepareWorkspace;
     this.#captureBaseline = options.captureBaseline;
+    this.#runnerHome = options.runnerHome;
+    this.#serverUrl = options.serverUrl;
+    this.#token = options.token;
     this.#now = options.now ?? Date.now;
     this.#onSettled = options.onSettled;
     this.#onApprovalEvent = options.onApprovalEvent;
@@ -311,6 +334,12 @@ export class RunController {
           ? {}
           : { prepareWorkspace: this.#prepareWorkspace }),
         ...(this.#captureBaseline === undefined ? {} : { captureBaseline: this.#captureBaseline }),
+        // §4.4: the attachments the server bound to this run are downloaded
+        // here, so the composer's files reach the agent. All three travel
+        // together — the executor skips the download when any is missing.
+        ...(this.#runnerHome === undefined ? {} : { runnerHome: this.#runnerHome }),
+        ...(this.#serverUrl === undefined ? {} : { serverUrl: this.#serverUrl }),
+        ...(this.#token === undefined ? {} : { token: this.#token }),
         signal: controller.signal,
         router: (append, attempt) => {
           const router = new ApprovalRouter({ db: this.#db, append, now: this.#now });

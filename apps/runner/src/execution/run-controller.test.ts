@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   attemptState,
   insertPendingApproval,
@@ -1158,5 +1161,79 @@ describe("refusing a command it does not implement", () => {
     // `unsupported_command`, not `unknown_workspace`: the kind is checked first,
     // because "I do not implement this" is true regardless of the workspace.
     expect(receipt).toMatchObject({ accepted: false, reason: "unsupported_command" });
+  });
+});
+
+describe("attachment wiring (§4.4)", () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function freshDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-rc-attach-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  test("downloads the run's attachments and injects them into the prompt", async () => {
+    const { db } = setup();
+    const runnerHome = await freshDir();
+
+    // The control server's attachment endpoint, as the real one behaves: a
+    // Bearer-authenticated GET per id.
+    const seenAuth: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (!url.pathname.startsWith("/api/runner/attachments/")) {
+          return new Response("not found", { status: 404 });
+        }
+        seenAuth.push(req.headers.get("authorization") ?? "");
+        return new Response("hello", { headers: { "Content-Type": "text/plain" } });
+      },
+    });
+
+    try {
+      let seenPrompt: string | undefined;
+      const controller = new RunController({
+        db,
+        localRunnerId: "runner-a",
+        workspacePathFor: (id) => WORKSPACES.get(id),
+        sdk: (input) => {
+          seenPrompt = input.prompt;
+          return (async function* () {
+            yield { type: "result", subtype: "success", result: "ok" };
+          })();
+        },
+        runnerHome,
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: "runner-credential",
+      });
+
+      const receipt = await controller.handle({
+        ...command,
+        payload: {
+          prompt: "fix the bug",
+          attachments: [{ id: "att-1", name: "spec.md", mimeType: "text/markdown", size: 5 }],
+        },
+      });
+      await controller.settle();
+
+      expect(receipt.accepted).toBe(true);
+      // Without the wiring this prompt is exactly "fix the bug": the executor
+      // skips downloads when the runner home, origin and token are absent, so
+      // the operator's files silently never reached the agent.
+      const downloaded = join(runnerHome, "tmp/sessions/session-1/attachments/att-1-spec.md");
+      expect(seenPrompt).toContain("[Attached Files]");
+      expect(seenPrompt).toContain(`spec.md: ${downloaded} (text/markdown)`);
+      expect(seenPrompt).toContain("fix the bug");
+      // The runner authenticates with its own credential, never an owner cookie.
+      expect(seenAuth).toEqual(["Bearer runner-credential"]);
+    } finally {
+      server.stop(true);
+    }
   });
 });

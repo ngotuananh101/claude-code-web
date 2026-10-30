@@ -47,6 +47,7 @@ import { loadIdentity, type RunnerIdentity } from "./identity/identity-store.ts"
 import { createInspectHandler, INSPECT_CAPABILITIES } from "./inspection/handler.ts";
 import { createMutationHandler, MUTATION_CAPABILITIES } from "./mutation/handler.ts";
 import { createSessionsHandler, SESSIONS_CAPABILITIES } from "./sessions/handler.ts";
+import { serverOriginFromControlUrl } from "./setup/setup.ts";
 import { createBaselineCapture } from "./workspace/snapshot.ts";
 import { createSnapshotStatus } from "./workspace/status.ts";
 
@@ -326,11 +327,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // attempt → SDK sequence, including the crash recovery that has to happen
   // before the first command is accepted. The preparation gate (M4) runs the
   // branch checkout under the workspace lock each attempt already holds.
+  //
+  // §4.4: the attachments the server bound to a run are downloaded by the
+  // executor, which needs the runner's home, the control server's http origin
+  // and the credential. The daemon already holds all three — the socket URL is
+  // ws(s)://, so the origin is derived from it rather than stored twice.
+  const serverUrl = serverOriginFromControlUrl(identity.controlUrl);
   const runs = new RunController({
     db,
     localRunnerId: identity.runnerId,
     workspacePathFor: options.workspacePathFor ?? (() => undefined),
     sdk: options.sdk ?? ((input) => createSdkStream(input)),
+    runnerHome: options.identityDir,
+    ...(serverUrl === undefined ? {} : { serverUrl }),
+    token: identity.credential,
     prepareWorkspace:
       options.prepareWorkspace ?? ((path, branch) => prepareBranch(path, branch, gitSpawn)),
     captureBaseline:

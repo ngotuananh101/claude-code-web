@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { controlUrlFromServer, resolveServerUrl, runSetup } from "./setup.ts";
+import {
+  controlUrlFromServer,
+  resolveServerUrl,
+  runSetup,
+  serverOriginFromControlUrl,
+} from "./setup.ts";
 
 /**
  * Connector setup (§6.1): the operator mints a token on the web and hands it
@@ -18,6 +23,30 @@ describe("controlUrlFromServer", () => {
   test("refuses a URL that is not an http(s) origin", () => {
     expect(controlUrlFromServer("ftp://nope")).toBeUndefined();
     expect(controlUrlFromServer("not a url")).toBeUndefined();
+  });
+});
+
+describe("serverOriginFromControlUrl", () => {
+  test("recovers the http(s) origin the socket URL points at", () => {
+    expect(serverOriginFromControlUrl("ws://localhost:8787/ws/runner")).toBe(
+      "http://localhost:8787",
+    );
+    expect(serverOriginFromControlUrl("wss://cc.example.com/ws/runner")).toBe(
+      "https://cc.example.com",
+    );
+  });
+
+  test("round-trips through controlUrlFromServer", () => {
+    // The runner stores only the socket URL; attachment downloads need the
+    // origin back. If these two disagree, downloads go to an address that
+    // does not exist.
+    const controlUrl = controlUrlFromServer("https://cc.example.com")!;
+    expect(serverOriginFromControlUrl(controlUrl)).toBe("https://cc.example.com");
+  });
+
+  test("a stored value that is not a ws(s) URL answers nothing", () => {
+    expect(serverOriginFromControlUrl("not a url")).toBeUndefined();
+    expect(serverOriginFromControlUrl("https://cc.example.com/ws/runner")).toBeUndefined();
   });
 });
 

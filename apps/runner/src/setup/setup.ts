@@ -28,6 +28,28 @@ export function controlUrlFromServer(serverUrl: string): string | undefined {
 }
 
 /**
+ * The inverse of `controlUrlFromServer`: the http(s) origin an identity's
+ * `controlUrl` points at.
+ *
+ * The socket URL is `ws(s)://host/ws/runner`, which cannot be used as a base
+ * for an HTTP call — attachment downloads (§4.4) fetch
+ * `${origin}/api/runner/attachments/<id>`. Undefined when the stored URL is
+ * not a ws(s) URL at all, so the caller can skip the download instead of
+ * fetching a nonsense address.
+ */
+export function serverOriginFromControlUrl(controlUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(controlUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") return undefined;
+
+  return `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}`;
+}
+
+/**
  * setup's --server resolution: an explicit flag wins, then the origin baked
  * in at compile time (--define CC_WEB_DEFAULT_SERVER — the release workflow's
  * server-url input), then nothing. An empty answer makes setup refuse rather
