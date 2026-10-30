@@ -19,3 +19,21 @@ export function isNearBottom(
 ): boolean {
   return scrollHeight - scrollTop - clientHeight <= threshold;
 }
+
+export const DEFAULT_TOP_THRESHOLD_PX = DEFAULT_SCROLL_THRESHOLD_PX;
+
+/** True when the viewport is at, or close enough to, the top of the feed. */
+export function isNearTop(scrollTop: number, threshold = DEFAULT_TOP_THRESHOLD_PX): boolean {
+  return scrollTop <= threshold;
+}
+
+/**
+ * The `scrollTop` correction that keeps the reading position still when older
+ * turns are prepended: everything above the viewport grew by this many pixels,
+ * so the viewport must slide down by the same amount. Never negative — a
+ * shrinking feed must not fight the user's scroll.
+ */
+export function computeScrollAnchorOffset(previousHeight: number, nextHeight: number): number {
+  const delta = nextHeight - previousHeight;
+  return Math.max(delta, 0);
+}

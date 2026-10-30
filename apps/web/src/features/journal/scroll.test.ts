@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isNearBottom } from "./scroll.ts";
+import { computeScrollAnchorOffset, isNearBottom, isNearTop } from "./scroll.ts";
 
 describe("isNearBottom", () => {
   test("returns true when exactly at the bottom", () => {
@@ -25,5 +25,32 @@ describe("isNearBottom", () => {
   test("respects custom threshold", () => {
     expect(isNearBottom(1000, 500, 400, 150)).toBe(true);
     expect(isNearBottom(1000, 500, 400, 50)).toBe(false);
+  });
+});
+
+describe("computeScrollAnchorOffset", () => {
+  test("returns the height difference when earlier content is prepended", () => {
+    expect(computeScrollAnchorOffset(1_000, 1_400)).toBe(400);
+  });
+
+  test("returns zero when the content did not grow", () => {
+    expect(computeScrollAnchorOffset(1_400, 1_400)).toBe(0);
+    expect(computeScrollAnchorOffset(1_400, 1_000)).toBe(0);
+  });
+});
+
+describe("isNearTop", () => {
+  test("returns true when within the default threshold", () => {
+    expect(isNearTop(0)).toBe(true);
+    expect(isNearTop(80)).toBe(true);
+  });
+
+  test("returns false when scrolled past the threshold", () => {
+    expect(isNearTop(81)).toBe(false);
+  });
+
+  test("respects a custom threshold", () => {
+    expect(isNearTop(150, 200)).toBe(true);
+    expect(isNearTop(150, 100)).toBe(false);
   });
 });

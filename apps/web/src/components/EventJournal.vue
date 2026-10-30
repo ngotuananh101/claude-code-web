@@ -9,7 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ApprovalTerminal } from "@/features/approvals/terminal.ts";
 import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
 import { deriveChatTurns } from "@/features/journal/chat-turns.ts";
-import { isNearBottom } from "@/features/journal/scroll.ts";
+import { computeScrollAnchorOffset, isNearBottom, isNearTop } from "@/features/journal/scroll.ts";
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -46,6 +46,28 @@ const emptyCopy = computed(() =>
   props.sessionLive ? "Đang chờ sự kiện đầu tiên." : "Phiên này chưa có gì trong journal.",
 );
 
+/**
+ * Reverse pagination (§16.1): the first paint carries only the newest page, so
+ * a long session does not mount hundreds of turns at once. Scrolling near the
+ * top prepends the previous page and anchors the viewport so the reader stays
+ * on the same line.
+ *
+ * `pinnedStart` freezes the window's first index once the reader scrolls up:
+ * turns appended live must extend the bottom without dropping a turn off the
+ * top, which would shift what they are reading. While it is null the window
+ * follows the tail — the state the feed mounts in.
+ */
+const DEFAULT_PAGE_SIZE = 20;
+const pinnedStart = ref<number | null>(null);
+
+const startIndex = computed(() => {
+  if (pinnedStart.value !== null) return Math.min(pinnedStart.value, turns.value.length);
+  return Math.max(0, turns.value.length - DEFAULT_PAGE_SIZE);
+});
+const displayedTurns = computed(() => turns.value.slice(startIndex.value));
+const remainingEarlier = computed(() => startIndex.value);
+const hasEarlierTurns = computed(() => remainingEarlier.value > 0);
+
 const scrollAreaRef = ref<{ $el?: HTMLElement } | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
 
@@ -77,6 +99,41 @@ function checkScrollPosition(): void {
 function onScroll(): void {
   if (isProgrammaticScrolling) return;
   checkScrollPosition();
+
+  const viewport = getViewport();
+  if (!viewport) return;
+
+  if (hasEarlierTurns.value && isNearTop(viewport.scrollTop)) {
+    loadEarlierTurns();
+    return;
+  }
+
+  // Reading above the tail: freeze the window's top so live appends cannot
+  // push what is being read out of view.
+  if (userScrolledUp.value && pinnedStart.value === null) {
+    pinnedStart.value = startIndex.value;
+  }
+}
+
+let isLoadingEarlier = false;
+
+/** Prepend the previous page, then shift `scrollTop` by exactly the growth. */
+function loadEarlierTurns(): void {
+  if (!hasEarlierTurns.value || isLoadingEarlier) return;
+  const viewport = getViewport();
+  const previousHeight = viewport?.scrollHeight ?? 0;
+
+  isLoadingEarlier = true;
+  if (pinnedStart.value === null) pinnedStart.value = startIndex.value;
+  pinnedStart.value = Math.max(0, pinnedStart.value - DEFAULT_PAGE_SIZE);
+
+  void nextTick(() => {
+    const updated = getViewport();
+    if (updated) {
+      updated.scrollTop += computeScrollAnchorOffset(previousHeight, updated.scrollHeight);
+    }
+    isLoadingEarlier = false;
+  });
 }
 
 function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
@@ -182,7 +239,18 @@ watch(
         </p>
 
         <template v-else>
-          <template v-for="turn in turns" :key="turn.key">
+          <div v-if="hasEarlierTurns" class="flex justify-center">
+            <Button
+              variant="ghost"
+              size="sm"
+              class="text-xs text-muted-foreground hover:text-foreground"
+              @click="loadEarlierTurns"
+            >
+              Tải thêm tin nhắn cũ (còn {{ remainingEarlier }})
+            </Button>
+          </div>
+
+          <template v-for="turn in displayedTurns" :key="turn.key">
             <UserChatBubble v-if="turn.kind === 'user'" :turn="turn" />
             <AgentChatTurn
               v-else-if="turn.kind === 'agent'"
