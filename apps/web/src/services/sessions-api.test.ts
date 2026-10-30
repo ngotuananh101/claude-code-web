@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { SessionMessage, SessionSummary } from "@cc-web/protocol";
 import {
   composeWorkspaceId,
+  deleteSession,
   fetchSessionMessages,
   fetchWorkspaceSessions,
+  renameSession,
 } from "./sessions-api.ts";
 
 /**
@@ -259,5 +261,38 @@ describe("fetchSessionMessages", () => {
       code: "error",
       message: "Không kết nối được máy chủ.",
     });
+  });
+});
+
+describe("renameSession", () => {
+  test("calls PATCH /api/sessions/:id and returns true on 200", async () => {
+    const captured = capture(200, { ok: true, sessionId: "sess-1", title: "New Title" });
+    const ok = await renameSession("sess-1", "New Title");
+    expect(ok).toBe(true);
+    expect(captured.url).toBe("/api/sessions/sess-1");
+    expect(captured.method).toBe("PATCH");
+    expect(JSON.parse(captured.body)).toEqual({ title: "New Title" });
+  });
+
+  test("returns false on error status", async () => {
+    capture(404, "not found", { json: false });
+    const ok = await renameSession("sess-unknown", "New Title");
+    expect(ok).toBe(false);
+  });
+});
+
+describe("deleteSession", () => {
+  test("calls DELETE /api/sessions/:id and returns true on 200", async () => {
+    const captured = capture(200, { ok: true, sessionId: "sess-1" });
+    const ok = await deleteSession("sess-1");
+    expect(ok).toBe(true);
+    expect(captured.url).toBe("/api/sessions/sess-1");
+    expect(captured.method).toBe("DELETE");
+  });
+
+  test("returns false on error status", async () => {
+    capture(404, "not found", { json: false });
+    const ok = await deleteSession("sess-unknown");
+    expect(ok).toBe(false);
   });
 });

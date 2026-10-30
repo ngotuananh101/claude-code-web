@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchRunners, liveRunners, modelsOfRunner } from "./runners-api.ts";
+import {
+  deleteRunner,
+  fetchRunners,
+  liveRunners,
+  modelsOfRunner,
+  renameRunner,
+} from "./runners-api.ts";
 
 /**
  * The runner registry's HTTP half (§6.1, §5.2): the rows the composer's picker
@@ -86,5 +92,60 @@ describe("liveRunners / modelsOfRunner", () => {
     expect(modelsOfRunner(runners, "runner-a")).toEqual(advertised);
     expect(modelsOfRunner(runners, "runner-b")).toEqual([]);
     expect(modelsOfRunner(runners, "runner-gone")).toEqual([]);
+  });
+});
+
+describe("renameRunner", () => {
+  test("sends PATCH /api/runners/:id with name in body", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedBody = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      capturedBody = init?.body ? String(init.body) : "";
+      return new Response(JSON.stringify({ ok: true, runnerId: "r-1", name: "Runner 1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const ok = await renameRunner("r-1", "Runner 1");
+    expect(capturedUrl).toBe("/api/runners/r-1");
+    expect(capturedMethod).toBe("PATCH");
+    expect(JSON.parse(capturedBody)).toEqual({ name: "Runner 1" });
+    expect(ok).toBe(true);
+  });
+
+  test("returns false on error", async () => {
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as unknown as typeof fetch;
+    const ok = await renameRunner("r-1", "Runner 1");
+    expect(ok).toBe(false);
+  });
+});
+
+describe("deleteRunner", () => {
+  test("sends DELETE /api/runners/:id and returns result", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      return new Response(JSON.stringify({ ok: true, runnerId: "r-1", deletedSessions: ["s-1"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const res = await deleteRunner("r-1");
+    expect(capturedUrl).toBe("/api/runners/r-1");
+    expect(capturedMethod).toBe("DELETE");
+    expect(res).toEqual({ ok: true, runnerId: "r-1", deletedSessions: ["s-1"] });
+  });
+
+  test("returns ok false on error", async () => {
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as unknown as typeof fetch;
+    const res = await deleteRunner("r-unknown");
+    expect(res).toEqual({ ok: false });
   });
 });

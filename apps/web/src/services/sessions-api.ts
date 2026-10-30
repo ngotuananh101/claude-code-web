@@ -14,6 +14,7 @@
  */
 
 import type { SessionMessage, SessionSummary } from "@cc-web/protocol";
+import { authFetch } from "./auth-api.ts";
 import { compositeId, request } from "./browse-api.ts";
 
 export type WorkspaceSessionsOutcome =
@@ -98,4 +99,34 @@ export function fetchSessionMessages(
       ? { ok: true, messages: r.value.messages }
       : { ok: false, code: r.code, message: r.message },
   );
+}
+
+/**
+ * Rename a session.
+ */
+export async function renameSession(sessionId: string, title: string): Promise<boolean> {
+  try {
+    const response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete a session and its associated data.
+ */
+export async function deleteSession(sessionId: string): Promise<boolean> {
+  try {
+    const response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

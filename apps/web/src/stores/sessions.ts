@@ -21,6 +21,7 @@ import { type SocketState, socket } from "../services/socket.ts";
 
 export type SessionSummary = {
   sessionId: string;
+  title?: string | null;
   watermark: number;
   eventCount: number;
   lastEventType: string | null;
@@ -108,6 +109,25 @@ export function closeSession(): void {
   machine = null;
   sessions.activeId = null;
   sessions.stream = null;
+}
+
+/** Removes a session from the reactive session list, closing it if active. */
+export function removeSession(sessionId: string): void {
+  const index = sessions.sessions.findIndex((s) => s.sessionId === sessionId);
+  if (index !== -1) {
+    sessions.sessions.splice(index, 1);
+  }
+  if (sessions.activeId === sessionId) {
+    closeSession();
+  }
+}
+
+/** Updates a session's title in the reactive list. */
+export function updateSessionTitleInStore(sessionId: string, title: string): void {
+  const item = sessions.sessions.find((s) => s.sessionId === sessionId);
+  if (item) {
+    item.title = title;
+  }
 }
 
 function mirror(): void {
