@@ -225,7 +225,8 @@ function serveAttachment(record: SessionAttachmentRecord): Response {
   if (record.mimeType.startsWith("image/")) {
     contentDisposition = "inline";
   } else {
-    contentDisposition = `attachment; filename="${record.name}"`;
+    const safeName = sanitizeName(record.name);
+    contentDisposition = `attachment; filename="${safeName}"`;
   }
 
   return new Response(data, {

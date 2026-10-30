@@ -77,6 +77,15 @@ describe("cleanUserPrompt", () => {
     ).toBe("outer inner");
   });
 
+  test("strips [Attached Files] context block and extracts user prompt", () => {
+    const raw = `[Attached Files]
+doc.pdf: /path/to/doc.pdf (application/pdf)
+
+User prompt:
+Please summarize this PDF`;
+    expect(cleanUserPrompt(raw)).toBe("Please summarize this PDF");
+  });
+
   test("extracts clean CLI command from full command wrapper with args", () => {
     const raw =
       "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>";

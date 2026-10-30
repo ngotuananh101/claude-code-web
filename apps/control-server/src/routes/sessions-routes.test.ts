@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CommandOutbox,
   issueRunnerCredential,
@@ -490,6 +492,54 @@ describe("session rename and delete routes", () => {
 
     const row = db.query("SELECT id FROM sessions WHERE id = 'sess-del'").get();
     expect(row).toBeNull();
+  });
+
+  test("DELETE /api/sessions/:id deletes session attachment directory and enqueues cleanup with expiry", async () => {
+    const { db, url, cookie, credential } = await start();
+    db.query(
+      "INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("runner-a", "default", "/srv/proj", "[]", Date.now());
+    const inbox = runnerInbox();
+    await connectSessionsRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    db.query(
+      "INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at) VALUES ('sess-clean-1', 'user-1', 'default', 'runner-a', ?)",
+    ).run(Date.now());
+
+    // Create a mock attachment directory
+    const attachDir = join(process.cwd(), "data", "attachments", "sess-clean-1");
+    mkdirSync(attachDir, { recursive: true });
+    writeFileSync(join(attachDir, "att-1.txt"), "hello");
+
+    db.query(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "att-clean-1",
+      "sess-clean-1",
+      "user-1",
+      "file.txt",
+      "text/plain",
+      5,
+      join(attachDir, "att-1.txt"),
+      Date.now(),
+    );
+
+    const response = await fetch(`${url}/api/sessions/sess-clean-1`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+
+    // The directory should have been cleaned up
+    expect(existsSync(attachDir)).toBe(false);
+
+    // The session.cleanup command should have been enqueued in the outbox
+    const outboxRows = db
+      .query("SELECT * FROM command_outbox WHERE kind = 'session.cleanup'")
+      .all() as Array<{ expires_at: string | null; payload: string }>;
+    expect(outboxRows.length).toBeGreaterThan(0);
+    expect(outboxRows[0]?.expires_at).not.toBeNull();
   });
 
   test("DELETE /api/sessions/:id returns 404 for unknown session", async () => {

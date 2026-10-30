@@ -1997,10 +1997,11 @@ describe("attachments (§attachments)", () => {
       expect(seenPrompt).toContain("User prompt:");
       expect(seenPrompt).toContain("fix the bug");
 
-      // The run.started event carries the attachment metadata.
+      // The run.started event carries the attachment metadata and clean original prompt.
       const started = events(db).find((e) => e.type === "run.started");
       expect(started).toBeDefined();
       const startedPayload = JSON.parse(started!.payload) as Record<string, unknown>;
+      expect(startedPayload.prompt).toBe("fix the bug");
       expect(Array.isArray(startedPayload.attachments)).toBe(true);
       const attachments = startedPayload.attachments as Array<Record<string, unknown>>;
       expect(attachments).toHaveLength(2);
@@ -2016,6 +2017,54 @@ describe("attachments (§attachments)", () => {
         mimeType: "application/json",
         size: 6,
       });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("when downloading attachments fails, run fails and releases workspace lock", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const runnerHome = await freshDir();
+
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("internal error", { status: 500 });
+      },
+    });
+
+    try {
+      const commandWithAttachments = {
+        ...COMMAND,
+        payload: {
+          prompt: "fix the bug",
+          attachments: [{ id: "att-1", name: "spec.md", mimeType: "text/markdown", size: 6 }],
+        },
+      };
+
+      const outcome = await executeRun(db, commandWithAttachments, {
+        workspacePath: "/home/runner/project",
+        sdk: () => (async function* () {})(),
+        runnerHome,
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: "test-token",
+      });
+
+      expect(outcome.state).toBe("failed");
+      expect(attemptState(db, "attempt-1")).toBe("failed");
+      expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+
+      const failure = events(db).find((e) => e.type === "run.failed");
+      expect(failure).toBeDefined();
+      const payload = JSON.parse(failure!.payload) as Record<string, unknown>;
+      expect(payload.error).toBe("attachment_download_failed");
     } finally {
       server.stop();
     }

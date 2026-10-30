@@ -187,7 +187,7 @@ export async function handleDispatchRun(
     attachments = [];
     for (const id of record.attachmentIds as string[]) {
       const attachment = getSessionAttachment(options.db, id, authorized.userId);
-      if (attachment === undefined) {
+      if (attachment === undefined || attachment.sessionId !== sessionId) {
         return new Response("bad request", { status: 400 });
       }
       attachments.push({

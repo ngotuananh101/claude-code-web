@@ -1468,6 +1468,29 @@ describe("POST /api/sessions/:id/runs attachmentIds", () => {
     expect(response.status).toBe(400);
   });
 
+  test("attachmentIds referencing an attachment from a different session of the same owner is a bad request", async () => {
+    const { db, url, cookie } = await start();
+    db.query(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "att-diff-sess",
+      "session-other",
+      "user-1",
+      "x.txt",
+      "text/plain",
+      1,
+      "/tmp/x",
+      Date.now(),
+    );
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: ["att-diff-sess"] }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   test("a non-array attachmentIds is a bad request", async () => {
     const { url, cookie } = await start();
     const response = await fetch(`${url}/api/sessions/session-1/runs`, {

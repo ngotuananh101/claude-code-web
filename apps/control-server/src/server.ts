@@ -208,7 +208,21 @@ export function createServer(options: ServerOptions): ServerHandle {
     // for it. The gateway deliberately knows nothing about the registry; a
     // frame with no waiter is dropped (the caller may have timed out a
     // millisecond earlier, and that race is expected).
+    //
+    // Also retires the command in the outbox if present (e.g. fire-and-forget
+    // RPCs like `session.cleanup` that have no HTTP waiter).
     onRpcResult: (_runnerId, frame) => {
+      if (options.outbox) {
+        try {
+          if (frame.ok) {
+            options.outbox.markAnswered(frame.commandId);
+          } else {
+            options.outbox.markRejected(frame.commandId, frame.error?.code ?? "unknown_error");
+          }
+        } catch {
+          // Row is not in the outbox, or is already terminal — safe to ignore.
+        }
+      }
       pending.settle(frame);
     },
     // §12.1, §12.2: journal every event before any ACK is written, and let the

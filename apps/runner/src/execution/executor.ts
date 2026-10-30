@@ -327,47 +327,59 @@ export async function executeRun(
     append("run.interrupted", { reason: "aborted" });
   };
 
-  // Attachment download and context injection. Done before `run.started` so the
-  // event carries the attachment metadata, and before the SDK stream so the
-  // effective prompt includes the context block. When the runner lacks a server
-  // URL or token the pre-attachment behavior is preserved: no download, prompt
-  // unchanged.
   let effectivePrompt = prompt;
   let attachmentInfos: AttachmentInfo[] | undefined;
-  if (
-    attachments.length > 0 &&
-    options.runnerHome !== undefined &&
-    options.serverUrl !== undefined &&
-    options.token !== undefined
-  ) {
-    const downloaded = await downloadRunnerAttachments({
-      serverUrl: options.serverUrl,
-      token: options.token,
-      sessionId,
-      runnerHome: options.runnerHome,
-      attachments,
-    });
-    attachmentInfos = downloaded.map((f) => {
-      const match = attachments.find((a) => a.name === f.name);
-      return {
-        id: match?.id ?? f.name,
-        name: f.name,
-        mimeType: f.mimeType,
-        size: match?.size ?? 0,
-      };
-    });
-    effectivePrompt = injectAttachmentsContext(prompt, downloaded);
-  }
 
   try {
+    // Attachment download and context injection. Done inside the guard so any
+    // download failure produces a terminal event and releases the workspace lock
+    // via `finally`.
+    if (
+      attachments.length > 0 &&
+      options.runnerHome !== undefined &&
+      options.serverUrl !== undefined &&
+      options.token !== undefined
+    ) {
+      try {
+        const downloaded = await downloadRunnerAttachments({
+          serverUrl: options.serverUrl,
+          token: options.token,
+          sessionId,
+          runnerHome: options.runnerHome,
+          attachments,
+        });
+        attachmentInfos = downloaded.map((f) => {
+          const match = attachments.find((a) => a.name === f.name);
+          return {
+            id: match?.id ?? f.name,
+            name: f.name,
+            mimeType: f.mimeType,
+            size: match?.size ?? 0,
+          };
+        });
+        effectivePrompt = injectAttachmentsContext(prompt, downloaded);
+      } catch (error) {
+        state = "failed";
+        terminalWritten = true;
+        append("run.failed", {
+          error: "attachment_download_failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return { state: "failed" };
+      }
+    }
+
     // Everything after the lock check is inside the guard, `run.started`
     // included: an append can fail (a database error, or a sequence already
     // taken by a second writer), and a throw there would escape past the
     // `finally` — leaving the attempt `starting` and the workspace locked with
     // no owner.
+    //
+    // Notice: `run.started` records the clean user `prompt`, NOT `effectivePrompt`.
+    // Injected attachment paths must not leak into the journal or user bubble.
     append("run.started", {
       commandId: command.commandId,
-      ...(effectivePrompt !== "" ? { prompt: effectivePrompt } : {}),
+      ...(prompt !== "" ? { prompt } : {}),
       ...(options.resumeSessionId !== undefined
         ? { resumeSessionId: options.resumeSessionId }
         : {}),

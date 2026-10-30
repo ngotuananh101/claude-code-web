@@ -315,18 +315,18 @@ export async function handleDeleteSession(
   }
 
   // §4.4: remove the session's attachment directory on disk if it was configured
-  // and the directory exists. The metadata rows are already gone; this reclaims
-  // the bytes. Missing-on-disk is not an error — the session may have none.
-  if (options.attachmentsDir !== undefined && res.attachmentStoragePaths.length > 0) {
-    const sessionDir = join(options.attachmentsDir, sessionId);
+  // or exists under the default data directory. The metadata rows are already gone;
+  // this reclaims the bytes. Missing-on-disk is not an error — the session may have none.
+  const attachmentsDir = options.attachmentsDir ?? join(process.cwd(), "data", "attachments");
+  if (res.attachmentStoragePaths.length > 0) {
+    const sessionDir = join(attachmentsDir, sessionId);
     rmSync(sessionDir, { recursive: true, force: true });
   }
 
   // Enroll the pinned runner in cleanup so it deletes any attachments it holds
   // locally. Only a ready runner is addressed — a connected-but-not-ready one
   // has not reconciled and cannot be trusted with the cleanup (§6.2). The command
-  // stays in the outbox until reconnect, and the runner's inbox dedupes on boot.
-  // `session.cleanup` is a one-shot command, not an RPC with a waiter.
+  // is retired upon `rpc.result` via `onRpcResult` or expires after 60s.
   if (
     pin !== undefined &&
     dispatcher !== undefined &&
@@ -334,11 +334,13 @@ export async function handleDeleteSession(
     runnerGateway.stateOf(pin.runnerId) === "ready"
   ) {
     const commandId = `cmd_${crypto.randomUUID()}`;
+    const now = new Date();
     await options.outbox.enqueue({
       commandId,
       runnerId: pin.runnerId,
       kind: "session.cleanup",
-      issuedAt: new Date().toISOString(),
+      issuedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 60_000).toISOString(),
       payload: { sessionId },
       sessionId,
     });

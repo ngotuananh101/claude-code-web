@@ -103,6 +103,13 @@ export function cleanUserPrompt(rawText: string): string {
   // 4. Any leftover command tags
   text = text.replace(/<\/?command-(name|message|args)>/g, "");
 
+  // 5. Injected attachment context block: if an older run recorded the injected block,
+  // extract the actual user prompt following "User prompt:".
+  if (text.startsWith("[Attached Files]") && text.includes("\n\nUser prompt:\n")) {
+    const parts = text.split("\n\nUser prompt:\n");
+    text = parts.slice(1).join("\n\nUser prompt:\n");
+  }
+
   return text.trim();
 }
 
