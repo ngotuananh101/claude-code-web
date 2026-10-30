@@ -377,7 +377,7 @@ watch(tab, (next) => {
 </script>
 
 <template>
-  <aside class="flex min-h-0 flex-col bg-card/40">
+  <aside class="flex min-h-0 min-w-0 flex-col bg-card/40">
     <nav class="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-2">
       <button
         v-for="(label, key) in TAB_LABELS"
@@ -402,7 +402,7 @@ watch(tab, (next) => {
       Chưa xác định được workspace của phiên này.
     </div>
 
-    <div v-else class="min-h-0 flex-1 overflow-y-auto px-3 py-2.5 font-mono text-xs">
+    <div v-else class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2.5 font-mono text-xs">
       <!-- Files -->
       <template v-if="tab === 'files'">
         <div class="mb-2 flex flex-wrap items-center gap-1 text-muted-foreground">
@@ -422,7 +422,9 @@ watch(tab, (next) => {
 
         <template v-else-if="viewer !== null">
           <div class="mb-2 flex items-center justify-between gap-2">
-            <span class="truncate text-muted-foreground">{{ viewer.path }}</span>
+            <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="viewer.path">
+              {{ viewer.path }}
+            </span>
             <button
               type="button"
               class="shrink-0 text-primary hover:underline"
@@ -512,12 +514,13 @@ watch(tab, (next) => {
             <li v-for="entry in entries" :key="entry.name">
               <button
                 type="button"
-                class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
+                class="flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
                 @click="openEntry(entry.name, entry.kind)"
               >
                 <span
-                  class="truncate"
+                  class="min-w-0 flex-1 truncate"
                   :class="entry.kind === 'directory' ? 'text-primary' : 'text-foreground'"
+                  :title="entry.name"
                 >
                   {{ entry.name }}{{ entry.kind === "directory" ? "/" : "" }}
                 </span>
@@ -535,12 +538,12 @@ watch(tab, (next) => {
 
       <!-- Changes -->
       <template v-else-if="tab === 'changes'">
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-1 text-muted-foreground">
+        <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-1 text-muted-foreground">
             <span>So sánh:</span>
             <button
               type="button"
-              class="rounded-md px-2 py-0.5 text-xs transition-colors"
+              class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
               :class="
                 source === 'git'
                   ? 'bg-primary/10 text-primary'
@@ -552,7 +555,7 @@ watch(tab, (next) => {
             </button>
             <button
               type="button"
-              class="rounded-md px-2 py-0.5 text-xs transition-colors"
+              class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
               :class="
                 source === 'snapshot'
                   ? 'bg-primary/10 text-primary'
@@ -560,16 +563,24 @@ watch(tab, (next) => {
               "
               @click="source = 'snapshot'"
             >
-              Từ lúc bắt đầu chạy
+              Lúc bắt đầu
             </button>
           </div>
           <template v-if="source === 'git'">
-            <button type="button" class="text-primary hover:underline" @click="loadChanges">
+            <button
+              type="button"
+              class="shrink-0 whitespace-nowrap text-primary hover:underline"
+              @click="loadChanges"
+            >
               làm mới
             </button>
           </template>
           <template v-else>
-            <button type="button" class="text-primary hover:underline" @click="loadSnapshot">
+            <button
+              type="button"
+              class="shrink-0 whitespace-nowrap text-primary hover:underline"
+              @click="loadSnapshot"
+            >
               làm mới
             </button>
           </template>
@@ -581,8 +592,10 @@ watch(tab, (next) => {
           <p v-else-if="changesError !== null" class="text-destructive">{{ changesError }}</p>
 
           <template v-else-if="diff !== null">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <span class="truncate text-muted-foreground">{{ diffPath }}</span>
+            <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
+              <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="diffPath ?? ''">
+                {{ diffPath }}
+              </span>
               <button
                 type="button"
                 class="shrink-0 text-primary hover:underline"
@@ -626,10 +639,13 @@ watch(tab, (next) => {
               <li v-for="entry in changeEntries" :key="entry.path">
                 <button
                   type="button"
-                  class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
+                  class="flex min-w-0 w-full items-center justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
                   @click="openDiff(entry.path)"
                 >
-                  <span class="truncate">
+                  <span
+                    class="min-w-0 flex-1 truncate"
+                    :title="entry.origPath ? `${entry.path} ← ${entry.origPath}` : entry.path"
+                  >
                     {{ entry.path }}
                     <span v-if="entry.origPath" class="text-muted-foreground">← {{ entry.origPath }}</span>
                   </span>
@@ -652,16 +668,24 @@ watch(tab, (next) => {
 
           <template v-else-if="snapshotStatus !== null">
             <div v-if="snapshotStatus.baseline === null" class="text-muted-foreground">
-              Chưa có bản chụp lúc bắt đầu chạy.
+              Chưa có bản chụp ban đầu.
             </div>
 
             <template v-else>
-              <div class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5">
-                <div class="text-muted-foreground">
-                  Bản chụp gốc: lượt {{ snapshotStatus.baseline.attemptId }}
-                  <span v-if="snapshotStatus.baseline.sessionId !== null">
-                    — phiên {{ snapshotStatus.baseline.sessionId }}
-                  </span>
+              <div class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-[11px] leading-relaxed">
+                <div class="text-muted-foreground break-words">
+                  Bản chụp: lượt
+                  <span
+                    class="font-mono text-foreground"
+                    :title="snapshotStatus.baseline.attemptId"
+                  >{{ snapshotStatus.baseline.attemptId.slice(0, 8) }}</span>
+                  <template v-if="snapshotStatus.baseline.sessionId !== null">
+                    — phiên
+                    <span
+                      class="font-mono text-foreground"
+                      :title="snapshotStatus.baseline.sessionId"
+                    >{{ snapshotStatus.baseline.sessionId.slice(0, 8) }}</span>
+                  </template>
                   , {{ new Date(snapshotStatus.baseline.capturedAt).toLocaleString() }}
                 </div>
                 <div v-if="snapshotStatus.baseline.partial" class="text-destructive">
@@ -672,18 +696,18 @@ watch(tab, (next) => {
                 </div>
               </div>
 
-              <div class="mb-2 flex items-center justify-between gap-2">
-                <span class="text-muted-foreground">
+              <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
+                <span class="shrink-0 text-muted-foreground">
                   {{ snapshotStatus.entries.length }} mục
                 </span>
                 <button
                   v-if="summarisePlan(snapshotStatus).restores +
                          summarisePlan(snapshotStatus).deletions > 0"
                   type="button"
-                  class="text-primary hover:underline"
+                  class="shrink-0 text-primary hover:underline"
                   @click="workspaceRevertConfirm = true"
                 >
-                  Khôi phục cả workspace
+                  Khôi phục tất cả
                 </button>
               </div>
 
@@ -691,53 +715,58 @@ watch(tab, (next) => {
                 <li
                   v-for="entry in snapshotStatus.entries"
                   :key="entry.path"
-                  class="flex w-full items-baseline justify-between gap-3 rounded px-1.5 py-0.5 text-left"
+                  class="flex min-w-0 w-full items-center justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
                 >
-                  <span class="truncate">
+                  <span
+                    class="min-w-0 flex-1 truncate"
+                    :title="entry.reason ? `${entry.path} — ${entry.reason}` : entry.path"
+                  >
                     {{ entry.path }}
                     <span v-if="entry.reason" class="text-muted-foreground">
                       — {{ entry.reason }}
                     </span>
                   </span>
-                  <span v-if="entry.status === 'modified'" class="shrink-0 text-muted-foreground">
-                    sửa
-                  </span>
-                  <span v-else-if="entry.status === 'created'" class="shrink-0 text-muted-foreground">
-                    thêm
-                  </span>
-                  <span v-else-if="entry.status === 'deleted'" class="shrink-0 text-muted-foreground">
-                    xoá
-                  </span>
-                  <span v-else-if="entry.status === 'excluded'" class="shrink-0 text-muted-foreground">
-                    loại trừ
-                  </span>
+                  <span class="flex shrink-0 items-center gap-1.5">
+                    <span v-if="entry.status === 'modified'" class="text-muted-foreground">
+                      sửa
+                    </span>
+                    <span v-else-if="entry.status === 'created'" class="text-muted-foreground">
+                      thêm
+                    </span>
+                    <span v-else-if="entry.status === 'deleted'" class="text-muted-foreground">
+                      xoá
+                    </span>
+                    <span v-else-if="entry.status === 'excluded'" class="text-muted-foreground">
+                      loại trừ
+                    </span>
 
-                  <!-- Per-file revert with inline confirm. `confirmingPath` is
-                       a ref unwrapped by the template: it IS the path, so the
-                       confirm reads and writes the ref itself — `.value` here
-                       would be the property of a string (undefined) when the
-                       ref holds one, and a render-time TypeError when it
-                       holds null, which is what tore the panel down. -->
-                  <template v-if="entry.revertable && entry.status !== 'excluded'">
-                    <template v-if="confirmingPath === entry.path">
-                      <button
-                        type="button"
-                        class="shrink-0 text-destructive hover:underline"
-                        @click="revertOneFile({ path: entry.path, currentHash: entry.currentHash })"
-                      >
-                        xác nhận
-                      </button>
+                    <!-- Per-file revert with inline confirm. `confirmingPath` is
+                         a ref unwrapped by the template: it IS the path, so the
+                         confirm reads and writes the ref itself — `.value` here
+                         would be the property of a string (undefined) when the
+                         ref holds one, and a render-time TypeError when it
+                         holds null, which is what tore the panel down. -->
+                    <template v-if="entry.revertable && entry.status !== 'excluded'">
+                      <template v-if="confirmingPath === entry.path">
+                        <button
+                          type="button"
+                          class="text-destructive hover:underline"
+                          @click="revertOneFile({ path: entry.path, currentHash: entry.currentHash })"
+                        >
+                          xác nhận
+                        </button>
+                      </template>
+                      <template v-else>
+                        <button
+                          type="button"
+                          class="text-primary hover:underline"
+                          @click="confirmingPath = entry.path"
+                        >
+                          khôi phục
+                        </button>
+                      </template>
                     </template>
-                    <template v-else>
-                      <button
-                        type="button"
-                        class="shrink-0 text-primary hover:underline"
-                        @click="confirmingPath = entry.path"
-                      >
-                        khôi phục
-                      </button>
-                    </template>
-                  </template>
+                  </span>
                 </li>
               </ul>
             </template>
@@ -834,8 +863,8 @@ watch(tab, (next) => {
         <dl v-else-if="diagnostics !== null" class="grid gap-1.5">
           <template v-for="source in diagnostics.report.sources" :key="source.source">
             <div class="flex items-baseline justify-between gap-3">
-              <dt class="text-muted-foreground">{{ source.source }}</dt>
-              <dd class="truncate" :title="source.path">
+              <dt class="shrink-0 text-muted-foreground">{{ source.source }}</dt>
+              <dd class="min-w-0 flex-1 truncate text-right" :title="source.path">
                 {{ source.exists ? (source.readable ? "đọc được" : "không đọc được") : "không có" }}
               </dd>
             </div>
@@ -853,8 +882,8 @@ watch(tab, (next) => {
             <dd>{{ diagnostics.report.runtime }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">Thư mục gốc</dt>
-            <dd class="truncate" :title="diagnostics.report.workspaceRoot">
+            <dt class="shrink-0 text-muted-foreground">Thư mục gốc</dt>
+            <dd class="min-w-0 flex-1 truncate text-right" :title="diagnostics.report.workspaceRoot">
               {{ diagnostics.report.workspaceRoot }}
             </dd>
           </div>

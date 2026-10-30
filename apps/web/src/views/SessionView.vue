@@ -285,7 +285,7 @@ async function refreshNow(): Promise<void> {
            is opened. -->
       <InspectPanel
         :session-id="active.sessionId"
-        class="z-10 h-72 shrink-0 border-t border-border/60 lg:h-auto lg:w-[360px] lg:border-t-0 lg:border-l"
+        class="z-10 h-72 shrink-0 border-t border-border/60 lg:h-auto lg:w-[420px] lg:border-t-0 lg:border-l"
       />
     </template>
 
