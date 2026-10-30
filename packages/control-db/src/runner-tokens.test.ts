@@ -128,6 +128,15 @@ describe("updateRunnerName & deleteRunner", () => {
     db.prepare(
       "INSERT INTO workspaces (runner_id, workspace_id, path, registered_at, is_custom) VALUES (?, 'ws', '/path', 1, 0)",
     ).run(runnerId);
+    db.prepare(
+      "INSERT INTO approvals (approval_id, session_id, run_id, attempt_id, runner_id, kind, tool_name, input_hash, input_summary, state, expires_at, created_at) VALUES ('ap-runner-1', 'session-on-runner', 'r1', 'a1', ?, 'command', 'bash', 'h', 's', 'decided', 100, 1)",
+    ).run(runnerId);
+    db.prepare(
+      "INSERT INTO approval_decisions (approval_id, decision, answers_json, decided_at) VALUES ('ap-runner-1', 'allowed', NULL, 1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES ('att-r1', 'session-on-runner', 'owner-1', 'x.txt', 'text/plain', 1, '/tmp/x', 1)",
+    ).run();
 
     const res = deleteRunner(db, runnerId, "owner-1");
     expect(res.ok).toBe(true);
@@ -135,6 +144,23 @@ describe("updateRunnerName & deleteRunner", () => {
 
     expect(listRunners(db, "owner-1")).toHaveLength(0);
     expect(sessionPin(db, "session-on-runner")).toBeUndefined();
+    expect(
+      db
+        .query("SELECT COUNT(*) AS count FROM approvals WHERE session_id = 'session-on-runner'")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .query("SELECT COUNT(*) AS count FROM approval_decisions WHERE approval_id = 'ap-runner-1'")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .query(
+          "SELECT COUNT(*) AS count FROM session_attachments WHERE session_id = 'session-on-runner'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
     expect(
       db.query("SELECT COUNT(*) AS count FROM workspaces WHERE runner_id = ?").get(runnerId),
     ).toEqual({ count: 0 });

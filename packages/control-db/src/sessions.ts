@@ -81,6 +81,9 @@ export function deleteSession(
       sessionId,
       ownerId,
     );
+    db.prepare(
+      "DELETE FROM approval_decisions WHERE approval_id IN (SELECT approval_id FROM approvals WHERE session_id = ?)",
+    ).run(sessionId);
     db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sessionId);

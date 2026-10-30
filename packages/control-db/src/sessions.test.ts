@@ -135,6 +135,32 @@ describe("session rename and delete", () => {
     ).toEqual({ count: 0 });
   });
 
+  test("deleteSession succeeds when session contains decided approvals referencing approval_decisions", () => {
+    const db = setup();
+    ensureSessionPin(db, {
+      sessionId: "session-1",
+      ownerId: "user-1",
+      workspaceId: "ws",
+      runnerId: "runner-a",
+    });
+
+    db.prepare(
+      "INSERT INTO approvals (approval_id, session_id, run_id, attempt_id, runner_id, kind, tool_name, input_hash, input_summary, state, expires_at, created_at) VALUES ('ap1', 'session-1', 'r1', 'a1', 'runner-a', 'command', 'bash', 'h', 's', 'decided', 100, 1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO approval_decisions (approval_id, decision, answers_json, decided_at) VALUES ('ap1', 'allowed', NULL, 1)",
+    ).run();
+
+    const res = deleteSession(db, "session-1", "user-1");
+    expect(res.ok).toBe(true);
+    expect(
+      db.query("SELECT COUNT(*) AS count FROM approvals WHERE session_id = 'session-1'").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db.query("SELECT COUNT(*) AS count FROM approval_decisions WHERE approval_id = 'ap1'").get(),
+    ).toEqual({ count: 0 });
+  });
+
   test("deleteSession refuses when owner does not match", () => {
     const db = setup();
     ensureSessionPin(db, {

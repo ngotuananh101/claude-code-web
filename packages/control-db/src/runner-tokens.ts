@@ -120,6 +120,10 @@ export function deleteRunner(
   const txn = db.transaction(() => {
     // Delete all sessions attached to this runner
     for (const sid of deletedSessions) {
+      db.prepare("DELETE FROM session_attachments WHERE session_id = ?").run(sid);
+      db.prepare(
+        "DELETE FROM approval_decisions WHERE approval_id IN (SELECT approval_id FROM approvals WHERE session_id = ?)",
+      ).run(sid);
       db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sid);
       db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sid);
       db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sid);
