@@ -14,6 +14,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "@cc-web/control-db";
 import { hashPassword } from "../apps/control-server/src/auth/password.ts";
+import { resolveDataPaths } from "../apps/control-server/src/config.ts";
 
 const username = process.argv[2];
 if (!username) {
@@ -21,7 +22,9 @@ if (!username) {
   process.exit(1);
 }
 
-const dbPath = process.env["CC_WEB_DB"] ?? "./data/control.sqlite";
+// Same environment resolution as the server, so seeding targets the database
+// the server will actually open.
+const { dbPath } = resolveDataPaths();
 mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 migrate(db);

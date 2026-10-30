@@ -51,6 +51,11 @@ Control Server (`bun apps/control-server/src/index.ts`) reads:
 - `CC_WEB_JWT_SECRET` — required, ≥ 32 chars (HS256 signing key for `cc_session` access tokens).
 - `CC_WEB_ALLOWED_ORIGINS` — required, comma-separated browser origins.
 - `CC_WEB_PORT` — default 8787. `CC_WEB_DB` — default `./data/control.sqlite`.
+- `CC_WEB_DATA_DIR` — optional root for persistent state; sets the database
+  (`<dir>/control.sqlite`) and attachments (`<dir>/attachments`) unless the two
+  below override. `CC_WEB_ATTACHMENTS_DIR` — default `./data/attachments`. The
+  container image sets `CC_WEB_DATA_DIR=/data`; both directories are created and
+  chowned to `bun:bun` at image build time.
 
 Seed an owner (the password arrives on stdin, never argv):
 

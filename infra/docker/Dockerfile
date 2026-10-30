@@ -93,12 +93,14 @@ COPY infra/docker/Caddyfile /etc/caddy/Caddyfile
 COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# The database lives on the volume mount, and the control server listens on a
-# fixed loopback port inside the container; Caddy reaches it there.
-ENV CC_WEB_DB=/data/control.sqlite \
+# The database and file attachments live on the volume mount, and the control
+# server listens on a fixed loopback port inside the container; Caddy reaches it there.
+ENV CC_WEB_DATA_DIR=/data \
+    CC_WEB_ATTACHMENTS_DIR=/data/attachments \
+    CC_WEB_DB=/data/control.sqlite \
     CC_WEB_PORT=8787
 
-RUN mkdir -p /data && chown bun:bun /data
+RUN mkdir -p /data/attachments && chown -R bun:bun /data
 
 VOLUME ["/data"]
 EXPOSE 80 443

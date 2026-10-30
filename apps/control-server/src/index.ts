@@ -14,7 +14,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
-import { buildServerOptions } from "./config.ts";
+import { buildServerOptions, resolveDataPaths } from "./config.ts";
 import { createServer } from "./server.ts";
 
 export const serverInfo = {
@@ -32,8 +32,13 @@ function requireEnv(name: string): string {
 }
 
 function main(): void {
-  const dbPath = process.env["CC_WEB_DB"] ?? "./data/control.sqlite";
+  const { dbPath, attachmentsDir } = resolveDataPaths();
+
+  // Both directories are created up front: a permission problem should surface
+  // at startup, not on the first attachment upload. In the container this is
+  // why `/data/attachments` is chowned to `bun` at image build time.
   mkdirSync(dirname(dbPath), { recursive: true });
+  mkdirSync(attachmentsDir, { recursive: true });
 
   const db = new Database(dbPath);
   migrate(db);
@@ -60,7 +65,9 @@ function main(): void {
     throw new Error(`CC_WEB_PORT must be an integer between 0 and 65535, got: ${port}`);
   }
 
-  const handle = createServer(buildServerOptions({ db, secret, allowedOrigins, port }));
+  const handle = createServer(
+    buildServerOptions({ db, secret, allowedOrigins, port, attachmentsDir }),
+  );
 
   console.log(
     `${serverInfo.name} listening on :${handle.server.port} (protocol v${PROTOCOL_VERSION})`,

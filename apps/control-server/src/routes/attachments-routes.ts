@@ -37,8 +37,9 @@ function sanitizeName(name: string): string {
 /**
  * Resolve the on-disk attachments directory, defaulting to `./data/attachments`
  * under the process CWD when the server was not given an explicit one.
+ * `index.ts` resolves the directory from the environment and passes it here.
  */
-function resolveAttachmentsDir(options: ServerOptions): string {
+export function resolveAttachmentsDir(options: { attachmentsDir?: string }): string {
   return options.attachmentsDir ?? join(process.cwd(), "data", "attachments");
 }
 

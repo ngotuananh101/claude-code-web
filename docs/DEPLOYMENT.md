@@ -294,9 +294,13 @@ docker compose -f infra/docker/compose.prod.yml exec -T app \
   rm -f /data/control-backup.sqlite
 ```
 
+That snapshot covers the database only. Uploaded session attachments sit beside
+it in `/data/attachments` as ordinary files; copy them too (or snapshot the
+whole `control-data` volume) or a restore comes back with attachment rows whose
+bytes are missing — the server answers 404 for those.
+
 Restore (the server must be stopped, and the old `-wal`/`-shm` files must go —
-replaying a stale WAL over a replaced database corrupts it). `--entrypoint sh`
-bypasses the supervisor, and `--user bun` keeps the restored file owned by the
+replaying a stale WAL over a replaced database corrupts it). `--entrypoint sh` bypasses the supervisor, and `--user bun` keeps the restored file owned by the
 account that writes it at runtime. On a GHCR deploy host, use `compose.yml` in
 place of `infra/docker/compose.prod.yml` below:
 
@@ -320,6 +324,8 @@ definitely stopped (§20.5) — never two live copies of one identity.
 | `CC_WEB_JWT_SECRET` | yes | — | HS256 key for `cc_session`; ≥ 32 bytes |
 | `CC_WEB_ALLOWED_ORIGINS` | yes | — | Comma-separated exact browser origins |
 | `CC_WEB_DB` | set by image | `/data/control.sqlite` | SQLite path on the volume |
+| `CC_WEB_DATA_DIR` | no | `/data` | Directory holding the database and attachments |
+| `CC_WEB_ATTACHMENTS_DIR` | no | `$CC_WEB_DATA_DIR/attachments` | Uploaded session attachment files |
 | `CC_WEB_PORT` | set by image | `8787` | Control server port inside the container |
 | `CC_WEB_SITE_ADDRESS` | no | `:80` | Caddy site address inside the container |
 | `CC_WEB_BIND_ADDR` | no | `127.0.0.1` | Host interface the published port binds |

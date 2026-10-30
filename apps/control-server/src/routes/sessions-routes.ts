@@ -15,6 +15,7 @@ import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
 import { jsonError } from "./api-error.ts";
+import { resolveAttachmentsDir } from "./attachments-routes.ts";
 import { parseCompositeId } from "./inspect-routes.ts";
 import { submitRpc } from "./rpc-command.ts";
 
@@ -317,7 +318,7 @@ export async function handleDeleteSession(
   // §4.4: remove the session's attachment directory on disk if it was configured
   // or exists under the default data directory. The metadata rows are already gone;
   // this reclaims the bytes. Missing-on-disk is not an error — the session may have none.
-  const attachmentsDir = options.attachmentsDir ?? join(process.cwd(), "data", "attachments");
+  const attachmentsDir = resolveAttachmentsDir(options);
   if (res.attachmentStoragePaths.length > 0) {
     const sessionDir = join(attachmentsDir, sessionId);
     rmSync(sessionDir, { recursive: true, force: true });

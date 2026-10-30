@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   issueRunnerCredential,
   migrate,
@@ -7,7 +8,7 @@ import {
   verifyRunnerCredential,
 } from "@cc-web/control-db";
 import { hashPassword } from "./auth/password.ts";
-import { buildServerOptions, type ServerConfig } from "./config.ts";
+import { buildServerOptions, resolveDataPaths, type ServerConfig } from "./config.ts";
 import { createServer, type ServerHandle } from "./server.ts";
 
 /**
@@ -135,5 +136,51 @@ describe("the real control server wiring", () => {
     expect(handle!.dispatcher!.drain("runner-a")).toEqual({ sent: 0, skipped: 1 });
 
     void url;
+  });
+});
+
+describe("resolveDataPaths", () => {
+  test("with no environment it uses ./data for both the database and attachments", () => {
+    expect(resolveDataPaths({})).toEqual({
+      dbPath: join("data", "control.sqlite"),
+      attachmentsDir: join("data", "attachments"),
+    });
+  });
+
+  test("CC_WEB_DATA_DIR holds both the database and the attachment store", () => {
+    // This is the container layout: one volume, one root, nothing to configure
+    // beyond CC_WEB_DATA_DIR=/data.
+    expect(resolveDataPaths({ CC_WEB_DATA_DIR: "/data" })).toEqual({
+      dbPath: "/data/control.sqlite",
+      attachmentsDir: "/data/attachments",
+    });
+  });
+
+  test("CC_WEB_DB keeps attachments beside the database it points at", () => {
+    expect(resolveDataPaths({ CC_WEB_DB: "/srv/state/control.sqlite" })).toEqual({
+      dbPath: "/srv/state/control.sqlite",
+      attachmentsDir: join("/srv/state", "attachments"),
+    });
+  });
+
+  test("CC_WEB_DB and CC_WEB_ATTACHMENTS_DIR override CC_WEB_DATA_DIR", () => {
+    expect(
+      resolveDataPaths({
+        CC_WEB_DATA_DIR: "/data",
+        CC_WEB_DB: "/db/control.sqlite",
+        CC_WEB_ATTACHMENTS_DIR: "/uploads",
+      }),
+    ).toEqual({ dbPath: "/db/control.sqlite", attachmentsDir: "/uploads" });
+  });
+
+  test("CC_WEB_DATA_DIR still governs attachments when only the database path is overridden", () => {
+    // An explicit data root is a statement about where state lives; a stray
+    // database override must not move the uploads off the volume.
+    expect(resolveDataPaths({ CC_WEB_DATA_DIR: "/data", CC_WEB_DB: "/db/control.sqlite" })).toEqual(
+      {
+        dbPath: "/db/control.sqlite",
+        attachmentsDir: join("/data", "attachments"),
+      },
+    );
   });
 });

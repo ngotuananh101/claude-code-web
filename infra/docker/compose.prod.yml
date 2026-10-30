@@ -33,7 +33,9 @@ services:
     env_file:
       - .env
     environment:
-      CC_WEB_DB: /data/control.sqlite
+      CC_WEB_DATA_DIR: ${CC_WEB_DATA_DIR:-/data}
+      CC_WEB_ATTACHMENTS_DIR: ${CC_WEB_ATTACHMENTS_DIR:-/data/attachments}
+      CC_WEB_DB: ${CC_WEB_DB:-/data/control.sqlite}
       CC_WEB_PORT: "8787"
     volumes:
       # Named volume, not a bind mount: the SQLite database (with its WAL and

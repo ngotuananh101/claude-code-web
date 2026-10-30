@@ -12,11 +12,37 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { dirname, join } from "node:path";
 import { CommandOutbox, verifyRunnerCredential } from "@cc-web/control-db";
 import { AuthService } from "./auth/auth-service.ts";
 import { hashPassword, verifyPassword } from "./auth/password.ts";
 import { createSigner } from "./auth/tokens.ts";
 import type { ServerOptions } from "./server.ts";
+
+/** Where the control server keeps its state on disk. */
+export type DataPaths = {
+  /** SQLite file. */
+  dbPath: string;
+  /** Root directory for uploaded session attachments. */
+  attachmentsDir: string;
+};
+
+/**
+ * Resolve the persistent paths from the environment (§20.2).
+ *
+ * `CC_WEB_DATA_DIR` is the single knob a container needs: both the database and
+ * the attachment store live under it unless the finer-grained variables override
+ * them. `CC_WEB_ATTACHMENTS_DIR` exists because a deployment may want uploads on
+ * a different volume from the database. Resolving here rather than inline in
+ * `index.ts` keeps the fallback order testable.
+ */
+export function resolveDataPaths(env: Record<string, string | undefined> = process.env): DataPaths {
+  const dataDir = env["CC_WEB_DATA_DIR"];
+  const dbPath = env["CC_WEB_DB"] ?? join(dataDir ?? "data", "control.sqlite");
+  const attachmentsDir =
+    env["CC_WEB_ATTACHMENTS_DIR"] ?? join(dataDir ?? dirname(dbPath), "attachments");
+  return { dbPath, attachmentsDir };
+}
 
 export type ServerConfig = {
   db: Database;
@@ -25,6 +51,8 @@ export type ServerConfig = {
   allowedOrigins: string[];
   /** Fixed listen port for the vite dev proxy; omitted means ephemeral. */
   port?: number;
+  /** Directory where session attachments are stored on disk. */
+  attachmentsDir?: string;
 };
 
 export function buildServerOptions(config: ServerConfig): ServerOptions {
@@ -35,6 +63,7 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
     auth,
     allowedOrigins: config.allowedOrigins,
     ...(config.port === undefined ? {} : { port: config.port }),
+    ...(config.attachmentsDir === undefined ? {} : { attachmentsDir: config.attachmentsDir }),
     // Read through the database on every upgrade, so a rotation or revoke takes
     // effect on the next connection rather than at the next restart (§6.3).
     verifyRunnerCredential: (credential) => {

@@ -35,7 +35,9 @@ services:
       CC_WEB_JWT_SECRET: ${CC_WEB_JWT_SECRET:?set CC_WEB_JWT_SECRET in .env (>= 32 bytes)}
       CC_WEB_ALLOWED_ORIGINS: ${CC_WEB_ALLOWED_ORIGINS:?set CC_WEB_ALLOWED_ORIGINS in .env}
       CC_WEB_SITE_ADDRESS: ${CC_WEB_SITE_ADDRESS:-:80}
-      CC_WEB_DB: /data/control.sqlite
+      CC_WEB_DATA_DIR: ${CC_WEB_DATA_DIR:-/data}
+      CC_WEB_ATTACHMENTS_DIR: ${CC_WEB_ATTACHMENTS_DIR:-/data/attachments}
+      CC_WEB_DB: ${CC_WEB_DB:-/data/control.sqlite}
       CC_WEB_PORT: "8787"
     volumes:
       # Named volume, not a bind mount: the SQLite database (with its WAL and
