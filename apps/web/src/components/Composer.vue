@@ -32,6 +32,10 @@ import {
   workspaceForPath,
 } from "@/features/composer/composer-logic.ts";
 import {
+  loadComposerSettings,
+  saveComposerSettings,
+} from "@/features/composer/composer-storage.ts";
+import {
   effortLevelsFor,
   modelFor,
   normalizeEffort,
@@ -88,11 +92,32 @@ const sending = ref(false);
 
 /** The chosen runner; empty until the operator picks one. */
 const runnerId = ref("");
-const permission = ref("default");
+const initialSettings = loadComposerSettings(props.sessionId ?? null);
+const permission = ref(initialSettings.permission);
 /** The picker's state (§5.2): model, effort, and the standing ultracode mode. */
-const model = ref("default");
-const effort = ref<EffortLevel | null>(null);
-const ultracode = ref(false);
+const model = ref(initialSettings.model);
+const effort = ref<EffortLevel | null>(initialSettings.effort);
+const ultracode = ref(initialSettings.ultracode);
+
+watch(
+  () => props.sessionId,
+  (newSessionId) => {
+    const loaded = loadComposerSettings(newSessionId);
+    permission.value = loaded.permission;
+    model.value = loaded.model;
+    effort.value = loaded.effort;
+    ultracode.value = loaded.ultracode;
+  },
+);
+
+watch([permission, model, effort, ultracode], ([perm, mdl, eff, ultra]) => {
+  saveComposerSettings(props.sessionId ?? null, {
+    permission: perm,
+    model: mdl,
+    effort: eff,
+    ultracode: ultra,
+  });
+});
 
 /** Sessions discovered for the selected workspace; null means "not loaded yet". */
 const workspaceSessions = ref<SessionSummary[] | null>(null);
@@ -150,6 +175,7 @@ const advertisedModels = computed<RunnerModel[]>(() =>
 // drop an effort that row cannot honour. The route would refuse the stale
 // value anyway — better to show the operator what would actually run.
 watch(advertisedModels, (advertised) => {
+  if (advertised.length === 0) return;
   const offered = pickerModels(advertised);
   if (modelFor(offered, model.value) === undefined) {
     model.value = offered[0]?.value ?? "default";
@@ -439,6 +465,12 @@ async function send(): Promise<void> {
     const result = await startRun(sessionId, body);
 
     if (result.ok) {
+      saveComposerSettings(sessionId, {
+        permission: permission.value,
+        model: model.value,
+        effort: effort.value,
+        ultracode: ultracode.value,
+      });
       prompt.value = "";
       attachments.value = [];
       emit("started", sessionId, result.runId, promptText, uploadedAttachments);

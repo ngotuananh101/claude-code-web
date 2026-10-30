@@ -1,5 +1,6 @@
 import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { reactive } from "vue";
+import { clearComposerSettings } from "../features/composer/composer-storage.ts";
 import { authFetch } from "../services/auth-api.ts";
 import {
   createSessionStream,
@@ -117,6 +118,7 @@ export function removeSession(sessionId: string): void {
   if (index !== -1) {
     sessions.sessions.splice(index, 1);
   }
+  clearComposerSettings(sessionId);
   if (sessions.activeId === sessionId) {
     closeSession();
   }
