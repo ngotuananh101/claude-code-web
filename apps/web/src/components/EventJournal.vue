@@ -15,6 +15,7 @@ import {
   isNearTop,
   previousPageStart,
   resolveWindowStart,
+  shouldFollowAppend,
 } from "@/features/journal/scroll.ts";
 
 const props = defineProps<{
@@ -226,18 +227,17 @@ watch(
   },
 );
 
+// New content only pulls the viewport down while the operator is already at
+// the tail. A user turn does not override an upward read: it can arrive from
+// another client or a replay, and the composer's own send is handled by the
+// `pendingRun` watcher above, which scrolls unconditionally.
 watch(
   () => turns.value.length,
   (newLen, oldLen) => {
-    if (newLen > oldLen) {
-      const last = turns.value[turns.value.length - 1];
-      if (last?.kind === "user" || !userScrolledUp.value) {
-        userScrolledUp.value = false;
-        nextTick(() => {
-          scrollToBottom("smooth");
-        });
-      }
-    }
+    if (!shouldFollowAppend(oldLen, newLen, userScrolledUp.value)) return;
+    nextTick(() => {
+      scrollToBottom("smooth");
+    });
   },
 );
 </script>

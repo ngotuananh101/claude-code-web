@@ -59,3 +59,21 @@ export function computeScrollAnchorOffset(previousHeight: number, nextHeight: nu
   const delta = nextHeight - previousHeight;
   return Math.max(delta, 0);
 }
+
+/**
+ * Whether an appended turn should pull the viewport to the tail.
+ *
+ * Only a reader already at the bottom follows new content. The turn count is
+ * not a proxy for intent: a user turn can arrive from another client or a
+ * replay while the operator is deliberately reading earlier history, and
+ * scrolling them away mid-read is never what they asked for. The composer's
+ * own send does not rely on this — the pendingRun path scrolls
+ * unconditionally.
+ */
+export function shouldFollowAppend(
+  previousCount: number,
+  nextCount: number,
+  userScrolledUp: boolean,
+): boolean {
+  return nextCount > previousCount && !userScrolledUp;
+}

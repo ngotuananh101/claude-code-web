@@ -5,6 +5,7 @@ import {
   isNearTop,
   previousPageStart,
   resolveWindowStart,
+  shouldFollowAppend,
 } from "./scroll.ts";
 
 describe("isNearBottom", () => {
@@ -83,5 +84,22 @@ describe("previousPageStart", () => {
 
   test("respects a custom page size", () => {
     expect(previousPageStart(40, 10)).toBe(30);
+  });
+});
+
+describe("shouldFollowAppend", () => {
+  test("follows the tail when a turn is appended while the reader is at the bottom", () => {
+    expect(shouldFollowAppend(12, 13, false)).toBe(true);
+  });
+
+  test("does not follow while the reader is scrolled up", () => {
+    // The regression this guards: a user turn arriving from another client (or
+    // a replay) used to yank a reader out of earlier history.
+    expect(shouldFollowAppend(12, 13, true)).toBe(false);
+  });
+
+  test("never follows when nothing was appended", () => {
+    expect(shouldFollowAppend(12, 12, false)).toBe(false);
+    expect(shouldFollowAppend(12, 5, false)).toBe(false);
   });
 });
