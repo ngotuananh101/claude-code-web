@@ -40,6 +40,11 @@ export type StartRunRequest = {
    * forwarding a literal `undefined` over the wire.
    */
   resumeSessionId?: string;
+  /**
+   * The ids of attachments to attach to this run (Task 5). Omitted when none
+   * were picked so the wire carries exactly the files that were chosen.
+   */
+  attachmentIds?: string[];
 };
 
 export async function startRun(sessionId: string, run: StartRunRequest): Promise<StartRunResult> {
@@ -54,6 +59,7 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.ultracode !== undefined) body["ultracode"] = run.ultracode;
     if (run.branch !== undefined) body["branch"] = run.branch;
     if (run.resumeSessionId !== undefined) body["resumeSessionId"] = run.resumeSessionId;
+    if (run.attachmentIds !== undefined) body["attachmentIds"] = run.attachmentIds;
     response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
