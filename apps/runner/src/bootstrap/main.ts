@@ -59,12 +59,25 @@ function identityDir(): string {
 }
 
 /**
+ * Resolves whether the systemd service target is user or system scope.
+ * When invoked by a regular user without sudo, defaults to "user" scope so
+ * installation requires no root privileges and places the unit under ~/.config/systemd/user.
+ * When invoked by root or under sudo, defaults to "system" scope.
+ */
+function resolveScope(options: Record<string, string>): UnitScope {
+  if (options["scope"] === "user" || options["user"] === "true") return "user";
+  if (options["scope"] === "system" || options["system"] === "true") return "system";
+  const isRoot = typeof process.getuid === "function" ? process.getuid() === 0 : false;
+  return isRoot ? "system" : "user";
+}
+
+/**
  * Resolves the target OS user for the systemd service.
  * When installed under sudo, prefers SUDO_USER so the runner service inherits
  * the invoking user's environment, home directory, and toolchains (§6.1, ADR-014).
  */
 function resolveTargetUser(options: Record<string, string>): string | undefined {
-  if (options["user"]) return options["user"];
+  if (options["user"] && options["user"] !== "true") return options["user"];
   const sudoUser = process.env["SUDO_USER"];
   if (sudoUser && sudoUser !== "root") return sudoUser;
   const currentUser = process.env["USER"] ?? process.env["LOGNAME"];
@@ -163,11 +176,21 @@ async function readRunnerToken(): Promise<string | undefined> {
   return piped === "" ? undefined : piped;
 }
 
-/** Parsed `--key value` options; keys and values are not secrets. */
+/** Parsed `--key value` and boolean `--flag` options; keys and values are not secrets. */
 function parseOptions(argv: string[]): Record<string, string> {
   const options: Record<string, string> = {};
-  for (let i = 0; i < argv.length - 1; i += 1) {
-    if (argv[i]!.startsWith("--")) options[argv[i]!.slice(2)] = argv[i + 1]!;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        options[key] = next;
+        i += 1;
+      } else {
+        options[key] = "true";
+      }
+    }
   }
   return options;
 }
@@ -260,6 +283,20 @@ async function start(): Promise<void> {
 }
 
 switch (command) {
+  case "-h":
+  case "--help":
+  case "help": {
+    console.log(USAGE);
+    break;
+  }
+
+  case "-v":
+  case "--version":
+  case "version": {
+    console.log(`${runnerInfo.name} (protocol v${runnerInfo.protocolVersion})`);
+    break;
+  }
+
   case "connect":
   case "run": {
     await start();
@@ -267,7 +304,15 @@ switch (command) {
   }
 
   case "setup": {
-    const options = parseOptions(process.argv.slice(3));
+    const rawArgs = process.argv.slice(3);
+    if (rawArgs.includes("-h") || rawArgs.includes("--help") || rawArgs.includes("help")) {
+      console.log(
+        "usage: runner setup --server <http(s) origin> --runner-id <id>   token: CC_WEB_RUNNER_TOKEN | TTY | stdin",
+      );
+      break;
+    }
+
+    const options = parseOptions(rawArgs);
     const token = await readRunnerToken();
 
     const result = await runSetup(
@@ -295,8 +340,15 @@ switch (command) {
 
   case "service": {
     const sub = process.argv[3];
+    if (sub === "-h" || sub === "--help" || sub === "help" || sub === undefined) {
+      console.log(
+        "usage: runner service install | uninstall | print [--scope user|system] [--user <name>] [--home <path>]",
+      );
+      break;
+    }
+
     const options = parseOptions(process.argv.slice(4));
-    const scope: UnitScope = options["scope"] === "user" ? "user" : "system";
+    const scope: UnitScope = resolveScope(options);
     const targetUser = scope === "user" ? undefined : resolveTargetUser(options);
     const home = resolveServiceHome(targetUser, options);
 
@@ -314,6 +366,13 @@ switch (command) {
     }
 
     if (sub === "install") {
+      if (scope === "system" && typeof process.getuid === "function" && process.getuid() !== 0) {
+        console.error("error: installing a system service requires root permissions.");
+        console.error("  Run with sudo: sudo ./cc-web-runner service install --scope system");
+        console.error("  Or install as user service without sudo: ./cc-web-runner service install");
+        process.exit(1);
+      }
+
       let execPath = executablePath();
       const script = process.argv[1] ?? "";
       const isCompiled = !script.endsWith(".ts");
@@ -356,6 +415,15 @@ switch (command) {
     }
 
     if (sub === "uninstall") {
+      if (scope === "system" && typeof process.getuid === "function" && process.getuid() !== 0) {
+        console.error("error: uninstalling a system service requires root permissions.");
+        console.error("  Run with sudo: sudo ./cc-web-runner service uninstall --scope system");
+        console.error(
+          "  Or uninstall user service without sudo: ./cc-web-runner service uninstall",
+        );
+        process.exit(1);
+      }
+
       const uninstalledPath = await stopAndDisable(realSystemdIo(), {
         scope,
         homeDir: home,
