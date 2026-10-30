@@ -295,6 +295,26 @@ describe("reconciliation", () => {
       { kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" },
     ]);
   });
+
+  test("a crashed run's pending approval is abandoned even when the runner reports nothing", () => {
+    const result = reconcile({
+      server: [serverState("run-1", "attempt-1", "waiting_for_approval")],
+      runner: [],
+    });
+
+    // The process died while parked on a gate: no callback exists to answer, so
+    // leaving the projection pending would accept decisions nothing can honor.
+    expect(result.actions).toContainEqual({
+      kind: "abandon_approval",
+      runId: "run-1",
+      attemptId: "attempt-1",
+    });
+    expect(result.actions).toContainEqual({
+      kind: "mark_interrupted",
+      runId: "run-1",
+      attemptId: "attempt-1",
+    });
+  });
 });
 
 describe("parseDeclaredWorkspaces", () => {

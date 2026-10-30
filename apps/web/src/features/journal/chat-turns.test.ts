@@ -6,6 +6,7 @@ import {
   deriveChatTurns,
   extractDiffStats,
   formatDuration,
+  processBodyVisible,
   summarizeProcessState,
 } from "./chat-turns.ts";
 
@@ -1089,5 +1090,20 @@ describe("summarizeProcessState", () => {
       activeStepLabel: undefined,
       hasError: false,
     });
+  });
+});
+
+describe("processBodyVisible", () => {
+  test("an open accordion renders its body", () => {
+    expect(processBodyVisible(true, 3)).toBe(true);
+  });
+
+  test("a collapsed accordion with execution steps hides its body", () => {
+    expect(processBodyVisible(false, 3)).toBe(false);
+  });
+
+  test("a turn with nothing to collapse always renders its body", () => {
+    // Approval-only turn: no toggle exists, so the cards must never be hidden.
+    expect(processBodyVisible(false, 0)).toBe(true);
   });
 });

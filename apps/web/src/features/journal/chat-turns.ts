@@ -219,6 +219,16 @@ export function summarizeProcessState(
   return { count: executionSteps.length, activeStepLabel, hasError };
 }
 
+/**
+ * Whether the accordion's body renders. A turn with no execution steps has
+ * nothing to collapse, so its approval cards must stay visible even when the
+ * settled-state default is "closed" — otherwise a replayed approval-only turn
+ * silently loses its card.
+ */
+export function processBodyVisible(isOpen: boolean, executionStepCount: number): boolean {
+  return isOpen || executionStepCount === 0;
+}
+
 const RUN_TERMINALS: ReadonlySet<string> = new Set([
   "run.finished",
   "run.failed",

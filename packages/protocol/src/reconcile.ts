@@ -206,6 +206,16 @@ export function reconcile(input: {
       // In flight on the server, invisible to the runner. The process is gone
       // without a terminal outcome; do not resume it.
       if (!TERMINAL.has(serverRun.state)) {
+        // A run that died parked on a gate left no callback behind. Close its
+        // pending approvals with the run: otherwise the projection keeps
+        // offering a decision nothing can honor (§13.2, §14.3).
+        if (serverRun.state === "waiting_for_approval") {
+          actions.push({
+            kind: "abandon_approval",
+            runId: serverRun.runId,
+            attemptId: serverRun.attemptId,
+          });
+        }
         actions.push({
           kind: "mark_interrupted",
           runId: serverRun.runId,

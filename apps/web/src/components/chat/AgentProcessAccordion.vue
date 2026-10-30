@@ -3,7 +3,7 @@ import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { AlertCircle, Check, ChevronDown, ChevronRight, Loader2 } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
-import { summarizeProcessState } from "@/features/journal/chat-turns";
+import { processBodyVisible, summarizeProcessState } from "@/features/journal/chat-turns";
 import ApprovalCard from "../ApprovalCard.vue";
 import AgentThinkingStep from "./AgentThinkingStep.vue";
 import AgentToolStep from "./AgentToolStep.vue";
@@ -103,7 +103,10 @@ const summaryLabel = computed(() => {
       leave-from-class="opacity-100 max-h-[160rem]"
       leave-to-class="opacity-0 max-h-0"
     >
-      <div v-if="isOpen" class="min-w-0 max-w-full overflow-hidden">
+      <div
+        v-if="processBodyVisible(isOpen, executionSteps.length)"
+        class="min-w-0 max-w-full overflow-hidden"
+      >
         <div
           class="flex min-w-0 max-w-full flex-col gap-1.5 border-l-2 border-border/60 pl-3 pb-1"
         >
