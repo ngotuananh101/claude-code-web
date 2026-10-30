@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { AlertCircle, Check, ChevronDown, ChevronRight, Loader2 } from "@lucide/vue";
+import { AlertCircle, Check, ChevronDown, ChevronRight, CircleStop, Loader2 } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
-import { processBodyVisible, summarizeProcessState } from "@/features/journal/chat-turns";
+import {
+  processBodyVisible,
+  processSummaryLabel,
+  summarizeProcessState,
+} from "@/features/journal/chat-turns";
 import ApprovalCard from "../ApprovalCard.vue";
 import AgentThinkingStep from "./AgentThinkingStep.vue";
 import AgentToolStep from "./AgentToolStep.vue";
@@ -56,16 +60,9 @@ watch(
   },
 );
 
-const summaryLabel = computed(() => {
-  if (props.status === "running") {
-    return summary.value.activeStepLabel !== undefined
-      ? `Đang chạy: ${summary.value.activeStepLabel}`
-      : "Đang chạy…";
-  }
-  if (props.status === "error") return `Lỗi sau ${summary.value.count} bước thực hiện`;
-  if (props.status === "interrupted") return `Đã dừng sau ${summary.value.count} bước thực hiện`;
-  return `Đã hoàn thành ${summary.value.count} bước thực hiện`;
-});
+const summaryLabel = computed(() =>
+  processSummaryLabel(props.status, summary.value, pendingApprovals.value.length),
+);
 </script>
 
 <template>
@@ -86,6 +83,7 @@ const summaryLabel = computed(() => {
     >
       <Loader2 v-if="status === 'running'" :size="13" class="shrink-0 animate-spin" />
       <AlertCircle v-else-if="summary.hasError" :size="13" class="shrink-0" />
+      <CircleStop v-else-if="status === 'interrupted'" :size="13" class="shrink-0" />
       <Check v-else :size="13" class="shrink-0" />
       <span class="min-w-0 truncate">{{ summaryLabel }}</span>
       <span v-if="durationText" class="shrink-0 text-muted-foreground/70"
@@ -95,31 +93,37 @@ const summaryLabel = computed(() => {
       <ChevronRight v-else :size="12" class="shrink-0" />
     </button>
 
+    <!--
+      grid-template-rows 0fr→1fr animates the real content height, so a very
+      long turn does not jump when its max-height cap would have clipped it.
+    -->
     <transition
       enter-active-class="transition-all duration-150 ease-out"
-      enter-from-class="opacity-0 max-h-0"
-      enter-to-class="opacity-100 max-h-[160rem]"
+      enter-from-class="opacity-0 [grid-template-rows:0fr]"
+      enter-to-class="opacity-100 [grid-template-rows:1fr]"
       leave-active-class="transition-all duration-100 ease-in"
-      leave-from-class="opacity-100 max-h-[160rem]"
-      leave-to-class="opacity-0 max-h-0"
+      leave-from-class="opacity-100 [grid-template-rows:1fr]"
+      leave-to-class="opacity-0 [grid-template-rows:0fr]"
     >
       <div
         v-if="processBodyVisible(isOpen, executionSteps.length)"
-        class="min-w-0 max-w-full overflow-hidden"
+        class="grid min-w-0 max-w-full"
       >
-        <div
-          class="flex min-w-0 max-w-full flex-col gap-1.5 border-l-2 border-border/60 pl-3 pb-1"
-        >
-          <template v-for="step in executionSteps" :key="step.key">
-            <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
-            <AgentToolStep v-else-if="step.kind === 'tool'" :step="step" />
-          </template>
-          <ApprovalCard
-            v-for="step in resolvedApprovals"
-            :key="step.key"
-            :event="step.event"
-            :terminal="terminalOf(step)"
-          />
+        <div class="min-h-0 min-w-0 overflow-hidden">
+          <div
+            class="flex min-w-0 max-w-full flex-col gap-1.5 border-l-2 border-border/60 pl-3 pb-1"
+          >
+            <template v-for="step in executionSteps" :key="step.key">
+              <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
+              <AgentToolStep v-else-if="step.kind === 'tool'" :step="step" />
+            </template>
+            <ApprovalCard
+              v-for="step in resolvedApprovals"
+              :key="step.key"
+              :event="step.event"
+              :terminal="terminalOf(step)"
+            />
+          </div>
         </div>
       </div>
     </transition>

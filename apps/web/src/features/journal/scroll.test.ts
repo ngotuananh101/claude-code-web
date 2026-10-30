@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { computeScrollAnchorOffset, isNearBottom, isNearTop } from "./scroll.ts";
+import {
+  computeScrollAnchorOffset,
+  isNearBottom,
+  isNearTop,
+  previousPageStart,
+  resolveWindowStart,
+} from "./scroll.ts";
 
 describe("isNearBottom", () => {
   test("returns true when exactly at the bottom", () => {
@@ -52,5 +58,30 @@ describe("isNearTop", () => {
   test("respects a custom threshold", () => {
     expect(isNearTop(150, 200)).toBe(true);
     expect(isNearTop(150, 100)).toBe(false);
+  });
+});
+
+describe("resolveWindowStart", () => {
+  test("follows the tail when the window is not pinned", () => {
+    expect(resolveWindowStart(null, 100)).toBe(80);
+    expect(resolveWindowStart(null, 12)).toBe(0);
+  });
+
+  test("uses the pinned start, clamped to the feed", () => {
+    expect(resolveWindowStart(40, 100)).toBe(40);
+    expect(resolveWindowStart(500, 100)).toBe(100);
+    expect(resolveWindowStart(0, 100)).toBe(0);
+  });
+});
+
+describe("previousPageStart", () => {
+  test("moves one page up and stops at zero", () => {
+    expect(previousPageStart(40)).toBe(20);
+    expect(previousPageStart(5)).toBe(0);
+    expect(previousPageStart(0)).toBe(0);
+  });
+
+  test("respects a custom page size", () => {
+    expect(previousPageStart(40, 10)).toBe(30);
   });
 });

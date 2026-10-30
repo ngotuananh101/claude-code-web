@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { APPROVAL_NO_EXPIRY } from "@cc-web/protocol";
 import { finishApproval, insertPendingApproval, pendingApproval } from "@cc-web/runner-db";
 import { redactErrorText, summarizeToolInput } from "./redact.ts";
 
@@ -108,7 +109,7 @@ export class ApprovalRouter {
     // int64 max so the expiry sweep can never select it, and no timer is
     // scheduled. Only an explicit decision or the attempt's teardown ends it.
     const timeoutMs = input.timeoutMs ?? 0;
-    const expiresAt = timeoutMs > 0 ? now + timeoutMs : Number.MAX_SAFE_INTEGER;
+    const expiresAt = timeoutMs > 0 ? now + timeoutMs : APPROVAL_NO_EXPIRY;
 
     const inserted = insertPendingApproval(this.#db, {
       approvalId,

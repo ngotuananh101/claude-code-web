@@ -19,6 +19,15 @@ const props = defineProps<{
 /** Whether the raw payload panel is open. */
 const showRaw = ref(false);
 
+/**
+ * The accordion's summary row already carries the duration once it has any
+ * execution step to show, so the header omits it there instead of printing it
+ * twice.
+ */
+const headerDuration = computed(() =>
+  props.turn.steps?.some((step) => step.kind !== "approval") ? undefined : props.turn.durationText,
+);
+
 /** Copy the assistant response prose to the clipboard. */
 async function copyResponse(): Promise<void> {
   if (!props.turn.text) return;
@@ -53,17 +62,17 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       >
         <AlertCircle :size="14" />
         <span>Lỗi</span>
-        <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
+        <span v-if="headerDuration" class="text-muted-foreground">{{ headerDuration }}</span>
       </div>
 
       <div v-else-if="turn.status === 'interrupted'" class="flex items-center gap-1.5 shrink-0">
         <span>Bị dừng</span>
-        <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
+        <span v-if="headerDuration" class="text-muted-foreground">{{ headerDuration }}</span>
       </div>
 
       <div v-else class="flex items-center gap-1.5 shrink-0">
         <Clock :size="14" />
-        <span>{{ turn.durationText ? `Đã xử lý trong ${turn.durationText}` : "Agent" }}</span>
+        <span>{{ headerDuration ? `Đã xử lý trong ${headerDuration}` : "Agent" }}</span>
       </div>
 
       <!-- Horizontal divider line filling remaining width -->

@@ -7,7 +7,9 @@ import {
   extractDiffStats,
   formatDuration,
   processBodyVisible,
+  processSummaryLabel,
   summarizeProcessState,
+  toolStepLabel,
 } from "./chat-turns.ts";
 
 /**
@@ -1105,5 +1107,109 @@ describe("processBodyVisible", () => {
   test("a turn with nothing to collapse always renders its body", () => {
     // Approval-only turn: no toggle exists, so the cards must never be hidden.
     expect(processBodyVisible(false, 0)).toBe(true);
+  });
+});
+
+describe("toolStepLabel", () => {
+  const base = { kind: "tool" as const, key: "k", toolCallId: "t", state: "running" as const };
+
+  test("labels file, shell and search tools in Vietnamese", () => {
+    expect(toolStepLabel({ ...base, toolName: "Edit", filePath: "src/a.ts" })).toBe(
+      "Sửa file: src/a.ts",
+    );
+    expect(toolStepLabel({ ...base, toolName: "Write", filePath: "src/b.ts" })).toBe(
+      "Sửa file: src/b.ts",
+    );
+    expect(toolStepLabel({ ...base, toolName: "Read", filePath: "src/c.ts" })).toBe(
+      "Đọc file: src/c.ts",
+    );
+    expect(toolStepLabel({ ...base, toolName: "Bash", command: "bun test" })).toBe(
+      "Chạy: bun test",
+    );
+    expect(toolStepLabel({ ...base, toolName: "Grep", inputSummary: "TODO" })).toBe("Tìm: TODO");
+  });
+
+  test("falls back to the tool name and truncates long labels", () => {
+    expect(toolStepLabel({ ...base, toolName: "WebFetch" })).toBe("WebFetch");
+    const long = toolStepLabel({ ...base, toolName: "Edit", filePath: "x".repeat(200) });
+    expect(long.length).toBeLessThanOrEqual(81);
+    expect(long.endsWith("…")).toBe(true);
+  });
+});
+
+describe("summarizeProcessState — active step", () => {
+  const base = { kind: "tool" as const, toolName: "Read", state: "running" as const };
+
+  test("prefers the last tool still running", () => {
+    const summary = summarizeProcessState(
+      [
+        { ...base, key: "a", toolCallId: "a", state: "done", filePath: "done.ts" },
+        { ...base, key: "b", toolCallId: "b", filePath: "live.ts" },
+      ],
+      "running",
+    );
+    expect(summary.activeStepLabel).toBe("Đọc file: live.ts");
+  });
+
+  test("names no step when every tool already settled", () => {
+    const summary = summarizeProcessState(
+      [{ ...base, key: "a", toolCallId: "a", state: "done", filePath: "done.ts" }],
+      "running",
+    );
+    expect(summary.activeStepLabel).toBeUndefined();
+  });
+
+  test("interrupted turns have no active step", () => {
+    const summary = summarizeProcessState(
+      [{ ...base, key: "a", toolCallId: "a", filePath: "x.ts" }],
+      "interrupted",
+    );
+    expect(summary.activeStepLabel).toBeUndefined();
+    expect(summary.hasError).toBe(false);
+  });
+
+  test("an approval-only turn counts zero execution steps", () => {
+    const summary = summarizeProcessState(
+      [{ kind: "approval", key: "ap", event: liveEvent("approval.requested", {}) }],
+      "done",
+    );
+    expect(summary).toEqual({ count: 0, activeStepLabel: undefined, hasError: false });
+  });
+});
+
+describe("processSummaryLabel", () => {
+  const empty = { count: 0, activeStepLabel: undefined, hasError: false };
+
+  test("reports the running step or a generic running label", () => {
+    expect(
+      processSummaryLabel("running", {
+        count: 2,
+        activeStepLabel: "Chạy: bun test",
+        hasError: false,
+      }),
+    ).toBe("Đang chạy: Chạy: bun test");
+    expect(processSummaryLabel("running", empty)).toBe("Đang chạy…");
+  });
+
+  test("parks on a pending approval before naming any step", () => {
+    expect(
+      processSummaryLabel(
+        "running",
+        { count: 2, activeStepLabel: "Chạy: bun test", hasError: false },
+        1,
+      ),
+    ).toBe("Đang chờ phê duyệt…");
+  });
+
+  test("summarizes every settled state", () => {
+    expect(
+      processSummaryLabel("done", { count: 5, activeStepLabel: undefined, hasError: false }),
+    ).toBe("Đã hoàn thành 5 bước thực hiện");
+    expect(
+      processSummaryLabel("error", { count: 3, activeStepLabel: undefined, hasError: true }),
+    ).toBe("Lỗi sau 3 bước thực hiện");
+    expect(
+      processSummaryLabel("interrupted", { count: 1, activeStepLabel: undefined, hasError: false }),
+    ).toBe("Đã dừng sau 1 bước thực hiện");
   });
 });

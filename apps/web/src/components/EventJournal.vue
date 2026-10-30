@@ -9,7 +9,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ApprovalTerminal } from "@/features/approvals/terminal.ts";
 import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
 import { deriveChatTurns } from "@/features/journal/chat-turns.ts";
-import { computeScrollAnchorOffset, isNearBottom, isNearTop } from "@/features/journal/scroll.ts";
+import {
+  computeScrollAnchorOffset,
+  isNearBottom,
+  isNearTop,
+  previousPageStart,
+  resolveWindowStart,
+} from "@/features/journal/scroll.ts";
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -55,15 +61,12 @@ const emptyCopy = computed(() =>
  * `pinnedStart` freezes the window's first index once the reader scrolls up:
  * turns appended live must extend the bottom without dropping a turn off the
  * top, which would shift what they are reading. While it is null the window
- * follows the tail — the state the feed mounts in.
+ * follows the tail — the state the feed mounts in — and returning to the
+ * bottom releases it again so no more than one page stays mounted.
  */
-const DEFAULT_PAGE_SIZE = 20;
 const pinnedStart = ref<number | null>(null);
 
-const startIndex = computed(() => {
-  if (pinnedStart.value !== null) return Math.min(pinnedStart.value, turns.value.length);
-  return Math.max(0, turns.value.length - DEFAULT_PAGE_SIZE);
-});
+const startIndex = computed(() => resolveWindowStart(pinnedStart.value, turns.value.length));
 const displayedTurns = computed(() => turns.value.slice(startIndex.value));
 const remainingEarlier = computed(() => startIndex.value);
 const hasEarlierTurns = computed(() => remainingEarlier.value > 0);
@@ -94,6 +97,10 @@ function checkScrollPosition(): void {
     viewport.scrollTop,
     viewport.clientHeight,
   );
+  // Back at the tail: release the pinned window so only the newest page stays
+  // mounted. Everything below the viewport is empty here, so dropping the
+  // earlier turns cannot move what the operator is reading.
+  if (!userScrolledUp.value) pinnedStart.value = null;
 }
 
 function onScroll(): void {
@@ -117,20 +124,33 @@ function onScroll(): void {
 
 let isLoadingEarlier = false;
 
-/** Prepend the previous page, then shift `scrollTop` by exactly the growth. */
+/**
+ * Prepend the previous page, then shift `scrollTop` so the turn the reader was
+ * looking at stays put. The anchor is that turn's own box, not the container's
+ * total height: content still streaming in at the bottom must not inflate the
+ * correction. The height delta is the fallback when no turn is rendered yet.
+ */
 function loadEarlierTurns(): void {
   if (!hasEarlierTurns.value || isLoadingEarlier) return;
   const viewport = getViewport();
-  const previousHeight = viewport?.scrollHeight ?? 0;
+  if (!viewport) return;
+
+  const anchor = contentRef.value?.querySelector<HTMLElement>("[data-turn-key]");
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const previousHeight = viewport.scrollHeight;
 
   isLoadingEarlier = true;
-  if (pinnedStart.value === null) pinnedStart.value = startIndex.value;
-  pinnedStart.value = Math.max(0, pinnedStart.value - DEFAULT_PAGE_SIZE);
+  pinnedStart.value = previousPageStart(startIndex.value);
 
   void nextTick(() => {
     const updated = getViewport();
     if (updated) {
-      updated.scrollTop += computeScrollAnchorOffset(previousHeight, updated.scrollHeight);
+      const nextAnchorTop = anchor?.getBoundingClientRect().top;
+      const offset =
+        anchorTop !== undefined && nextAnchorTop !== undefined
+          ? Math.max(nextAnchorTop - anchorTop, 0)
+          : computeScrollAnchorOffset(previousHeight, updated.scrollHeight);
+      updated.scrollTop += offset;
     }
     isLoadingEarlier = false;
   });
@@ -251,11 +271,12 @@ watch(
           </div>
 
           <template v-for="turn in displayedTurns" :key="turn.key">
-            <UserChatBubble v-if="turn.kind === 'user'" :turn="turn" />
+            <UserChatBubble v-if="turn.kind === 'user'" :turn="turn" :data-turn-key="turn.key" />
             <AgentChatTurn
               v-else-if="turn.kind === 'agent'"
               :turn="turn"
               :terminal-for="terminalFor"
+              :data-turn-key="turn.key"
             />
           </template>
         </template>

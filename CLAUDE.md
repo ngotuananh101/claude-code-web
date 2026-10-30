@@ -72,3 +72,6 @@ Runner connector (single-file build via `bun run build:runner` →
 - `connect` (alias `run`) — start the daemon from the stored identity.
 - `service install | uninstall | print` — manage the systemd unit
   (`cc-web-runner.service`); the unit carries no secret.
+- `CC_WEB_APPROVAL_TIMEOUT_MS` — optional. A tool-permission or question gate
+  never expires by default; set a positive millisecond value to restore a
+  finite window.

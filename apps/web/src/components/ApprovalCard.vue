@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
+import { APPROVAL_NO_EXPIRY } from "@cc-web/protocol";
 import { computed, reactive } from "vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -85,14 +86,14 @@ const allAnswered = computed(() =>
 
 /**
  * Display-side expiry fallback: the row outlived its window with no closing event.
- * A non-expiring gate is parked at `Number.MAX_SAFE_INTEGER` by the runner, so
- * it never counts as expired here either.
+ * A non-expiring gate is parked at `APPROVAL_NO_EXPIRY` by the runner, so it
+ * never counts as expired here either.
  */
 const displayExpired = computed(
   () =>
     props.terminal === undefined &&
     expiresAt !== undefined &&
-    expiresAt < Number.MAX_SAFE_INTEGER - 10_000 &&
+    expiresAt < APPROVAL_NO_EXPIRY - 10_000 &&
     expiresAt < Date.now(),
 );
 

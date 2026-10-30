@@ -9,6 +9,15 @@ export const PROTOCOL_VERSION = 1 as const;
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
 /**
+ * The `expiresAt` a gate carries when it has no deadline (§13.1).
+ *
+ * The runner parks such an approval here and schedules no sweep, and the
+ * browser reads it as "never expires". Both sides compare against this one
+ * value, so it lives on the wire contract rather than in either implementation.
+ */
+export const APPROVAL_NO_EXPIRY = Number.MAX_SAFE_INTEGER;
+
+/**
  * The largest single WebSocket message either endpoint accepts (§12.6).
  *
  * Bun's default is 16 MiB, which is roughly 30× the largest measured legitimate

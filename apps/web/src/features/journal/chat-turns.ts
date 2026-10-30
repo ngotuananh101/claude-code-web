@@ -205,18 +205,41 @@ export function summarizeProcessState(
 
   let activeStepLabel: string | undefined;
   if (status === "running") {
+    // Only a step still in flight can be named as "running": a settled tool
+    // shown under "Đang chạy" would claim work that already finished.
+    const lastRunningTool = executionSteps.findLast(
+      (step) => step.kind === "tool" && step.state === "running",
+    );
     const last = executionSteps[executionSteps.length - 1];
-    if (last !== undefined) {
-      activeStepLabel =
-        last.kind === "thinking"
-          ? "Đang suy nghĩ…"
-          : last.kind === "tool"
-            ? toolStepLabel(last)
-            : undefined;
+    if (lastRunningTool !== undefined && lastRunningTool.kind === "tool") {
+      activeStepLabel = toolStepLabel(lastRunningTool);
+    } else if (last?.kind === "thinking") {
+      activeStepLabel = "Đang suy nghĩ…";
     }
   }
 
   return { count: executionSteps.length, activeStepLabel, hasError };
+}
+
+/**
+ * The accordion's one-line summary. A run parked on an approval says so before
+ * naming any step: "Đang chạy" while nothing can run is a lie the operator acts
+ * on.
+ */
+export function processSummaryLabel(
+  status: AgentTurn["status"],
+  summary: ProcessSummary,
+  pendingApprovalCount = 0,
+): string {
+  if (status === "running") {
+    if (pendingApprovalCount > 0) return "Đang chờ phê duyệt…";
+    return summary.activeStepLabel !== undefined
+      ? `Đang chạy: ${summary.activeStepLabel}`
+      : "Đang chạy…";
+  }
+  if (status === "error") return `Lỗi sau ${summary.count} bước thực hiện`;
+  if (status === "interrupted") return `Đã dừng sau ${summary.count} bước thực hiện`;
+  return `Đã hoàn thành ${summary.count} bước thực hiện`;
 }
 
 /**
