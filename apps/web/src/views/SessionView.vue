@@ -57,12 +57,15 @@ const activeLive = computed(() => resolveSessionLive(active.value?.live, session
 const historicalMessages = ref<SessionMessage[]>([]);
 
 /** The run this page started, until its terminal event clears it. */
-const startedRunId = ref<string | null>(null);
+const startedRun = ref<{ sessionId: string; runId: string } | null>(null);
 
 /** Optimistic pending run state while events stream from the runner. */
-const pendingRun = ref<{ runId: string; prompt: string; attachments?: AttachmentInfo[] } | null>(
-  null,
-);
+const pendingRun = ref<{
+  sessionId: string;
+  runId: string;
+  prompt: string;
+  attachments?: AttachmentInfo[];
+} | null>(null);
 
 /**
  * The run a stop request would target. Prefer the one started here (it may not
@@ -71,7 +74,11 @@ const pendingRun = ref<{ runId: string; prompt: string; attachments?: Attachment
  * after, in which case nothing is running.
  */
 const liveRunId = computed(() => {
-  if (startedRunId.value !== null) return startedRunId.value;
+  const currentSessionId = active.value?.sessionId;
+  if (!currentSessionId) return null;
+  if (startedRun.value !== null && startedRun.value.sessionId === currentSessionId) {
+    return startedRun.value.runId;
+  }
   const events = sessions.stream?.events ?? [];
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
@@ -92,18 +99,22 @@ const liveRunId = computed(() => {
 watch(
   () => sessions.stream?.events.length,
   () => {
-    const runId = startedRunId.value;
-    if (runId === null) return;
+    const run = startedRun.value;
+    if (run === null) return;
+    const currentSessionId = active.value?.sessionId;
+    if (run.sessionId !== currentSessionId) return;
     const terminal = (sessions.stream?.events ?? []).some(
       (event) =>
-        event.runId === runId &&
+        event.runId === run.runId &&
         (event.type === "run.finished" ||
           event.type === "run.failed" ||
           event.type === "run.interrupted"),
     );
     if (terminal) {
-      startedRunId.value = null;
-      pendingRun.value = null;
+      startedRun.value = null;
+      if (pendingRun.value?.runId === run.runId) {
+        pendingRun.value = null;
+      }
     }
   },
 );
@@ -152,6 +163,15 @@ watch(
   },
 );
 
+const activePendingRun = computed(() => {
+  const currentSessionId = active.value?.sessionId;
+  if (!currentSessionId) return undefined;
+  if (pendingRun.value !== null && pendingRun.value.sessionId === currentSessionId) {
+    return pendingRun.value;
+  }
+  return undefined;
+});
+
 /** A run started from the composer opens the journal it will stream into. */
 function onStarted(
   sessionId: string,
@@ -159,9 +179,14 @@ function onStarted(
   promptText?: string,
   attachments?: AttachmentInfo[],
 ): void {
-  startedRunId.value = runId;
+  startedRun.value = { sessionId, runId };
   if (promptText) {
-    pendingRun.value = { runId, prompt: promptText, ...(attachments ? { attachments } : {}) };
+    pendingRun.value = {
+      sessionId,
+      runId,
+      prompt: promptText,
+      ...(attachments ? { attachments } : {}),
+    };
   }
   void loadSessions();
   if (sessionId !== routeSession.value) router.push(`/sessions/${sessionId}`);
@@ -180,6 +205,8 @@ const greeting = computed(() => {
 /** Follows the URL in one direction: route → held session. */
 function followRoute(): void {
   const id = routeSession.value;
+  historicalMessages.value = [];
+  fetchedResume.value = null;
   if (id === null) {
     if (sessions.activeId !== null) closeSession();
     return;
@@ -236,7 +263,7 @@ async function refreshNow(): Promise<void> {
           :needs-resync="sessions.stream.needsResync"
           :session-live="activeLive"
           :historical-messages="historicalMessages"
-          :pending-run="pendingRun ?? undefined"
+          :pending-run="activePendingRun"
         />
         <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
           Đang chờ journal…
@@ -272,7 +299,7 @@ async function refreshNow(): Promise<void> {
         </div>
 
         <Composer
-          class="w-full max-w-[660px]"
+          class="w-full max-w-4xl"
           :session-id="routeSession"
           :active-run-id="null"
           @started="onStarted"

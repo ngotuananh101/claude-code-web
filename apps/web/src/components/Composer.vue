@@ -402,65 +402,68 @@ function dropFile(index: number): void {
 async function send(): Promise<void> {
   if (!canSend.value) return;
   sending.value = true;
-  const sessionId = props.sessionId ?? crypto.randomUUID();
-  const folder = selectedFolder.value;
+  try {
+    const sessionId = props.sessionId ?? crypto.randomUUID();
+    const folder = selectedFolder.value;
 
-  // Upload attachments first, then attach their ids to the run body.
-  let uploadedAttachments: AttachmentInfo[] | undefined;
-  if (attachments.value.length > 0) {
-    const files = attachments.value.map((a) => a.file);
-    const uploadResult = await uploadSessionAttachments(sessionId, files);
-    if (!uploadResult.ok) {
-      toast.error(uploadResult.message);
-      sending.value = false;
+    // Upload attachments first, then attach their ids to the run body.
+    let uploadedAttachments: AttachmentInfo[] | undefined;
+    if (attachments.value.length > 0) {
+      const files = attachments.value.map((a) => a.file);
+      const uploadResult = await uploadSessionAttachments(sessionId, files);
+      if (!uploadResult.ok) {
+        toast.error(uploadResult.message);
+        return;
+      }
+      uploadedAttachments = uploadResult.attachments;
+      // Revoke object URLs now that the files have been sent.
+      for (const a of attachments.value) {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      }
+    }
+
+    const body = buildRunRequest({
+      prompt: prompt.value,
+      permission: permission.value,
+      model: model.value,
+      effort: effort.value,
+      ultracode: ultracode.value,
+      workspaceId: folder?.workspaceId,
+      projectRunnerId: folder?.runnerId,
+      runnerId: runnerId.value,
+      selectedSession: selectedSession.value,
+      isNewSessionPage: props.sessionId === null,
+      attachmentIds: uploadedAttachments?.map((a) => a.id),
+    });
+    const promptText = prompt.value;
+    const result = await startRun(sessionId, body);
+
+    if (result.ok) {
+      prompt.value = "";
+      attachments.value = [];
+      emit("started", sessionId, result.runId, promptText, uploadedAttachments);
       return;
     }
-    uploadedAttachments = uploadResult.attachments;
-    // Revoke object URLs now that the files have been sent.
-    for (const a of attachments.value) {
-      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    if (result.reason === "session_busy") {
+      toast.error("Phiên đang có run — hãy đợi run hiện tại kết thúc.");
+      return;
     }
+    if (result.reason === "session_pinned") {
+      toast.error("Phiên này đã ghim runner/workspace khác — không thể đổi giữa chừng.");
+      return;
+    }
+    if (result.reason === "runner_unavailable") {
+      toast.error("Chưa có runner sẵn sàng nhận run — kiểm tra trang runners.");
+      return;
+    }
+    if (result.reason === "unauthorized") {
+      toast.error("Đăng nhập đã hết hạn — hãy đăng nhập lại.");
+      return;
+    }
+    toast.error("Không gửi được prompt — thử lại.");
+  } finally {
+    sending.value = false;
   }
-
-  const body = buildRunRequest({
-    prompt: prompt.value,
-    permission: permission.value,
-    model: model.value,
-    effort: effort.value,
-    ultracode: ultracode.value,
-    workspaceId: folder?.workspaceId,
-    projectRunnerId: folder?.runnerId,
-    runnerId: runnerId.value,
-    selectedSession: selectedSession.value,
-    isNewSessionPage: props.sessionId === null,
-    attachmentIds: uploadedAttachments?.map((a) => a.id),
-  });
-  const promptText = prompt.value;
-  const result = await startRun(sessionId, body);
-
-  if (result.ok) {
-    prompt.value = "";
-    attachments.value = [];
-    emit("started", sessionId, result.runId, promptText, uploadedAttachments);
-    return;
-  }
-  if (result.reason === "session_busy") {
-    toast.error("Phiên đang có run — hãy đợi run hiện tại kết thúc.");
-    return;
-  }
-  if (result.reason === "session_pinned") {
-    toast.error("Phiên này đã ghim runner/workspace khác — không thể đổi giữa chừng.");
-    return;
-  }
-  if (result.reason === "runner_unavailable") {
-    toast.error("Chưa có runner sẵn sàng nhận run — kiểm tra trang runners.");
-    return;
-  }
-  if (result.reason === "unauthorized") {
-    toast.error("Đăng nhập đã hết hạn — hãy đăng nhập lại.");
-    return;
-  }
-  toast.error("Không gửi được prompt — thử lại.");
 }
 
 async function stop(): Promise<void> {
@@ -480,7 +483,7 @@ async function stop(): Promise<void> {
 </script>
 
 <template>
-  <InputGroup class="gap-0 bg-card shadow-sm" v-bind="$attrs">
+  <InputGroup class="gap-0 bg-card shadow-sm items-stretch text-left" v-bind="$attrs">
     <InputGroupAddon
       v-if="sessionId === null"
       align="block-start"
@@ -593,14 +596,14 @@ async function stop(): Promise<void> {
     </InputGroupAddon>
 
     <div
-      class="relative"
+      class="relative w-full text-left"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"
     >
       <InputGroupTextarea
         v-model="prompt"
-        class="max-h-52 min-h-12 px-3.5 py-2.5 text-[13px] leading-relaxed"
+        class="max-h-52 min-h-12 w-full px-3.5 py-2.5 text-left text-[13px] leading-relaxed"
         placeholder="Gửi prompt cho runner…"
         aria-label="Ô soạn prompt"
         @keydown.enter.exact.prevent="send"
@@ -615,7 +618,7 @@ async function stop(): Promise<void> {
       </div>
     </div>
 
-    <div v-if="attachments.length > 0" class="flex flex-wrap gap-2 px-3.5 pb-2">
+    <div v-if="attachments.length > 0" class="flex w-full flex-wrap gap-2 px-3.5 pb-2">
       <div
         v-for="(att, i) in attachments"
         :key="att.id"
