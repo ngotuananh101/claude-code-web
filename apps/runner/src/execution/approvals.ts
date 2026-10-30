@@ -108,8 +108,7 @@ export class ApprovalRouter {
     // int64 max so the expiry sweep can never select it, and no timer is
     // scheduled. Only an explicit decision or the attempt's teardown ends it.
     const timeoutMs = input.timeoutMs ?? 0;
-    const expiresAt =
-      timeoutMs > 0 ? now + timeoutMs : Number.MAX_SAFE_INTEGER;
+    const expiresAt = timeoutMs > 0 ? now + timeoutMs : Number.MAX_SAFE_INTEGER;
 
     const inserted = insertPendingApproval(this.#db, {
       approvalId,

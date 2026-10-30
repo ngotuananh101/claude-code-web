@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
-import type { AgentTurn } from "./chat-turns.ts";
+import type { AgentStep, AgentTurn } from "./chat-turns.ts";
 import {
   cleanUserPrompt,
   deriveChatTurns,
   extractDiffStats,
   formatDuration,
+  summarizeProcessState,
 } from "./chat-turns.ts";
 
 /**
@@ -1027,5 +1028,66 @@ describe("deriveChatTurns — merging historical and live", () => {
       text: "hi",
     });
     expect((turns[0] as { attachments?: unknown }).attachments).toBeUndefined();
+  });
+});
+
+describe("summarizeProcessState", () => {
+  const thinking: AgentStep = { kind: "thinking", key: "s-1", text: "weighing options" };
+  const read: AgentStep = {
+    kind: "tool",
+    key: "s-2",
+    toolCallId: "tc-1",
+    toolName: "Read",
+    state: "done",
+    filePath: "src/app.ts",
+  };
+  const edit: AgentStep = {
+    kind: "tool",
+    key: "s-3",
+    toolCallId: "tc-2",
+    toolName: "Edit",
+    state: "running",
+    filePath: "src/app.ts",
+  };
+  const approval: AgentStep = {
+    kind: "approval",
+    key: "s-4",
+    event: liveEvent("approval.requested", { approvalId: "apr-1" }),
+  };
+
+  test("counts thinking and tool steps but not approvals", () => {
+    const summary = summarizeProcessState([thinking, read, edit, approval], "running");
+    expect(summary.count).toBe(3);
+    expect(summary.hasError).toBe(false);
+  });
+
+  test("running reports the latest tool step as the active label", () => {
+    expect(summarizeProcessState([thinking, read, edit], "running").activeStepLabel).toBe(
+      "Sửa file: src/app.ts",
+    );
+  });
+
+  test("running with only thinking reports the thinking label", () => {
+    expect(summarizeProcessState([thinking], "running").activeStepLabel).toBe("Đang suy nghĩ…");
+  });
+
+  test("a finished turn has no active step", () => {
+    const summary = summarizeProcessState([thinking, read], "done");
+    expect(summary.activeStepLabel).toBeUndefined();
+    expect(summary.hasError).toBe(false);
+  });
+
+  test("hasError is set by a failed tool step or an errored run", () => {
+    const failed: AgentStep = { ...read, state: "error" };
+    expect(summarizeProcessState([thinking, failed], "done").hasError).toBe(true);
+    expect(summarizeProcessState([], "error").hasError).toBe(true);
+  });
+
+  test("an empty step list summarizes to zero", () => {
+    expect(summarizeProcessState([], "running")).toEqual({
+      count: 0,
+      activeStepLabel: undefined,
+      hasError: false,
+    });
   });
 });

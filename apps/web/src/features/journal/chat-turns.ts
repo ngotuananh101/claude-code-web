@@ -152,6 +152,73 @@ export function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
+/** The compact state the process accordion's collapsed row renders. */
+export type ProcessSummary = {
+  /** Thinking + tool steps; approval cards live outside the accordion. */
+  count: number;
+  /** One-line label of the step in flight, present only while the turn runs. */
+  activeStepLabel?: string | undefined;
+  hasError: boolean;
+};
+
+const MAX_STEP_LABEL_LENGTH = 80;
+
+function truncateLabel(text: string): string {
+  return text.length > MAX_STEP_LABEL_LENGTH ? `${text.slice(0, MAX_STEP_LABEL_LENGTH)}…` : text;
+}
+
+/**
+ * One-line Vietnamese label for a tool step, e.g. `Sửa file: src/app.ts`.
+ * Technical identifiers (paths, commands, tool names) stay verbatim.
+ */
+export function toolStepLabel(step: ToolStep): string {
+  const detail = step.filePath ?? step.command ?? step.inputSummary ?? undefined;
+  switch (step.toolName) {
+    case "Edit":
+    case "Write":
+      return truncateLabel(`Sửa file: ${detail ?? step.toolName}`);
+    case "Read":
+      return truncateLabel(`Đọc file: ${detail ?? step.toolName}`);
+    case "Bash":
+      return truncateLabel(`Chạy: ${step.command ?? detail ?? "lệnh"}`);
+    case "Grep":
+    case "Glob":
+      return truncateLabel(`Tìm: ${detail ?? step.toolName}`);
+    default:
+      return truncateLabel(detail !== undefined ? `${step.toolName}: ${detail}` : step.toolName);
+  }
+}
+
+/**
+ * Fold an agent turn's steps into what the collapsed accordion row shows: how
+ * many execution steps there are, which one is in flight, and whether anything
+ * failed. Pure, so the collapsed badge replays exactly like the live one.
+ */
+export function summarizeProcessState(
+  steps: readonly AgentStep[],
+  status: AgentTurn["status"],
+): ProcessSummary {
+  const executionSteps = steps.filter((step) => step.kind !== "approval");
+  const hasError =
+    status === "error" ||
+    executionSteps.some((step) => step.kind === "tool" && step.state === "error");
+
+  let activeStepLabel: string | undefined;
+  if (status === "running") {
+    const last = executionSteps[executionSteps.length - 1];
+    if (last !== undefined) {
+      activeStepLabel =
+        last.kind === "thinking"
+          ? "Đang suy nghĩ…"
+          : last.kind === "tool"
+            ? toolStepLabel(last)
+            : undefined;
+    }
+  }
+
+  return { count: executionSteps.length, activeStepLabel, hasError };
+}
+
 const RUN_TERMINALS: ReadonlySet<string> = new Set([
   "run.finished",
   "run.failed",

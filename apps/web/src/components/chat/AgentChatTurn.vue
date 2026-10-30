@@ -5,9 +5,7 @@ import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import type { AgentTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
-import ApprovalCard from "../ApprovalCard.vue";
-import AgentThinkingStep from "./AgentThinkingStep.vue";
-import AgentToolStep from "./AgentToolStep.vue";
+import AgentProcessAccordion from "./AgentProcessAccordion.vue";
 
 const props = defineProps<{
   /** The agent turn to render. */
@@ -72,21 +70,14 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       <span class="h-px flex-1 bg-border/60" aria-hidden="true" />
     </div>
 
-    <!-- Process Timeline -->
-    <div
+    <!-- Process accordion: thinking and tool steps collapse into one summary row -->
+    <AgentProcessAccordion
       v-if="turn.steps && turn.steps.length > 0"
-      class="flex flex-col gap-1.5 pl-3 border-l-2 border-border/60 my-1 min-w-0 max-w-full"
-    >
-      <template v-for="step in turn.steps" :key="step.key">
-        <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
-        <AgentToolStep v-if="step.kind === 'tool'" :step="step" />
-        <ApprovalCard
-          v-if="step.kind === 'approval'"
-          :event="step.event"
-          :terminal="terminalFor ? terminalFor(step.event) : undefined"
-        />
-      </template>
-    </div>
+      :steps="turn.steps"
+      :status="turn.status"
+      :duration-text="turn.durationText"
+      :terminal-for="terminalFor"
+    />
 
     <!-- Assistant Response Prose -->
     <div
