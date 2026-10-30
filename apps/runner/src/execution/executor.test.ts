@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MAX_EVENT_PAYLOAD_BYTES } from "@cc-web/protocol";
 import {
   ackUpTo,
@@ -1906,5 +1909,183 @@ describe("an oversized event", () => {
     // mandatory event and reporting success.
     const completed = events(db).find((e) => e.type === "message.completed");
     expect(completed).toBeDefined();
+  });
+});
+
+describe("attachments (§attachments)", () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function freshDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-exec-attach-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  test("downloads attachments and injects them into the prompt and run.started", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const runnerHome = await freshDir();
+
+    // Spin up a mock control server that serves the two attachments.
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        const id = url.pathname.split("/").pop();
+        if (id === "att-1") {
+          return new Response("# spec", {
+            headers: { "content-type": "text/markdown" },
+          });
+        }
+        if (id === "att-2") {
+          return new Response('{"v":1}', {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    try {
+      const commandWithAttachments = {
+        ...COMMAND,
+        payload: {
+          prompt: "fix the bug",
+          attachments: [
+            { id: "att-1", name: "spec.md", mimeType: "text/markdown", size: 6 },
+            { id: "att-2", name: "data.json", mimeType: "application/json", size: 6 },
+          ],
+        },
+      };
+
+      let seenPrompt: string | undefined;
+      const sdk: SdkStream = (options) => {
+        seenPrompt = options.prompt;
+        return (async function* () {
+          yield { type: "result", subtype: "success", result: "ok" };
+        })();
+      };
+
+      await executeRun(db, commandWithAttachments, {
+        workspacePath: "/home/runner/project",
+        sdk,
+        runnerHome,
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: "test-token",
+      });
+
+      const attachmentsDir = join(runnerHome, "tmp/sessions/session-1/attachments");
+
+      // The SDK received a prompt that includes the attachment context block.
+      expect(seenPrompt).toContain("[Attached Files]");
+      expect(seenPrompt).toContain(
+        `spec.md: ${join(attachmentsDir, "att-1-spec.md")} (text/markdown)`,
+      );
+      expect(seenPrompt).toContain(
+        `data.json: ${join(attachmentsDir, "att-2-data.json")} (application/json)`,
+      );
+      expect(seenPrompt).toContain("User prompt:");
+      expect(seenPrompt).toContain("fix the bug");
+
+      // The run.started event carries the attachment metadata.
+      const started = events(db).find((e) => e.type === "run.started");
+      expect(started).toBeDefined();
+      const startedPayload = JSON.parse(started!.payload) as Record<string, unknown>;
+      expect(Array.isArray(startedPayload.attachments)).toBe(true);
+      const attachments = startedPayload.attachments as Array<Record<string, unknown>>;
+      expect(attachments).toHaveLength(2);
+      expect(attachments[0]).toEqual({
+        id: "att-1",
+        name: "spec.md",
+        mimeType: "text/markdown",
+        size: 0,
+      });
+      expect(attachments[1]).toEqual({
+        id: "att-2",
+        name: "data.json",
+        mimeType: "application/json",
+        size: 0,
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("without a serverUrl or token, attachments are skipped and the prompt is unchanged", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seenPrompt: string | undefined;
+    const sdk: SdkStream = (options) => {
+      seenPrompt = options.prompt;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithAttachments = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        attachments: [{ id: "att-1", name: "spec.md", mimeType: "text/markdown", size: 6 }],
+      },
+    };
+
+    // Pass runnerHome but omit serverUrl and token — the run should not attempt
+    // any download and should proceed with the raw prompt.
+    await executeRun(db, commandWithAttachments, {
+      workspacePath: "/home/runner/project",
+      sdk,
+      runnerHome: await freshDir(),
+    });
+
+    expect(seenPrompt).toBe("hello");
+
+    const started = events(db).find((e) => e.type === "run.started");
+    const startedPayload = JSON.parse(started!.payload) as Record<string, unknown>;
+    expect(startedPayload.attachments).toBeUndefined();
+  });
+
+  test("a payload without attachments behaves as before", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seenPrompt: string | undefined;
+    const sdk: SdkStream = (options) => {
+      seenPrompt = options.prompt;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, COMMAND, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    expect(seenPrompt).toBe("hello");
+    const started = events(db).find((e) => e.type === "run.started");
+    const startedPayload = JSON.parse(started!.payload) as Record<string, unknown>;
+    expect(startedPayload.attachments).toBeUndefined();
   });
 });

@@ -27,6 +27,11 @@ import {
 } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { BROWSE_CAPABILITIES, createBrowseHandler } from "./browse/handler.ts";
+import {
+  CLEANUP_CAPABILITIES,
+  cleanOrphanedTemp,
+  createCleanupHandler,
+} from "./cleanup/handler.ts";
 import { EventPump } from "./connection/event-pump.ts";
 import {
   type CommandOutcome,
@@ -59,6 +64,7 @@ const RUNNER_CAPABILITIES: string[] = [
   ...MUTATION_CAPABILITIES,
   ...BROWSE_CAPABILITIES,
   ...SESSIONS_CAPABILITIES,
+  ...CLEANUP_CAPABILITIES,
 ];
 
 /** The read-only command kinds the daemon routes to the inspection handler. */
@@ -107,6 +113,16 @@ function isSessionsKind(command: unknown): boolean {
   if (typeof command !== "object" || command === null) return false;
   const kind = (command as Record<string, unknown>)["kind"];
   return typeof kind === "string" && SESSIONS_KINDS.has(kind);
+}
+
+/** The session temp-directory cleanup command kind the daemon routes to the cleanup handler. */
+const CLEANUP_KINDS = new Set(["session.cleanup"]);
+
+/** Recognizes the session-cleanup lane. */
+function isSessionCleanupKind(command: unknown): boolean {
+  if (typeof command !== "object" || command === null) return false;
+  const kind = (command as Record<string, unknown>)["kind"];
+  return typeof kind === "string" && CLEANUP_KINDS.has(kind);
 }
 
 export function resolveDeclaredWorkspaces(
@@ -225,6 +241,12 @@ export type DaemonOptions = {
    * to observe routing without an SDK or filesystem.
    */
   sessions?: (command: unknown) => Promise<RpcResultFrame>;
+  /**
+   * Answers a session-cleanup command (§attachments). Defaults to the real
+   * `createCleanupHandler` built from the runner's identity directory; tests
+   * inject a fake to observe routing without a filesystem.
+   */
+  cleanup?: (command: unknown) => Promise<RpcResultFrame>;
   /** The run-start baseline capture (P3-B). See `RunController` wiring. */
   captureBaseline?: ExecuteOptions["captureBaseline"];
   onEvent?: (event: unknown) => void;
@@ -355,6 +377,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       workspacePathFor: options.workspacePathFor ?? (() => undefined),
     });
 
+  const cleanup =
+    options.cleanup ??
+    createCleanupHandler({
+      runnerHome: options.identityDir,
+    });
+
+  // Fire-and-forget: sweep and remove orphaned session temp directories at boot
+  // so a crashed process can't fill the disk across restarts. Errors are logged
+  // but never block boot — a failed sweep is a degraded boot, not a fatal one.
+  cleanOrphanedTemp(options.identityDir).catch((err) => {
+    console.warn(`boot cleanup sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+
   // Ruling 15's pre-switch. `runs.handle` persists the command before answering
   // and starts the run after, so the receipt keeps meaning "durable", not
   // "finished" (§9.4). Inspects, mutations, browses and sessions never reach it.
@@ -365,9 +400,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         ? browse(command).then((frame) => ({ receipt: null, results: [frame] }))
         : isSessionsKind(command)
           ? sessions(command).then((frame) => ({ receipt: null, results: [frame] }))
-          : isMutationKind(command)
-            ? mutate(command).then((frame) => ({ receipt: null, results: [frame] }))
-            : runs.handle(command).then((receipt) => ({ receipt }));
+          : isSessionCleanupKind(command)
+            ? cleanup(command).then((frame) => ({ receipt: null, results: [frame] }))
+            : isMutationKind(command)
+              ? mutate(command).then((frame) => ({ receipt: null, results: [frame] }))
+              : runs.handle(command).then((receipt) => ({ receipt }));
 
   const loop = new ReconnectLoop({
     runnerId: identity.runnerId,

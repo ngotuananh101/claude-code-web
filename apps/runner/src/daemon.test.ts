@@ -352,6 +352,7 @@ describe("the hello frame advertises capabilities", () => {
       "workspace.write",
       "workspace.browse",
       "workspace.sessions",
+      "session.cleanup",
     ]);
   });
 });
@@ -588,6 +589,57 @@ describe("dispatching an inspect command", () => {
       payload: { op: "sessions.list", dir: "/srv/proj" },
     });
 
+    expect(outcome.receipt).toBeNull();
+    expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
+    expect(seen.length).toBe(1);
+    expect(runControllerCalls).toBe(0);
+  });
+
+  test("routes session.cleanup to the cleanup handler, not the run controller", async () => {
+    let runControllerCalls = 0;
+    const seen: unknown[] = [];
+    const dir = await mkdtemp(join(tmpdir(), "cc-web-daemon-"));
+    dirs.push(dir);
+    await saveIdentity(dir, {
+      runnerId: "runner-a",
+      controlUrl: "ws://127.0.0.1:1/ws/runner",
+      credential: "cck_test",
+    });
+
+    const withFake = await startDaemon({
+      identityDir: dir,
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      workspacePathFor: () => undefined,
+      sdk: () => (async function* () {})(),
+      cleanup: async (command) => {
+        seen.push(command);
+        return {
+          type: "rpc.result",
+          commandId: "cmd-1",
+          ok: true,
+          result: { ok: true },
+        };
+      },
+    });
+    daemons.push(withFake);
+
+    const realHandle = withFake.runs.handle.bind(withFake.runs);
+    withFake.runs.handle = async (command: unknown) => {
+      runControllerCalls += 1;
+      return realHandle(command);
+    };
+
+    const outcome = await withFake.dispatch({
+      protocolVersion: 1,
+      commandId: "cmd-1",
+      runnerId: "runner-a",
+      kind: "session.cleanup",
+      issuedAt: "2026-10-30T00:00:00.000Z",
+      payload: { sessionId: "sess-1" },
+    });
+
+    // Cleanup dispatch mirrors the other read-only lanes: no receipt, the frame in results.
     expect(outcome.receipt).toBeNull();
     expect(outcome.results?.[0]).toMatchObject({ type: "rpc.result", ok: true });
     expect(seen.length).toBe(1);
