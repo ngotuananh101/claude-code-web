@@ -40,30 +40,30 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
 </script>
 
 <template>
-  <div class="group flex flex-col gap-2.5 w-full max-w-full text-foreground">
+  <div class="group flex flex-col gap-2.5 w-full min-w-0 max-w-full text-foreground">
     <!-- Turn Header -->
-    <div class="flex items-center gap-2 text-sm">
+    <div class="flex items-center gap-2 text-sm min-w-0">
       <!-- Status display -->
-      <div v-if="turn.status === 'running'" class="flex items-center gap-1.5">
+      <div v-if="turn.status === 'running'" class="flex items-center gap-1.5 shrink-0">
         <Loader2 :size="14" class="animate-spin" />
         <span>Đang xử lý…</span>
       </div>
 
       <div
         v-else-if="turn.status === 'error'"
-        class="flex items-center gap-1.5 text-destructive"
+        class="flex items-center gap-1.5 text-destructive shrink-0"
       >
         <AlertCircle :size="14" />
         <span>Lỗi</span>
         <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
       </div>
 
-      <div v-else-if="turn.status === 'interrupted'" class="flex items-center gap-1.5">
+      <div v-else-if="turn.status === 'interrupted'" class="flex items-center gap-1.5 shrink-0">
         <span>Bị dừng</span>
         <span v-if="turn.durationText" class="text-muted-foreground">{{ turn.durationText }}</span>
       </div>
 
-      <div v-else class="flex items-center gap-1.5">
+      <div v-else class="flex items-center gap-1.5 shrink-0">
         <Clock :size="14" />
         <span>{{ turn.durationText ? `Worked for ${turn.durationText}` : "Agent" }}</span>
       </div>
@@ -75,7 +75,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
     <!-- Process Timeline -->
     <div
       v-if="turn.steps && turn.steps.length > 0"
-      class="flex flex-col gap-1.5 pl-3 border-l-2 border-border/60 my-1"
+      class="flex flex-col gap-1.5 pl-3 border-l-2 border-border/60 my-1 min-w-0 max-w-full"
     >
       <template v-for="step in turn.steps" :key="step.key">
         <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
@@ -89,7 +89,12 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
     </div>
 
     <!-- Assistant Response Prose -->
-    <div v-if="turn.text" :class="proseClasses" v-html="renderMarkdown(turn.text)" />
+    <div
+      v-if="turn.text"
+      :class="proseClasses"
+      class="min-w-0 max-w-full break-words"
+      v-html="renderMarkdown(turn.text)"
+    />
 
     <div
       v-else-if="turn.isStreaming"

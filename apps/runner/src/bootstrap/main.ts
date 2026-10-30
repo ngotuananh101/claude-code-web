@@ -12,7 +12,8 @@
  */
 
 import { Database } from "bun:sqlite";
-import { rm, writeFile } from "node:fs/promises";
+import { execSync } from "node:child_process";
+import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import type { DeclaredWorkspace } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
@@ -25,6 +26,7 @@ import {
   type SystemdIo,
   stopAndDisable,
   UNIT_NAME,
+  type UnitScope,
   writeUnitAndEnable,
 } from "../service/systemd.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
@@ -46,12 +48,65 @@ const USAGE = `${runnerInfo.name}
 usage:
   runner setup --server <http(s) origin> --runner-id <id>   token: CC_WEB_RUNNER_TOKEN | TTY | stdin
   runner connect
-  runner service install | uninstall | print`;
+  runner service install [--scope user|system] [--user <name>] [--home <path>]
+  runner service uninstall [--scope user|system]
+  runner service print [--scope user|system] [--user <name>] [--home <path>]`;
 
 const command = process.argv[2] ?? "connect";
 
 function identityDir(): string {
   return process.env["CC_WEB_RUNNER_HOME"] ?? `${process.env["HOME"]}/.cc-web-runner`;
+}
+
+/**
+ * Resolves the target OS user for the systemd service.
+ * When installed under sudo, prefers SUDO_USER so the runner service inherits
+ * the invoking user's environment, home directory, and toolchains (§6.1, ADR-014).
+ */
+function resolveTargetUser(options: Record<string, string>): string | undefined {
+  if (options["user"]) return options["user"];
+  const sudoUser = process.env["SUDO_USER"];
+  if (sudoUser && sudoUser !== "root") return sudoUser;
+  const currentUser = process.env["USER"] ?? process.env["LOGNAME"];
+  if (currentUser && currentUser !== "root") return currentUser;
+  return undefined;
+}
+
+/**
+ * Resolves a username's home directory across standard Linux environments.
+ */
+function resolveUserHome(username: string): string | undefined {
+  try {
+    const entry = execSync(`getent passwd ${username}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parts = entry.trim().split(":");
+    if (parts[5]) return parts[5];
+  } catch {
+    // fallback if getent fails or is missing
+  }
+  if (process.platform === "linux" && username) {
+    return `/home/${username}`;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the runner's home directory. If running under sudo or targeting a user,
+ * points to that user's ~/.cc-web-runner where identity.json was initialized.
+ */
+function resolveServiceHome(
+  targetUser: string | undefined,
+  options: Record<string, string>,
+): string {
+  if (options["home"]) return options["home"];
+  if (process.env["CC_WEB_RUNNER_HOME"]) return process.env["CC_WEB_RUNNER_HOME"];
+  if (targetUser && targetUser !== "root") {
+    const userHome = resolveUserHome(targetUser);
+    if (userHome) return `${userHome}/.cc-web-runner`;
+  }
+  return identityDir();
 }
 
 /**
@@ -71,6 +126,9 @@ function realSystemdIo(): SystemdIo {
   return {
     writeFile,
     removeFile: (path) => rm(path, { force: true }),
+    mkdir: async (path) => {
+      await mkdir(path, { recursive: true });
+    },
     runCommand: (command, args) =>
       new Promise((resolve, reject) => {
         const proc = Bun.spawnSync([command, ...args]);
@@ -237,32 +295,72 @@ switch (command) {
 
   case "service": {
     const sub = process.argv[3];
+    const options = parseOptions(process.argv.slice(4));
+    const scope: UnitScope = options["scope"] === "user" ? "user" : "system";
+    const targetUser = scope === "user" ? undefined : resolveTargetUser(options);
+    const home = resolveServiceHome(targetUser, options);
 
     if (sub === "print") {
       process.stdout.write(
-        renderSystemdUnit({ executablePath: executablePath(), homeDir: identityDir() }),
+        renderSystemdUnit({
+          executablePath: executablePath(),
+          homeDir: home,
+          user: targetUser,
+          scope,
+          environmentFile: process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"],
+        }),
       );
       break;
     }
 
     if (sub === "install") {
-      const environmentFile = process.env["CC_WEB_RUNNER_ENV_FILE"];
-      await writeUnitAndEnable(
+      let execPath = executablePath();
+      const script = process.argv[1] ?? "";
+      const isCompiled = !script.endsWith(".ts");
+      const SYSTEM_BIN_PATH = "/usr/local/bin/cc-web-runner";
+
+      // For system-scoped installations from a compiled binary, install into /usr/local/bin
+      // so systemd (under SELinux init_t) can execute it without user-directory denials (§6.1).
+      if (scope === "system" && isCompiled && process.execPath !== SYSTEM_BIN_PATH) {
+        try {
+          await copyFile(process.execPath, SYSTEM_BIN_PATH);
+          await chmod(SYSTEM_BIN_PATH, 0o755);
+          execPath = SYSTEM_BIN_PATH;
+          console.log(`installed runner binary to ${SYSTEM_BIN_PATH}`);
+        } catch (err) {
+          console.warn(`warning: could not copy runner to ${SYSTEM_BIN_PATH}: ${err}`);
+        }
+      }
+
+      const environmentFile = process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"];
+      const installedPath = await writeUnitAndEnable(
         {
-          executablePath: executablePath(),
-          homeDir: identityDir(),
+          executablePath: execPath,
+          homeDir: home,
+          user: targetUser,
+          scope,
           ...(environmentFile === undefined ? {} : { environmentFile }),
         },
         realSystemdIo(),
       );
-      console.log(`installed and enabled ${UNIT_NAME}`);
-      console.log("next: systemctl status cc-web-runner.service");
+
+      const userNote = targetUser ? ` (user: ${targetUser})` : "";
+      const scopeNote = scope === "user" ? " (user unit)" : "";
+      console.log(`installed and enabled ${UNIT_NAME}${userNote}${scopeNote} at ${installedPath}`);
+      const statusCmd =
+        scope === "user"
+          ? "systemctl --user status cc-web-runner.service"
+          : "systemctl status cc-web-runner.service";
+      console.log(`next: ${statusCmd}`);
       break;
     }
 
     if (sub === "uninstall") {
-      await stopAndDisable(realSystemdIo());
-      console.log("stopped, disabled and removed cc-web-runner.service");
+      const uninstalledPath = await stopAndDisable(realSystemdIo(), {
+        scope,
+        homeDir: home,
+      });
+      console.log(`stopped, disabled and removed ${UNIT_NAME} (${uninstalledPath})`);
       break;
     }
 

@@ -67,14 +67,14 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
 </script>
 
 <template>
-  <div class="flex flex-col gap-1">
+  <div class="flex flex-col gap-1 min-w-0 max-w-full">
     <button
       type="button"
       :aria-expanded="isOpen"
       @click="isOpen = !isOpen"
-      class="flex items-center justify-between w-full rounded-md px-2 py-1.5 text-xs hover:bg-muted/50 transition-colors"
+      class="flex items-center justify-between w-full min-w-0 max-w-full rounded-md px-2 py-1.5 text-xs hover:bg-muted/50 transition-colors text-left"
     >
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
         <component :is="IconComponent" :size="13" class="text-muted-foreground shrink-0" />
         <span class="font-mono truncate" :title="toolLabel">{{ toolLabel }}</span>
 
@@ -82,14 +82,14 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
         <template v-if="step.diffStats">
           <span
             v-if="step.diffStats.added > 0"
-            class="inline-flex items-center font-mono text-[11px] text-emerald-600 dark:text-emerald-400"
+            class="inline-flex shrink-0 items-center font-mono text-[11px] text-emerald-600 dark:text-emerald-400"
             title="+added lines"
           >
             +{{ step.diffStats.added }}
           </span>
           <span
             v-if="step.diffStats.removed > 0"
-            class="inline-flex items-center font-mono text-[11px] text-rose-600 dark:text-rose-400"
+            class="inline-flex shrink-0 items-center font-mono text-[11px] text-rose-600 dark:text-rose-400"
             title="-removed lines"
           >
             -{{ step.diffStats.removed }}
@@ -97,7 +97,7 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
         </template>
       </div>
 
-      <div class="flex items-center gap-1.5">
+      <div class="flex items-center gap-1.5 shrink-0">
         <!-- Status badge. -->
         <span
           v-if="step.state === 'running'"

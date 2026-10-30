@@ -23,6 +23,29 @@ describe("renderSystemdUnit", () => {
   test("starts the connector subcommand under the runner home", () => {
     expect(unit).toContain("ExecStart=/usr/local/bin/cc-web-runner connect");
     expect(unit).toContain("Environment=CC_WEB_RUNNER_HOME=/var/lib/cc-web-runner");
+    expect(unit).toContain("User=root");
+  });
+
+  test("renders custom target user for system unit", () => {
+    const withUser = renderSystemdUnit({
+      executablePath: "/usr/local/bin/cc-web-runner",
+      homeDir: "/home/anhnt/.cc-web-runner",
+      user: "anhnt",
+    });
+    expect(withUser).toContain("User=anhnt");
+    expect(withUser).toContain("Environment=CC_WEB_RUNNER_HOME=/home/anhnt/.cc-web-runner");
+    expect(withUser).toContain("WantedBy=multi-user.target");
+  });
+
+  test("renders user-scoped unit without User directive", () => {
+    const userScope = renderSystemdUnit({
+      executablePath: "/usr/local/bin/cc-web-runner",
+      homeDir: "/home/anhnt/.cc-web-runner",
+      scope: "user",
+    });
+    expect(userScope).not.toContain("User=");
+    expect(userScope).toContain("WantedBy=default.target");
+    expect(userScope).toContain("Environment=CC_WEB_RUNNER_HOME=/home/anhnt/.cc-web-runner");
   });
 
   test("survives failures and comes back after boot", () => {
@@ -90,6 +113,49 @@ describe("writeUnitAndEnable", () => {
     });
     expect(UNIT_NAME).toBe("cc-web-runner.service");
   });
+
+  test("writes user-scoped unit and uses systemctl --user", async () => {
+    const calls: Array<{ kind: string; target: string; args?: string[] }> = [];
+    const io = {
+      writeFile: async (path: string) => {
+        calls.push({ kind: "write", target: path });
+      },
+      removeFile: async (path: string) => {
+        calls.push({ kind: "remove", target: path });
+      },
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ kind: "run", target: command, args });
+      },
+      mkdir: async (path: string) => {
+        calls.push({ kind: "mkdir", target: path });
+      },
+    };
+
+    await writeUnitAndEnable(
+      {
+        executablePath: "/usr/local/bin/cc-web-runner",
+        homeDir: "/home/anhnt",
+        scope: "user",
+      },
+      io,
+    );
+
+    expect(calls[0]).toEqual({ kind: "mkdir", target: "/home/anhnt/.config/systemd/user" });
+    expect(calls[1]).toEqual({
+      kind: "write",
+      target: "/home/anhnt/.config/systemd/user/cc-web-runner.service",
+    });
+    expect(calls[2]).toEqual({
+      kind: "run",
+      target: "systemctl",
+      args: ["--user", "daemon-reload"],
+    });
+    expect(calls[3]).toEqual({
+      kind: "run",
+      target: "systemctl",
+      args: ["--user", "enable", "--now", UNIT_NAME],
+    });
+  });
 });
 
 describe("stopAndDisable", () => {
@@ -117,5 +183,32 @@ describe("stopAndDisable", () => {
       args: ["disable", "--now", UNIT_NAME],
     });
     expect(calls[1]).toEqual({ kind: "remove", target: UNIT_PATH });
+  });
+
+  test("stops and disables user-scoped unit with systemctl --user", async () => {
+    const calls: Array<{ kind: string; target: string; args?: string[] }> = [];
+    const io = {
+      writeFile: async (path: string) => {
+        calls.push({ kind: "write", target: path });
+      },
+      removeFile: async (path: string) => {
+        calls.push({ kind: "remove", target: path });
+      },
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ kind: "run", target: command, args });
+      },
+    };
+
+    await stopAndDisable(io, { scope: "user", homeDir: "/home/anhnt" });
+
+    expect(calls[0]).toEqual({
+      kind: "run",
+      target: "systemctl",
+      args: ["--user", "disable", "--now", UNIT_NAME],
+    });
+    expect(calls[1]).toEqual({
+      kind: "remove",
+      target: "/home/anhnt/.config/systemd/user/cc-web-runner.service",
+    });
   });
 });

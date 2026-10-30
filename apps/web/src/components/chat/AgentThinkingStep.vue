@@ -18,12 +18,12 @@ const durationText =
 </script>
 
 <template>
-  <div class="flex flex-col gap-1">
+  <div class="flex flex-col gap-1 min-w-0 max-w-full">
     <button
       type="button"
       :aria-expanded="isOpen"
       @click="isOpen = !isOpen"
-      class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+      class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground min-w-0"
     >
       <Braces :size="13" />
       <span>Suy nghĩ</span>
