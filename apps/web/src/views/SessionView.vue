@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SessionMessage } from "@cc-web/protocol";
+import type { AttachmentInfo, SessionMessage } from "@cc-web/protocol";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
@@ -60,7 +60,9 @@ const historicalMessages = ref<SessionMessage[]>([]);
 const startedRunId = ref<string | null>(null);
 
 /** Optimistic pending run state while events stream from the runner. */
-const pendingRun = ref<{ runId: string; prompt: string } | null>(null);
+const pendingRun = ref<{ runId: string; prompt: string; attachments?: AttachmentInfo[] } | null>(
+  null,
+);
 
 /**
  * The run a stop request would target. Prefer the one started here (it may not
@@ -151,10 +153,15 @@ watch(
 );
 
 /** A run started from the composer opens the journal it will stream into. */
-function onStarted(sessionId: string, runId: string, promptText?: string): void {
+function onStarted(
+  sessionId: string,
+  runId: string,
+  promptText?: string,
+  attachments?: AttachmentInfo[],
+): void {
   startedRunId.value = runId;
   if (promptText) {
-    pendingRun.value = { runId, prompt: promptText };
+    pendingRun.value = { runId, prompt: promptText, ...(attachments ? { attachments } : {}) };
   }
   void loadSessions();
   if (sessionId !== routeSession.value) router.push(`/sessions/${sessionId}`);

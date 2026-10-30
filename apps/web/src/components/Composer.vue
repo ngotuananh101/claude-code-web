@@ -80,7 +80,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  started: [sessionId: string, runId: string, promptText?: string];
+  started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
 }>();
 
 const prompt = ref("");
@@ -406,7 +406,7 @@ async function send(): Promise<void> {
   const folder = selectedFolder.value;
 
   // Upload attachments first, then attach their ids to the run body.
-  let attachmentIds: string[] | undefined;
+  let uploadedAttachments: AttachmentInfo[] | undefined;
   if (attachments.value.length > 0) {
     const files = attachments.value.map((a) => a.file);
     const uploadResult = await uploadSessionAttachments(sessionId, files);
@@ -415,7 +415,7 @@ async function send(): Promise<void> {
       sending.value = false;
       return;
     }
-    attachmentIds = uploadResult.attachments.map((a: AttachmentInfo) => a.id);
+    uploadedAttachments = uploadResult.attachments;
     // Revoke object URLs now that the files have been sent.
     for (const a of attachments.value) {
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -433,7 +433,7 @@ async function send(): Promise<void> {
     runnerId: runnerId.value,
     selectedSession: selectedSession.value,
     isNewSessionPage: props.sessionId === null,
-    attachmentIds,
+    attachmentIds: uploadedAttachments?.map((a) => a.id),
   });
   const promptText = prompt.value;
   const result = await startRun(sessionId, body);
@@ -441,7 +441,7 @@ async function send(): Promise<void> {
   if (result.ok) {
     prompt.value = "";
     attachments.value = [];
-    emit("started", sessionId, result.runId, promptText);
+    emit("started", sessionId, result.runId, promptText, uploadedAttachments);
     return;
   }
   if (result.reason === "session_busy") {

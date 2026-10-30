@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { Braces, Copy } from "@lucide/vue";
+import type { AttachmentInfo } from "@cc-web/protocol";
+import { Braces, Copy, FileText, X } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import type { UserTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
+import { attachmentUrl } from "../../services/attachments-api";
 
 const props = defineProps<{
   /** The user turn to render. */
@@ -12,6 +14,34 @@ const props = defineProps<{
 
 /** Whether the raw payload panel is open. */
 const showRaw = ref(false);
+/** The image attachment currently shown in the lightbox, or null. */
+const lightboxSrc = ref<string | null>(null);
+
+/** Format a byte count into a human-readable KB/MB string. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Whether this turn has any attachments to render. */
+const hasAttachments = computed(
+  () => props.turn.attachments !== undefined && props.turn.attachments.length > 0,
+);
+
+/** The non-image attachments (documents, code, logs, etc.). */
+const docAttachments = computed(() => {
+  return (props.turn.attachments ?? []).filter(
+    (att: AttachmentInfo) => !att.mimeType.startsWith("image/"),
+  );
+});
+
+/** The image attachments (rendered as thumbnails). */
+const imageAttachments = computed(() => {
+  return (props.turn.attachments ?? []).filter((att: AttachmentInfo) =>
+    att.mimeType.startsWith("image/"),
+  );
+});
 
 /** Copy the user prompt text to the clipboard. */
 async function copyText(): Promise<void> {
@@ -32,6 +62,35 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
 
 <template>
   <div class="group flex w-full flex-col items-end">
+    <!-- Attachments row (above the bubble) -->
+    <div v-if="hasAttachments" class="mb-1.5 flex flex-wrap gap-1.5">
+      <!-- Image thumbnails with lightbox -->
+      <template v-for="att in imageAttachments" :key="att.id">
+        <img
+          :src="attachmentUrl(att.id)"
+          :alt="att.name"
+          class="h-20 w-auto rounded-lg border object-cover cursor-pointer hover:opacity-90"
+          @click="lightboxSrc = attachmentUrl(att.id)"
+          loading="lazy"
+        />
+      </template>
+
+      <!-- Document / code / log chips with download link -->
+      <template v-for="att in docAttachments" :key="att.id">
+        <a
+          :href="attachmentUrl(att.id)"
+          download
+          target="_blank"
+          class="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-muted px-2 text-xs text-foreground hover:bg-muted/80"
+          :title="att.name"
+        >
+          <FileText :size="13" class="shrink-0 text-muted-foreground" />
+          <span class="max-w-[140px] truncate" :title="att.name">{{ att.name }}</span>
+          <span class="shrink-0 text-[10px] text-muted-foreground">{{ formatSize(att.size) }}</span>
+        </a>
+      </template>
+    </div>
+
     <!-- Bubble -->
     <div
       class="max-w-[85%] rounded-2xl border border-border bg-secondary/80 px-4 py-2.5 text-[13px] text-foreground shadow-xs"
@@ -92,5 +151,38 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         </button>
       </div>
     </transition>
+
+    <!-- Image lightbox modal -->
+    <teleport to="body">
+      <transition
+        appear
+        enter-active-class="transition-opacity duration-200 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="lightboxSrc"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          @click="lightboxSrc = null"
+        >
+          <button
+            type="button"
+            class="absolute top-4 right-4 rounded-full p-1 text-white/70 hover:text-white"
+            aria-label="Đóng"
+            @click.stop="lightboxSrc = null"
+          >
+            <X :size="20" />
+          </button>
+          <img
+            :src="lightboxSrc"
+            class="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
+            @click.stop
+          />
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
 import type { AgentTurn } from "./chat-turns.ts";
 import {
   cleanUserPrompt,
@@ -953,5 +953,70 @@ describe("deriveChatTurns — merging historical and live", () => {
       status: "running",
       isStreaming: true,
     });
+  });
+
+  test("run.started carrying attachments creates a UserTurn with attachments", () => {
+    resetSeq();
+    const attachments: AttachmentInfo[] = [
+      { id: "att-1", name: "photo.png", mimeType: "image/png", size: 12345 },
+      { id: "att-2", name: "notes.txt", mimeType: "text/plain", size: 678 },
+    ];
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1", prompt: "see these files", attachments })],
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "live-user-run-1",
+      text: "see these files",
+      attachments,
+    });
+  });
+
+  test("run.started without attachments yields a UserTurn with no attachments field", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1", prompt: "hello" })],
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      text: "hello",
+    });
+    expect((turns[0] as { attachments?: unknown }).attachments).toBeUndefined();
+  });
+
+  test("pendingRun with attachments creates an optimistic UserTurn with attachments", () => {
+    const attachments: AttachmentInfo[] = [
+      { id: "att-3", name: "diagram.png", mimeType: "image/png", size: 9000 },
+    ];
+    const turns = deriveChatTurns([], [], {
+      runId: "run-pending-2",
+      prompt: "look at this",
+      attachments,
+    });
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      key: "user-pending-run-pending-2",
+      text: "look at this",
+      attachments,
+    });
+  });
+
+  test("run.started event with invalid attachments array falls back to no attachments", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1", prompt: "hi", attachments: [{ bad: true }] })],
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      text: "hi",
+    });
+    expect((turns[0] as { attachments?: unknown }).attachments).toBeUndefined();
   });
 });

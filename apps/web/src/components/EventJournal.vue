@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
 import { ArrowDown } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AgentChatTurn from "@/components/chat/AgentChatTurn.vue";
@@ -17,7 +17,7 @@ const props = defineProps<{
   historicalMessages?: SessionMessage[];
   needsResync: boolean;
   sessionLive: boolean;
-  pendingRun?: { runId: string; prompt: string };
+  pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] };
 }>();
 
 // Chat turns fuse the resumed session's historical `SessionMessage`s with the

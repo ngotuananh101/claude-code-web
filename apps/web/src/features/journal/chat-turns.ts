@@ -15,7 +15,8 @@
  * identical to a live one. This module is unit-tested directly (not via the
  * EventJournal SFC, which cannot compile under `bun test`).
  */
-import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import { parseAttachmentInfo } from "@cc-web/protocol";
 
 export type ChatTurn = UserTurn | AgentTurn;
 
@@ -24,6 +25,7 @@ export type UserTurn = {
   key: string;
   uuid?: string;
   text: string;
+  attachments?: AttachmentInfo[];
   rawPayload?: unknown;
 };
 
@@ -155,6 +157,24 @@ function asString(value: unknown): string | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+/**
+ * Extract and validate an `AttachmentInfo[]` from a raw payload value.
+ * Returns `undefined` when the value is absent, malformed, or contains any
+ * entry that fails `parseAttachmentInfo`. A partially understood batch would
+ * let one bad entry look like a complete set, so the whole list is refused.
+ */
+function extractAttachments(value: unknown): AttachmentInfo[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const items: AttachmentInfo[] = [];
+  for (const entry of value) {
+    const parsed = parseAttachmentInfo(entry);
+    if (parsed === undefined) return undefined;
+    items.push(parsed);
+  }
+  return items.length > 0 ? items : undefined;
 }
 
 /** Extract text from a content block array (Anthropic shape). */
@@ -390,7 +410,7 @@ function findHistoricalOverlapIndex(
 export function deriveChatTurns(
   historicalMessages: readonly SessionMessage[],
   liveEvents: readonly BrowserReplayEvent[],
-  pendingRun?: { runId: string; prompt: string },
+  pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] },
 ): ChatTurn[] {
   // Collect identifiers from liveEvents to detect overlap with historicalMessages.
   const liveToolIds = new Set<string>();
@@ -602,11 +622,14 @@ export function deriveChatTurns(
         unconsumedHistoricalPrompts.shift();
       }
 
+      const attachments = extractAttachments(payload["attachments"]);
+
       if (promptText !== "") {
         turns.push({
           kind: "user",
           key: `live-user-${event.runId}`,
           text: promptText,
+          ...(attachments === undefined ? {} : { attachments }),
           rawPayload: event.payload,
         });
       }
@@ -769,6 +792,7 @@ export function deriveChatTurns(
       key: `user-pending-${pendingRun.runId}`,
       kind: "user",
       text: cleanUserPrompt(pendingRun.prompt),
+      ...(pendingRun.attachments === undefined ? {} : { attachments: pendingRun.attachments }),
     });
     turns.push({
       key: `agent-pending-${pendingRun.runId}`,
