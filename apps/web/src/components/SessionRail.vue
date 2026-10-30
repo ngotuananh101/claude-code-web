@@ -440,10 +440,10 @@ async function handleDeleteConfirm(): Promise<void> {
                     <MoreHorizontal :size="14" />
                   </button>
                 </PopoverTrigger>
-                <PopoverContent class="w-36 p-1" align="end" :side-offset="4">
+                <PopoverContent class="w-36 p-1 gap-0.5 rounded-lg" align="end" :side-offset="4">
                   <button
                     type="button"
-                    class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
                     @click.stop="triggerRename(row.session)"
                   >
                     <Pencil :size="13" class="shrink-0" />
@@ -451,7 +451,7 @@ async function handleDeleteConfirm(): Promise<void> {
                   </button>
                   <button
                     type="button"
-                    class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
                     @click.stop="triggerDelete(row.session)"
                   >
                     <Trash2 :size="13" class="shrink-0" />
