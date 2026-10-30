@@ -3,6 +3,7 @@ import type { AttachmentInfo, EffortLevel, RunnerModel, SessionSummary } from "@
 import {
   ArrowUp,
   FileImage,
+  FileText,
   FolderGit2,
   FolderOpen,
   GitBranch,
@@ -24,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   buildRunRequest,
   loadWorkspaceSessions,
@@ -633,6 +635,60 @@ async function stop(): Promise<void> {
       @dragleave="onDragLeave"
       @drop="onDrop"
     >
+      <!-- Tệp đính kèm ở trên phần nhập nội dung -->
+      <TooltipProvider :delay-duration="150">
+        <div v-if="attachments.length > 0" class="flex w-full flex-wrap gap-2 px-3.5 pt-2.5 pb-1">
+          <Tooltip v-for="(att, i) in attachments" :key="att.id">
+            <TooltipTrigger as-child>
+              <div
+                class="group relative flex h-18 w-18 items-center justify-center rounded-lg border border-border bg-muted/40 transition-colors hover:border-primary/40 cursor-default"
+              >
+                <img
+                  v-if="att.previewUrl"
+                  :src="att.previewUrl"
+                  :alt="att.name"
+                  class="h-full w-full rounded-lg object-cover"
+                  loading="lazy"
+                />
+                <div
+                  v-else
+                  class="flex flex-col items-center justify-center gap-1 p-1 text-center"
+                >
+                  <FileText :size="24" class="text-muted-foreground" />
+                  <span class="max-w-[60px] truncate font-mono text-[9px] text-muted-foreground">
+                    {{ att.name }}
+                  </span>
+                </div>
+
+                <!-- Kích thước file ở góc dưới -->
+                <div
+                  class="pointer-events-none absolute bottom-1 right-1 rounded bg-background/80 px-1 py-0.5 backdrop-blur-xs"
+                >
+                  <span class="font-mono text-[8px] text-muted-foreground leading-none">
+                    {{ formatSize(att.size) }}
+                  </span>
+                </div>
+
+                <!-- Nút xoá file: chỉ hiện khi hover hoặc focus -->
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  class="absolute -top-1.5 -right-1.5 z-10 size-5 rounded-full border border-border bg-background text-muted-foreground shadow-xs opacity-0 transition-opacity duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                  :aria-label="`Xoá tệp ${att.name}`"
+                  @click.stop="dropFile(i)"
+                >
+                  <X :size="11" />
+                </Button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" :side-offset="6" class="pointer-events-none max-w-xs break-all text-xs font-normal">
+              <p class="font-medium">{{ att.name }}</p>
+              <p class="text-[10px] opacity-80">{{ formatSize(att.size) }}</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
+
       <InputGroupTextarea
         v-model="prompt"
         class="max-h-52 min-h-12 w-full px-3.5 py-2.5 text-left text-[13px] leading-relaxed"
@@ -644,52 +700,9 @@ async function stop(): Promise<void> {
       <!-- Drag & drop overlay backdrop -->
       <div
         v-if="dragOver"
-        class="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/80 backdrop-blur-sm"
+        class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/80 backdrop-blur-sm"
       >
         <span class="text-sm font-medium text-foreground">Thả tệp vào đây để đính kèm</span>
-      </div>
-    </div>
-
-    <div v-if="attachments.length > 0" class="flex w-full flex-wrap gap-2 px-3.5 pb-2">
-      <div
-        v-for="(att, i) in attachments"
-        :key="att.id"
-        class="relative flex h-20 w-20 items-center justify-center rounded-md border border-border bg-muted"
-      >
-        <img
-          v-if="att.previewUrl"
-          :src="att.previewUrl"
-          :alt="att.name"
-          class="h-20 w-20 rounded-md object-cover"
-          loading="lazy"
-        />
-        <div
-          v-else
-          class="flex h-16 w-16 items-center justify-center"
-        >
-          <FileImage :size="32" class="text-muted-foreground" />
-        </div>
-        <div
-          class="absolute bottom-0 left-0 right-0 truncate rounded-b bg-background/90 px-1 text-[9px] text-muted-foreground"
-          :title="att.name"
-        >
-          {{ att.name }}
-        </div>
-        <div
-          class="absolute top-0 right-0 flex items-center justify-center rounded-bl-none rounded-b-none rounded-tl rounded-tr bg-background/90"
-        >
-          <span class="text-[9px] text-muted-foreground">{{ formatSize(att.size) }}</span>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          class="absolute -top-1 -right-1 size-5 rounded-full"
-          :aria-label="`Xoá tệp ${att.name}`"
-          title="Xoá tệp"
-          @click="dropFile(i)"
-        >
-          <X :size="11" />
-        </Button>
       </div>
     </div>
 

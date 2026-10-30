@@ -10,11 +10,11 @@
   "dependencies": {
     "@cc-web/protocol": "workspace:*",
     "@fontsource-variable/figtree": "^5.3.0",
-    "@lucide/vue": "^1.61.0",
+    "@lucide/vue": "^1.65.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vueuse/core": "^15.0.0",
     "class-variance-authority": "^0.7.1",
-    "cn": "^0.5.0",
+    "cn": "^0.5.1",
     "markdown-it": "^15.0.3",
     "reka-ui": "^2.11.0",
     "shadcn-vue": "^2.8.2",

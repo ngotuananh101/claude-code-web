@@ -51,11 +51,11 @@
       "dependencies": {
         "@cc-web/protocol": "workspace:*",
         "@fontsource-variable/figtree": "^5.3.0",
-        "@lucide/vue": "^1.61.0",
+        "@lucide/vue": "^1.65.0",
         "@tailwindcss/vite": "^4.3.3",
         "@vueuse/core": "^15.0.0",
         "class-variance-authority": "^0.7.1",
-        "cn": "^0.5.0",
+        "cn": "^0.5.1",
         "markdown-it": "^15.0.3",
         "reka-ui": "^2.11.0",
         "shadcn-vue": "^2.8.2",
@@ -284,7 +284,7 @@
 
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
-    "@lucide/vue": ["@lucide/vue@1.61.0", "", { "peerDependencies": { "vue": ">=3.0.1" } }, "sha512-XYclbwUQ6Mvf0UskBG9gJH91BdF3VK4Tt6Pv8PSntwPwNnf357PCQnma4TrzOEdwD49UYCtsTafpfytRIxm1cQ=="],
+    "@lucide/vue": ["@lucide/vue@1.65.0", "", { "peerDependencies": { "vue": ">=3.0.1" } }, "sha512-J34stKcr0jKIkzhG09Hz/lJgAnl9yhGgvaUcRcTQXv4qVGdfEBDzHGsZ5skS8anlRALLHV+EekBYWswEVkcBww=="],
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.32.1", "", { "dependencies": { "@hono/node-server": "^1.19.9 || ^2.0.5", "ajv": "^8.17.1", "ajv-formats": "^3.0.1", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.2.1", "express-rate-limit": "^8.2.1", "hono": "^4.11.4", "jose": "^6.1.3", "json-schema-typed": "^8.0.2", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.25 || ^4.0", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "@cfworker/json-schema": "^4.1.1" }, "optionalPeers": ["@cfworker/json-schema"] }, "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw=="],
 
@@ -538,7 +538,7 @@
 
     "clsx": ["clsx@2.1.1", "", {}, "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA=="],
 
-    "cn": ["cn@0.5.0", "", { "bin": { "cn": "bin/cn.mjs" } }, "sha512-JGEixZEpfFXm1P5uXwvEobOFLlHwIWi5v4tjd1ZwfiYmcEilkuD2l+054rvJcYCR1B+uVThHeUbgmNz1FwuxuA=="],
+    "cn": ["cn@0.5.1", "", { "bin": { "cn": "bin/cn.mjs" } }, "sha512-SA06SpzSWXRNrt/EQWnRpck9jEVDfVJonw8ZewiNR6pOC4U0SQ81tWaQ9/PKNPh/lWvjuY4CMlxpc8tJViiX6Q=="],
 
     "code-block-writer": ["code-block-writer@13.0.3", "", {}, "sha512-Oofo0pq3IKnsFtuHqSF7TqBfr71aeyZDVJ0HpmqB7FBM2qEigL0iPONSCZSO9pE9dZTAxANe5XHG9Uy0YMv8cg=="],
 
