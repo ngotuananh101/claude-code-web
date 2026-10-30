@@ -62,6 +62,17 @@ export type DispatchRequest = {
    */
   branch?: string;
   /**
+   * The reasoning effort the operator picked (§5.2). Validated by the route;
+   * absent leaves the SDK's own default. Rides the payload next to `model`.
+   */
+  effort?: string;
+  /**
+   * The standing ultracode mode (§5.2), off unless the operator turned it on.
+   * Absent leaves the SDK's own default — the flag is never sent as `false`
+   * for a run that did not ask for it.
+   */
+  ultracode?: boolean;
+  /**
    * The canonical workspace path (§15.1). When present the runner uses it as a
    * fallback if its own `workspacePathFor` cannot resolve the workspace id.
    */
@@ -150,6 +161,8 @@ export class Scheduler {
         ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
         ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
         ...(request.model === undefined ? {} : { model: request.model }),
+        ...(request.effort === undefined ? {} : { effort: request.effort }),
+        ...(request.ultracode === undefined ? {} : { ultracode: request.ultracode }),
         ...(request.branch === undefined ? {} : { branch: request.branch }),
         ...(request.resumeSessionId === undefined
           ? {}

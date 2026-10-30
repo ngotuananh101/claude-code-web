@@ -19,7 +19,12 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { createSdkStream } from "@cc-web/agent-adapter";
-import { type DeclaredWorkspace, PROTOCOL_VERSION, type RpcResultFrame } from "@cc-web/protocol";
+import {
+  type DeclaredWorkspace,
+  PROTOCOL_VERSION,
+  type RpcResultFrame,
+  type RunnerModel,
+} from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { BROWSE_CAPABILITIES, createBrowseHandler } from "./browse/handler.ts";
 import { EventPump } from "./connection/event-pump.ts";
@@ -120,6 +125,8 @@ export function helloFrame(input: {
   sdkVersion: string;
   bootId: string;
   declaredWorkspaces?: DeclaredWorkspace[];
+  /** What this boot's Claude Code offers (§5.2); absent means pre-discovery. */
+  models?: RunnerModel[];
 }): Record<string, unknown> {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -137,6 +144,10 @@ export function helloFrame(input: {
     // Ruling 13: the server gates an inspection on this, so a new server never
     // dispatches one to a runner that would misread the kind as a run start.
     capabilities: RUNNER_CAPABILITIES,
+    // §5.2: the host's own model lineup, discovered at boot. Omitted rather
+    // than empty when discovery never ran, so the server can tell "old runner"
+    // from "asked and found none" the same way it does for workspaces.
+    ...(input.models === undefined ? {} : { models: input.models }),
   };
 }
 
@@ -148,6 +159,11 @@ export type DaemonOptions = {
   databasePath?: string;
   /** Runs this runner currently believes are in flight (§14.3). */
   inventory?: () => RunnerInventoryItem[];
+  /**
+   * The models this boot's Claude Code offers (§5.2). Discovered once at boot
+   * — a config change needs a restart, exactly like the deployed binary.
+   */
+  models?: RunnerModel[];
   /**
    * Resolves a workspace id to its canonical path. A command naming a workspace
    * this runner does not know is refused rather than run in an arbitrary
@@ -370,6 +386,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         sdkVersion: options.sdkVersion,
         bootId: bootId(),
         ...(declared === undefined ? {} : { declaredWorkspaces: declared }),
+        ...(options.models === undefined ? {} : { models: options.models }),
       });
     },
     inventory: options.inventory ?? (() => runs.inventory()),

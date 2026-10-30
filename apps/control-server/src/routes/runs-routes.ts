@@ -1,5 +1,5 @@
 import { type Scheduler, sessionPin, workspacesForOwner } from "@cc-web/control-db";
-import { MODEL_IDS } from "@cc-web/protocol";
+import { EFFORT_LEVELS, type EffortLevel, MODEL_IDS } from "@cc-web/protocol";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
@@ -54,6 +54,8 @@ export async function handleDispatchRun(
     workspaceId?: unknown;
     permissionMode?: unknown;
     model?: unknown;
+    effort?: unknown;
+    ultracode?: unknown;
     runnerId?: unknown;
     branch?: unknown;
     resumeSessionId?: unknown;
@@ -84,17 +86,43 @@ export async function handleDispatchRun(
     permissionMode = record.permissionMode;
   }
 
-  // §5.2: the model is a per-run choice over the names §8.1 fixes (the one
-  // MODEL_IDS list — the composer labels the same names). Same rule as the
-  // permission mode — a typo must be refused, not silently run on a model
-  // the operator did not ask for.
-  const MODELS: ReadonlySet<string> = new Set(MODEL_IDS);
+  // §5.2: the model is a per-run choice. The runner advertises what its Claude
+  // Code offers — including the custom names an operator configured — so the
+  // shape is checked here and the membership is checked once the runner is
+  // chosen (below). Same rule as the permission mode: a typo must be refused,
+  // never silently run on a model the operator did not ask for. Printable
+  // ASCII only: the value reaches the SDK as a model name, not a shell word.
+  const MODEL_VALUE = /^[\x21-\x7e]{1,200}$/;
   let model: string | undefined;
   if (record.model !== undefined) {
-    if (typeof record.model !== "string" || !MODELS.has(record.model)) {
+    if (typeof record.model !== "string" || !MODEL_VALUE.test(record.model)) {
       return new Response("bad request", { status: 400 });
     }
     model = record.model;
+  }
+
+  // §5.2: effort is the reasoning depth Claude Code applies to the run.
+  // `max` is session-only there, so it has to be a wire value. A level this
+  // protocol does not speak is refused rather than downgraded silently — the
+  // operator asked for a depth and must learn it was not available.
+  let effort: EffortLevel | undefined;
+  if (record.effort !== undefined) {
+    const level = EFFORT_LEVELS.find((candidate) => candidate === record.effort);
+    if (level === undefined) {
+      return new Response("bad request", { status: 400 });
+    }
+    effort = level;
+  }
+
+  // §5.2: ultracode is a standing orchestration mode, not an effort level; the
+  // two travel separately because setting effort must not silently turn it off
+  // (the SDK's own flag semantics).
+  let ultracode: boolean | undefined;
+  if (record.ultracode !== undefined) {
+    if (typeof record.ultracode !== "boolean") {
+      return new Response("bad request", { status: 400 });
+    }
+    ultracode = record.ultracode;
   }
 
   // M4: the branch is a per-run choice over the workspace's local heads. The
@@ -272,6 +300,21 @@ export async function handleDispatchRun(
     return new Response(connected ? "runner_not_ready" : "runner_offline", { status: 503 });
   }
 
+  // §5.2: the chosen runner is the authority on what it can run. A runner that
+  // advertised its models accepts only those; one that predates discovery
+  // advertises nothing, and the protocol's own list is all the server can
+  // honestly promise.
+  if (model !== undefined) {
+    const advertised = runnerGateway.modelsOf(ready);
+    const known =
+      advertised.length > 0
+        ? advertised.some((candidate) => candidate.value === model)
+        : MODEL_IDS.some((candidate) => candidate === model);
+    if (!known) {
+      return new Response("unknown_model", { status: 400 });
+    }
+  }
+
   const runId = crypto.randomUUID();
   const attemptId = crypto.randomUUID();
   // The payload carries the pin's workspace for a pinned session: a
@@ -297,6 +340,8 @@ export async function handleDispatchRun(
       ...(workspacePath === undefined ? {} : { workspacePath }),
       ...(permissionMode === undefined ? {} : { permissionMode }),
       ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(ultracode === undefined ? {} : { ultracode }),
       ...(branch === undefined ? {} : { branch }),
       ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
     },

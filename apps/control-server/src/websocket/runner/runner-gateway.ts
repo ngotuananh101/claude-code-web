@@ -35,6 +35,7 @@ import {
   type RpcResultFrame,
   type RunnerCommand,
   type RunnerEvent,
+  type RunnerModel,
   type RunnerRunState,
   RunRegistry,
   reconcile,
@@ -89,6 +90,8 @@ type Connection = {
   state: "connected" | "ready";
   /** What the hello declared; a reconnect that re-declares replaces it. */
   capabilities: string[];
+  /** The models the runner's Claude Code offers (§5.2), same lifetime. */
+  models: RunnerModel[];
 };
 
 /** The subset of `ServerWebSocket` used here; keeps tests free of a real server. */
@@ -263,6 +266,7 @@ export class RunnerGateway {
       negotiated: false,
       state: "connected",
       capabilities: [],
+      models: [],
     });
 
     // Close the socket this one replaced, rather than waiting for it to speak.
@@ -408,6 +412,15 @@ export class RunnerGateway {
   }
 
   /**
+   * The models the runner's hello advertised (§5.2). Empty when nothing is
+   * live or the runner predates discovery — a caller reads that as "unknown",
+   * never as "no models available".
+   */
+  modelsOf(runnerId: string): readonly RunnerModel[] {
+    return this.#live.get(runnerId)?.models ?? [];
+  }
+
+  /**
    * Hand a command to a runner's current socket (§9.2).
    *
    * Refuses anything that is not `ready`. The distinction matters: a `connected`
@@ -468,6 +481,7 @@ export class RunnerGateway {
 
     connection.negotiated = true;
     connection.capabilities = [...result.capabilities];
+    connection.models = [...result.models];
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 

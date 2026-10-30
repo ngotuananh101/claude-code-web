@@ -314,7 +314,7 @@ export function createServer(options: ServerOptions): ServerHandle {
       }
 
       if (url.pathname === "/api/runners" && request.method === "GET") {
-        return handleListRunners(request, options, allowed, browserGateway);
+        return handleListRunners(request, options, allowed, browserGateway, runnerGateway);
       }
 
       const revokeMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/revoke$/);

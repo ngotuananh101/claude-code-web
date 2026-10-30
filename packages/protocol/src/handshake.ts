@@ -12,6 +12,7 @@
  * reconciliation before dispatch.
  */
 
+import { parseRunnerModels, type RunnerModel } from "./models.ts";
 import { type DeclaredWorkspace, parseDeclaredWorkspaces } from "./reconcile.ts";
 
 export type ServerPolicy = {
@@ -45,6 +46,12 @@ export type NegotiateResult =
        * misread.
        */
       capabilities: string[];
+      /**
+       * The models this runner's Claude Code offers, discovered at boot. Empty
+       * for a runner that predates the field — the dispatch route then falls
+       * back to the protocol's own `MODEL_IDS`, never to "accept anything".
+       */
+      models: RunnerModel[];
     }
   | {
       ok: false;
@@ -123,6 +130,14 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     return fail("malformed", "capabilities must be an array of strings");
   }
 
+  // §5.2: the models the runner's Claude Code offers, so the composer can list
+  // what that host actually has — including custom names the operator
+  // configured. Absent is a pre-discovery runner, not an error.
+  const models = parseRunnerModels(record["models"]);
+  if (models === undefined) {
+    return fail("malformed", "models must be an array of model descriptors");
+  }
+
   const clientVersion = record["protocolVersion"];
 
   // Refuse a version the server cannot speak. Silently accepting and ignoring
@@ -139,6 +154,7 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     connectionState: "connected",
     workspaces,
     capabilities,
+    models,
     negotiation: {
       protocolVersion: policy.maxProtocolVersion,
       policy: {

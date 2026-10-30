@@ -30,6 +30,10 @@ export type SdkStreamInput = {
   permissionMode?: string;
   /** The model the run named (§5.2); absent leaves the SDK's own default. */
   model?: string;
+  /** The reasoning effort the run named (§5.2); absent leaves the SDK's default. */
+  effort?: string;
+  /** The standing ultracode mode (§5.2); absent leaves the SDK's default. */
+  ultracode?: boolean;
   /**
    * The approval gate (§13). Present means the runner wants to be asked;
    * absent leaves the SDK's own permission flow untouched.
@@ -87,6 +91,11 @@ export function createSdkStream(
   // the runner's own closure — both pass through verbatim.
   if (input.permissionMode !== undefined) options["permissionMode"] = input.permissionMode;
   if (input.model !== undefined) options["model"] = input.model;
+  // §5.2: effort is a first-class option; ultracode rides the settings overlay
+  // because it is a session flag, not a per-turn one. The two are independent:
+  // setting one must never imply the other, which is exactly the SDK's rule.
+  if (input.effort !== undefined) options["effort"] = input.effort;
+  if (input.ultracode !== undefined) options["settings"] = { ultracode: input.ultracode };
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
   // §20.3: unlike the options above there is no "inherit" to preserve — the
   // SDK's own resolution cannot find the CLI inside a compiled binary — so the

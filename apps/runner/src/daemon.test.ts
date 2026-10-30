@@ -272,6 +272,45 @@ describe("the hello frame", () => {
     });
   });
 
+  test("carries the discovered models when there are any", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+      models: [
+        {
+          value: "pro",
+          displayName: "pro",
+          description: "Custom Opus model",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
+    });
+    expect(frame["models"]).toEqual([
+      {
+        value: "pro",
+        displayName: "pro",
+        description: "Custom Opus model",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+    ]);
+  });
+
+  test("omits the models field when discovery never ran", () => {
+    // Distinguished from an empty list on purpose: the server reads absence as
+    // "pre-discovery runner" and falls back to MODEL_IDS.
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+    });
+    expect("models" in frame).toBe(false);
+  });
+
   test("an empty declaration is sent as an empty list, never omitted", () => {
     const frame = helloFrame({
       runnerId: "runner-a",

@@ -7,7 +7,7 @@ import {
   upsertRunnerWorkspaces,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
-import { MODEL_IDS } from "@cc-web/protocol";
+import { EFFORT_LEVELS, MODEL_IDS, type RunnerModel } from "@cc-web/protocol";
 import { acceptCommand, migrateRunnerDb } from "@cc-web/runner-db";
 import type { Link } from "../../../runner/src/connection/reconnect-loop.ts";
 import { dialWebSocket } from "../../../runner/src/connection/websocket-link.ts";
@@ -77,6 +77,8 @@ async function connectRunner(
   options: {
     runnerId?: string;
     workspaces?: Array<{ workspaceId: string; path: string; branches?: string[] }>;
+    /** What this runner's Claude Code offers; absent means pre-discovery. */
+    models?: RunnerModel[];
   } = {},
 ) {
   const runnerId = options.runnerId ?? "runner-a";
@@ -139,6 +141,7 @@ async function connectRunner(
         activeRuns: [],
         eventOffsets: [],
         workspaces: options.workspaces ?? [],
+        ...(options.models === undefined ? {} : { models: options.models }),
       },
     }),
   );
@@ -406,6 +409,60 @@ describe("the model on POST /api/sessions/:id/runs", () => {
     );
   });
 
+  test("a custom model the runner advertises is accepted", async () => {
+    // §5.2: the runner's own Claude Code is the authority on its lineup — an
+    // operator-configured name like "pro" is not in MODEL_IDS and must still run.
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      models: [
+        {
+          value: "pro",
+          displayName: "pro",
+          description: "Custom Opus model",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", { model: "pro" });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { model?: string }).model === "pro",
+      ),
+    );
+  });
+
+  test("a model the runner did not advertise is refused", async () => {
+    // The advertised list replaces the fallback: a runner that told the server
+    // what it has must not be sent a model it did not name, even one MODEL_IDS
+    // would have allowed.
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox, {
+      models: [
+        {
+          value: "pro",
+          displayName: "pro",
+          description: "",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", { model: "opus" });
+    expect(response.status).toBe(400);
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
   test("an absent model is omitted from the payload", async () => {
     const { url, cookie, credential } = await start();
     const inbox = runnerInbox();
@@ -431,6 +488,94 @@ describe("the model on POST /api/sessions/:id/runs", () => {
     expect(
       payloads.some((row) => "model" in (JSON.parse(row.payload) as Record<string, unknown>)),
     ).toBe(false);
+  });
+});
+
+describe("effort and ultracode on POST /api/sessions/:id/runs", () => {
+  test("a chosen effort and ultracode travel in the payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", {
+      effort: "xhigh",
+      ultracode: true,
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => {
+          const payload = JSON.parse(row.payload) as { effort?: string; ultracode?: boolean };
+          return payload.effort === "xhigh" && payload.ultracode === true;
+        },
+      ),
+    );
+  });
+
+  test("every EFFORT_LEVELS member is accepted", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    for (const effort of EFFORT_LEVELS) {
+      const response = await dispatch(url, cookie, `hello ${effort}`, `session-effort-${effort}`, {
+        effort,
+      });
+      expect(response.status).toBe(202);
+      const { runId } = (await response.json()) as { runId: string };
+      handle!.scheduler.release(runId);
+    }
+  });
+
+  test("an unknown effort is refused, not downgraded", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", { effort: "extreme" });
+    expect(response.status).toBe(400);
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("a non-boolean ultracode is refused", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello", "session-1", { ultracode: "yes" });
+    expect(response.status).toBe(400);
+  });
+
+  test("an absent effort and ultracode are omitted from the payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await dispatch(url, cookie, "hello");
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+      ),
+    );
+
+    const payloads = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    for (const row of payloads) {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      expect("effort" in payload).toBe(false);
+      expect("ultracode" in payload).toBe(false);
+    }
   });
 });
 

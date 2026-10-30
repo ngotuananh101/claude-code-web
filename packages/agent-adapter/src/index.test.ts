@@ -111,6 +111,29 @@ describe("mapping a run to SDK options", () => {
     expect(params.options !== undefined && "model" in params.options).toBe(false);
   });
 
+  test("forwards effort as a first-class option", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w", effort: "xhigh" });
+    expect(params.options?.["effort"]).toBe("xhigh");
+  });
+
+  test("forwards ultracode through the settings overlay", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w", ultracode: true });
+    // §5.2: ultracode is a session flag, so it rides `settings` rather than a
+    // top-level option — and it must arrive on either value, not only `true`.
+    expect(params.options?.["settings"]).toEqual({ ultracode: true });
+    expect(
+      captureOptions({ prompt: "hi", cwd: "/w", ultracode: false }).options?.["settings"],
+    ).toEqual({ ultracode: false });
+  });
+
+  test("omits effort and settings entirely when the run names neither", () => {
+    const params = captureOptions({ prompt: "hi", cwd: "/w" });
+    expect(params.options !== undefined && "effort" in params.options).toBe(false);
+    // Nothing else in this adapter writes `settings`, so its absence here pins
+    // that an unrequested ultracode is inherit, not "off".
+    expect(params.options !== undefined && "settings" in params.options).toBe(false);
+  });
+
   test("forwards the approval gate as canUseTool when one is given", () => {
     const canUseTool = async () => ({ behavior: "deny", message: "no" }) as const;
     const params = captureOptions({ prompt: "hi", cwd: "/w", canUseTool });

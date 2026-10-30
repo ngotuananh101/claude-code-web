@@ -7,6 +7,7 @@
  * must never appear in a URL (§19.4).
  */
 
+import type { EffortLevel } from "@cc-web/protocol";
 import { authFetch } from "./auth-api.ts";
 
 export type StartRunResult =
@@ -27,6 +28,10 @@ export type StartRunRequest = {
   runnerId?: string;
   permissionMode?: string;
   model?: string;
+  /** The reasoning effort for this run (§5.2); omitted means SDK default. */
+  effort?: EffortLevel;
+  /** The standing ultracode mode; always sent once the picker is in play. */
+  ultracode?: boolean;
   /** The declared local head to check out before the run (M4). */
   branch?: string;
   /**
@@ -45,6 +50,8 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.runnerId !== undefined) body["runnerId"] = run.runnerId;
     if (run.permissionMode !== undefined) body["permissionMode"] = run.permissionMode;
     if (run.model !== undefined) body["model"] = run.model;
+    if (run.effort !== undefined) body["effort"] = run.effort;
+    if (run.ultracode !== undefined) body["ultracode"] = run.ultracode;
     if (run.branch !== undefined) body["branch"] = run.branch;
     if (run.resumeSessionId !== undefined) body["resumeSessionId"] = run.resumeSessionId;
     response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {

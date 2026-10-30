@@ -258,6 +258,8 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     prompt: "hello world",
     permission: "default",
     model: "default",
+    effort: null,
+    ultracode: false,
     workspaceId: "ws-proj",
     projectRunnerId: "runner-a",
     runnerId: "runner-a",
@@ -345,6 +347,19 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     expect(body.workspaceId).toBeUndefined();
     expect(body.runnerId).toBeUndefined();
     expect(body.branch).toBeUndefined();
+  });
+
+  test("effort travels only when chosen; ultracode always travels", () => {
+    // §5.2: no effort means the SDK's own default (the option is omitted), but
+    // the ultracode toggle is the operator's standing choice either way — an
+    // omitted flag would let a host setting silently turn it back on.
+    const plain = buildRunRequest(baseInputs);
+    expect(plain.effort).toBeUndefined();
+    expect(plain.ultracode).toBe(false);
+
+    const tuned = buildRunRequest({ ...baseInputs, effort: "max", ultracode: true });
+    expect(tuned.effort).toBe("max");
+    expect(tuned.ultracode).toBe(true);
   });
 
   test("prompt is trimmed", () => {

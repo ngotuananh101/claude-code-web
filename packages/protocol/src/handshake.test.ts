@@ -121,6 +121,53 @@ describe("hello negotiation", () => {
     }
   });
 
+  test("an absent models field negotiates as an empty list", () => {
+    // A pre-discovery runner advertises nothing; the route then falls back to
+    // MODEL_IDS instead of treating every hello as malformed.
+    const result = negotiateHello(hello(), policy);
+    expect(result).toMatchObject({ ok: true, models: [] });
+  });
+
+  test("a runner declaring models has them returned", () => {
+    const result = negotiateHello(
+      hello({
+        models: [
+          {
+            value: "pro",
+            displayName: "pro",
+            description: "Custom Opus model",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "max"],
+            // The SDK's own extra fields ride along; only the wire fields survive.
+            resolvedModel: "claude-opus-5",
+          },
+        ],
+      }),
+      policy,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      models: [
+        {
+          value: "pro",
+          displayName: "pro",
+          description: "Custom Opus model",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "max"],
+        },
+      ],
+    });
+  });
+
+  test("a models field outside the shape is malformed", () => {
+    for (const bad of ["pro", [1], [{}], [{ value: "" }], null]) {
+      expect(negotiateHello(hello({ models: bad }), policy)).toMatchObject({
+        ok: false,
+        reason: "malformed",
+      });
+    }
+  });
+
   test("rejects a hello carrying provider secrets or raw environment", () => {
     // §6.2: the hello payload carries no provider keys, raw env or full config.
     // Accepting one would put a credential into the control journal permanently.

@@ -16,6 +16,7 @@ import { rm, writeFile } from "node:fs/promises";
 import type { DeclaredWorkspace } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
+import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
 import { runnerInfo } from "../index.ts";
@@ -151,10 +152,23 @@ async function start(): Promise<void> {
     return cachedDiscovered;
   };
 
+  // §5.2: ask this host's Claude Code which models it offers — custom names
+  // included. Bounded and best-effort (never rejects): a probe that cannot
+  // answer just means the composer falls back to the protocol's own list.
+  const models = await discoverModels({
+    cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? process.cwd(),
+  });
+  console.log(
+    `discovered ${models.length} model${models.length === 1 ? "" : "s"}: ${models
+      .map((model) => model.value)
+      .join(", ")}`,
+  );
+
   const daemon = await startDaemon({
     identityDir: dir,
     runnerVersion: "0.0.0",
     sdkVersion: "0.3.309",
+    models,
     workspacePathFor: (workspaceId) => {
       const list = discoveredWorkspaces();
       const resolve = workspaceResolverFrom(list);

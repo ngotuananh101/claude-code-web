@@ -40,6 +40,10 @@ export type SdkOptions = {
   permissionMode: string;
   /** The model the run named (§5.2); absent means the SDK's own default. */
   model?: string;
+  /** The reasoning effort the run named (§5.2); absent means the SDK's default. */
+  effort?: string;
+  /** The standing ultracode mode (§5.2); absent leaves the SDK's default. */
+  ultracode?: boolean;
   canUseTool?: (
     toolName: string,
     input: unknown,
@@ -177,6 +181,13 @@ export async function executeRun(
   // follows the same rule: it only exists as a non-empty string.
   const model =
     typeof record?.["model"] === "string" && record["model"] !== "" ? record["model"] : undefined;
+  // Effort and ultracode follow the same rule: a non-empty string / a real
+  // boolean, else absent — an unnamed choice must not become an option.
+  const effort =
+    typeof record?.["effort"] === "string" && record["effort"] !== ""
+      ? record["effort"]
+      : undefined;
+  const ultracode = typeof record?.["ultracode"] === "boolean" ? record["ultracode"] : undefined;
   const branch =
     typeof record?.["branch"] === "string" && record["branch"] !== ""
       ? record["branch"]
@@ -379,6 +390,8 @@ export async function executeRun(
       ...(options.signal ? { abort: options.signal } : {}),
       permissionMode,
       ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(ultracode === undefined ? {} : { ultracode }),
       ...(canUseTool === undefined ? {} : { canUseTool }),
     });
 

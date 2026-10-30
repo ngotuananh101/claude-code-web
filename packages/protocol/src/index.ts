@@ -294,7 +294,14 @@ export {
   type SnapshotStatusResult,
   type WorkspaceInspectRequest,
 } from "./inspection.ts";
-export { MODEL_IDS, type ModelId } from "./models.ts";
+export {
+  EFFORT_LEVELS,
+  type EffortLevel,
+  MODEL_IDS,
+  type ModelId,
+  parseRunnerModels,
+  type RunnerModel,
+} from "./models.ts";
 export * from "./mutation.ts";
 export {
   type DeclaredWorkspace,

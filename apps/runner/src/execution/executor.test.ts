@@ -1458,6 +1458,59 @@ describe("the model", () => {
   });
 });
 
+describe("effort and ultracode", () => {
+  function capture(payload: Record<string, unknown>) {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let captured: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      captured = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const done = executeRun(
+      db,
+      { ...COMMAND, payload },
+      {
+        workspacePath: WORKSPACES.get("workspace-1")!,
+        sdk,
+      },
+    );
+    return done.then(() => captured);
+  }
+
+  test("forwards the run's effort and ultracode into the SDK options", async () => {
+    const captured = await capture({ prompt: "hello", effort: "max", ultracode: true });
+    expect(captured?.effort).toBe("max");
+    expect(captured?.ultracode).toBe(true);
+  });
+
+  test("an absent or empty one leaves the SDK option unset", async () => {
+    // `false` is a real choice (turn it off) and must travel; absent and empty
+    // mean inherit, and setting anything would shadow the host's own flags.
+    const absent = await capture({ prompt: "hello" });
+    expect(absent?.effort).toBeUndefined();
+    expect(absent?.ultracode).toBeUndefined();
+
+    const empty = await capture({ prompt: "hello", effort: "", ultracode: "yes" });
+    expect(empty?.effort).toBeUndefined();
+    expect(empty?.ultracode).toBeUndefined();
+  });
+
+  test("ultracode false travels rather than being dropped", async () => {
+    const captured = await capture({ prompt: "hello", ultracode: false });
+    expect(captured?.ultracode).toBe(false);
+  });
+});
+
 describe("the approval gate", () => {
   test("a canUseTool call suspends the run as approval.requested and resolves from the router", async () => {
     const { db } = setup();

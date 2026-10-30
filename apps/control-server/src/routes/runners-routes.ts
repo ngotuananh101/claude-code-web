@@ -53,6 +53,7 @@ export async function handleListRunners(
   options: ServerOptions,
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
+  runnerGateway: RunnerGateway,
 ): Promise<Response> {
   const origin = request.headers.get("origin");
   if (origin !== null && !allowedOrigins.has(origin)) {
@@ -67,7 +68,16 @@ export async function handleListRunners(
     return new Response("unauthorized", { status: 401 });
   }
 
-  return new Response(JSON.stringify({ runners: listRunners(options.db, authorized.userId) }), {
+  // Each live runner's advertised models ride along (§5.2), so the composer can
+  // list what that host's Claude Code actually offers — including the custom
+  // names an operator configured. An offline runner has no live hello, so its
+  // list is empty; the composer reads that as "unknown", not "none".
+  const runners = listRunners(options.db, authorized.userId).map((runner) => ({
+    ...runner,
+    models: runnerGateway.modelsOf(runner.runnerId),
+  }));
+
+  return new Response(JSON.stringify({ runners }), {
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });

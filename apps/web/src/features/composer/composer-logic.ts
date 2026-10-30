@@ -9,7 +9,7 @@
  * into these helpers.
  */
 
-import type { SessionSummary } from "@cc-web/protocol";
+import type { EffortLevel, SessionSummary } from "@cc-web/protocol";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { type RegisterWorkspaceOutcome, registerWorkspace } from "@/services/browse-api.ts";
 import type { StartRunRequest } from "@/services/runs-api.ts";
@@ -138,6 +138,10 @@ export type RunPayloadInputs = {
   prompt: string;
   permission: string;
   model: string;
+  /** The chosen effort; null means the SDK's own default. */
+  effort: EffortLevel | null;
+  /** The standing ultracode mode — the picker's current state, sent verbatim. */
+  ultracode: boolean;
   /** The selected folder's workspace id; undefined when no folder is chosen. */
   workspaceId: string | undefined;
   /** The selected folder's runner id, or undefined when no folder is chosen. */
@@ -166,8 +170,17 @@ export type RunPayloadInputs = {
  * shape without mounting the Vue SFC.
  */
 export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
-  const { prompt, permission, model, workspaceId, projectRunnerId, runnerId, selectedSession } =
-    inputs;
+  const {
+    prompt,
+    permission,
+    model,
+    effort,
+    ultracode,
+    workspaceId,
+    projectRunnerId,
+    runnerId,
+    selectedSession,
+  } = inputs;
 
   const body: StartRunRequest = {
     prompt: prompt.trim(),
@@ -176,6 +189,12 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
 
   // Model travels only when not "default" — nothing sent means the SDK's own default.
   if (model !== "default") body.model = model;
+
+  // §5.2: effort rides only when one was chosen; ultracode always travels,
+  // because the toggle is the operator's standing choice and an omitted flag
+  // would let a host config silently turn it back on.
+  if (effort !== null) body.effort = effort;
+  body.ultracode = ultracode;
 
   // Workspace / runner context rides only on the new-session page, and only
   // once the operator has chosen a folder to run in.

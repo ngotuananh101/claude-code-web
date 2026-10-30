@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ModelId, SessionSummary } from "@cc-web/protocol";
+import type { EffortLevel, RunnerModel, SessionSummary } from "@cc-web/protocol";
 import {
   ArrowUp,
   FolderGit2,
@@ -30,12 +30,25 @@ import {
   registerCustomWorkspace,
   workspaceForPath,
 } from "@/features/composer/composer-logic.ts";
+import {
+  effortLevelsFor,
+  modelFor,
+  normalizeEffort,
+  pickerModels,
+} from "@/features/composer/model-picker.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
-import { authFetch } from "../services/auth-api";
+import {
+  fetchRunners,
+  liveRunners,
+  modelsOfRunner,
+  type OwnerRunner,
+} from "../services/runners-api";
 import { cancelRun, startRun } from "../services/runs-api";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api";
+import { sessions } from "../stores/sessions.ts";
 import FolderBrowserModal from "./FolderBrowserModal.vue";
+import ModelPickerPopover from "./ModelPickerPopover.vue";
 
 /**
  * The prompt box (§16.1). On the new-session page (sessionId null) it mints
@@ -74,7 +87,10 @@ const sending = ref(false);
 /** The chosen runner; empty until the operator picks one. */
 const runnerId = ref("");
 const permission = ref("default");
+/** The picker's state (§5.2): model, effort, and the standing ultracode mode. */
 const model = ref("default");
+const effort = ref<EffortLevel | null>(null);
+const ultracode = ref(false);
 
 /** Sessions discovered for the selected workspace; null means "not loaded yet". */
 const workspaceSessions = ref<SessionSummary[] | null>(null);
@@ -93,33 +109,50 @@ const permissionLabels: Record<string, string> = {
   plan: "Chỉ lập kế hoạch",
   bypassPermissions: "Toàn quyền",
 };
-// Keyed by ModelId: a name added to the protocol's MODEL_IDS list without a
-// label here is a type error, so the dropdown can never drift from the route's
-// validation set.
-const modelIdLabels: Record<ModelId, string> = {
-  sonnet: "Sonnet",
-  opus: "Opus",
-  haiku: "Haiku",
-};
-const modelLabels: Record<string, string> = {
-  default: "Mặc định",
-  ...modelIdLabels,
-};
-
 /** The runners the operator chooses from — no run is placed without a choice. */
-const runners = ref<Array<{ runnerId: string }>>([]);
+const runners = ref<OwnerRunner[]>([]);
 const workspaces = ref<OwnerWorkspace[]>([]);
 
 onMounted(() => {
-  void (async () => {
-    const response = await authFetch("/api/runners");
-    if (!response.ok) return;
-    const body = (await response.json()) as {
-      runners: Array<{ runnerId: string; revokedAt: number | null }>;
-    };
-    runners.value = body.runners.filter((r) => r.revokedAt === null);
-  })();
+  void refreshRunners();
   void refreshWorkspaces();
+});
+
+/**
+ * The runner registry, with each live runner's advertised models (§5.2).
+ * A failure keeps the picker on the protocol fallback rather than emptying it.
+ */
+async function refreshRunners(): Promise<void> {
+  const result = await fetchRunners();
+  if (result.ok) runners.value = liveRunners(result.runners);
+}
+
+/**
+ * Whose model lineup the picker shows: the runner being picked on the
+ * new-session page, or — for an existing session — the runner its pin holds.
+ * Empty until either is known, which the picker renders as the fallback list.
+ */
+const pickerRunnerId = computed(() => {
+  if (runnerId.value !== "") return runnerId.value;
+  if (props.sessionId === null) return "";
+  return sessions.sessions.find((s) => s.sessionId === props.sessionId)?.runnerId ?? "";
+});
+
+/** What that runner advertised; empty means "unknown" — the picker falls back. */
+const advertisedModels = computed<RunnerModel[]>(() =>
+  modelsOfRunner(runners.value, pickerRunnerId.value),
+);
+
+// Switching runners (or a runner reporting a new lineup) must not leave the
+// picker on a model this host never named: fall back to its first row, then
+// drop an effort that row cannot honour. The route would refuse the stale
+// value anyway — better to show the operator what would actually run.
+watch(advertisedModels, (advertised) => {
+  const offered = pickerModels(advertised);
+  if (modelFor(offered, model.value) === undefined) {
+    model.value = offered[0]?.value ?? "default";
+  }
+  effort.value = normalizeEffort(effortLevelsFor(modelFor(offered, model.value)), effort.value);
 });
 
 /**
@@ -289,6 +322,8 @@ async function send(): Promise<void> {
     prompt: prompt.value,
     permission: permission.value,
     model: model.value,
+    effort: effort.value,
+    ultracode: ultracode.value,
     workspaceId: folder?.workspaceId,
     projectRunnerId: folder?.runnerId,
     runnerId: runnerId.value,
@@ -507,20 +542,13 @@ async function stop(): Promise<void> {
         </Select>
       </div>
       <div class="flex items-center gap-2">
-        <Select v-model="model">
-          <SelectTrigger
-            size="sm"
-            aria-label="Chọn model"
-            class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent position="popper">
-            <SelectItem v-for="(label, value) in modelLabels" :key="value" :value="value">
-              {{ label }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
+        <ModelPickerPopover
+          v-model:model="model"
+          v-model:effort="effort"
+          v-model:ultracode="ultracode"
+          :runner-id="pickerRunnerId"
+          :advertised="advertisedModels"
+        />
         <Button
           v-if="activeRunId"
           variant="destructive"

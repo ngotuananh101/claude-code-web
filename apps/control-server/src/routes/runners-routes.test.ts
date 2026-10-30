@@ -129,7 +129,10 @@ describe("runner registry routes", () => {
     expect(response.status).toBe(200);
     expect(body.runners).toHaveLength(2);
     for (const runner of body.runners) {
-      expect(Object.keys(runner).sort()).toEqual(["createdAt", "revokedAt", "runnerId"]);
+      // `models` is the one non-registry field: an offline runner advertises
+      // none, which the composer reads as "unknown" and fills from its fallback.
+      expect(Object.keys(runner).sort()).toEqual(["createdAt", "models", "revokedAt", "runnerId"]);
+      expect(runner["models"]).toEqual([]);
     }
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
@@ -275,6 +278,69 @@ describe("runner registry routes", () => {
 
     // This is the whole point: what the web minted is what the gateway accepts.
     expect(messages[0]).toMatchObject({ type: "hello.ok" });
+    socket.close();
+  });
+
+  test("the list carries a live runner's advertised models", async () => {
+    // The composer's picker is built from this endpoint (§5.2), so a runner's
+    // own Claude Code lineup — custom names included — has to survive the hop
+    // from its hello into the listing.
+    const { url, wsUrl, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string; token: string };
+
+    const socket = new WebSocket(`${wsUrl}/ws/runner`, {
+      headers: { Authorization: `Bearer ${minted.token}` },
+    } as never);
+    const messages: Array<Record<string, unknown>> = [];
+    socket.addEventListener("message", (event) => {
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("connect failed")));
+    });
+
+    const advertised = [
+      {
+        value: "pro",
+        displayName: "pro",
+        description: "Custom Opus model",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "max"],
+      },
+    ];
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        hello: {
+          protocolVersion: 1,
+          runnerId: minted.runnerId,
+          bootId: "boot-1",
+          runnerVersion: "0.0.0",
+          sdkVersion: "0.3.309",
+          platform: "linux/x64",
+          maxConcurrentRuns: 1,
+          activeRuns: [],
+          eventOffsets: [],
+          models: advertised,
+        },
+      }),
+    );
+
+    const deadline = Date.now() + 3000;
+    while (messages.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+    expect(messages[0]).toMatchObject({ type: "hello.ok" });
+
+    const body = (await (
+      await fetch(`${url}/api/runners`, { headers: { Origin: origin, Cookie: cookie } })
+    ).json()) as { runners: Array<{ runnerId: string; models: unknown }> };
+
+    expect(body.runners[0]?.models).toEqual(advertised);
     socket.close();
   });
 });
