@@ -712,9 +712,14 @@ watch(tab, (next) => {
                     loại trừ
                   </span>
 
-                  <!-- Per-file revert with inline confirm -->
+                  <!-- Per-file revert with inline confirm. `confirmingPath` is
+                       a ref unwrapped by the template: it IS the path, so the
+                       confirm reads and writes the ref itself — `.value` here
+                       would be the property of a string (undefined) when the
+                       ref holds one, and a render-time TypeError when it
+                       holds null, which is what tore the panel down. -->
                   <template v-if="entry.revertable && entry.status !== 'excluded'">
-                    <template v-if="confirmingPath.value === entry.path">
+                    <template v-if="confirmingPath === entry.path">
                       <button
                         type="button"
                         class="shrink-0 text-destructive hover:underline"
@@ -727,7 +732,7 @@ watch(tab, (next) => {
                       <button
                         type="button"
                         class="shrink-0 text-primary hover:underline"
-                        @click="confirmingPath.value = entry.path"
+                        @click="confirmingPath = entry.path"
                       >
                         khôi phục
                       </button>
