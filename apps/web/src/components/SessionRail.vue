@@ -379,7 +379,7 @@ async function handleDeleteConfirm(): Promise<void> {
             >
               <Button
                 variant="ghost"
-                class="h-auto w-full justify-between gap-2 rounded-lg pl-2.5 pr-8 py-1.5 font-normal"
+                class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
                 :class="
                   row.session.sessionId === sessions.activeId &&
                   'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
@@ -401,8 +401,15 @@ async function handleDeleteConfirm(): Promise<void> {
                     {{ row.session.title || row.session.sessionId }}
                   </span>
                 </span>
-                <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span class="group-hover:opacity-0 transition-opacity">
+                <span
+                  class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground transition-opacity"
+                  :class="
+                    activeMenuSessionId === row.session.sessionId
+                      ? 'opacity-0'
+                      : 'group-hover:opacity-0'
+                  "
+                >
+                  <span>
                     {{ relativeTime(row.session.lastIngestedAt, now) }}
                   </span>
                   <span
@@ -423,8 +430,8 @@ async function handleDeleteConfirm(): Promise<void> {
                     class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100"
                     :class="
                       activeMenuSessionId === row.session.sessionId
-                        ? 'opacity-100 bg-muted text-foreground'
-                        : 'opacity-0 group-hover:opacity-100'
+                        ? 'opacity-100 bg-muted text-foreground pointer-events-auto'
+                        : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
                     "
                     aria-label="Tùy chọn phiên"
                     title="Thao tác"
