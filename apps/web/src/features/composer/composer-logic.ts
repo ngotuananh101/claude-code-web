@@ -152,6 +152,12 @@ export type RunPayloadInputs = {
   selectedSession: string;
   /** Whether this is a fresh session (the new-session page) or an existing one. */
   isNewSessionPage: boolean;
+  /**
+   * The ids of attachments the Composer picked for this run (Task 5). Sent only
+   * when the operator dropped files in — an empty/absent value means "no
+   * attachments" and travels as nothing on the wire.
+   */
+  attachmentIds?: string[];
 };
 
 /**
@@ -180,6 +186,7 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
     projectRunnerId,
     runnerId,
     selectedSession,
+    attachmentIds,
   } = inputs;
 
   const body: StartRunRequest = {
@@ -206,6 +213,11 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   // Resume: only when an existing session is selected.
   if (selectedSession !== NEW_SESSION && selectedSession !== "") {
     body.resumeSessionId = selectedSession;
+  }
+
+  // Attachments: only when the operator picked files.
+  if (attachmentIds !== undefined && attachmentIds.length > 0) {
+    body.attachmentIds = attachmentIds;
   }
 
   return body;

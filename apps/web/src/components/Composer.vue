@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import type { EffortLevel, RunnerModel, SessionSummary } from "@cc-web/protocol";
+import type { AttachmentInfo, EffortLevel, RunnerModel, SessionSummary } from "@cc-web/protocol";
 import {
   ArrowUp,
+  FileImage,
   FolderGit2,
   FolderOpen,
   GitBranch,
@@ -38,6 +39,7 @@ import {
 } from "@/features/composer/model-picker.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
+import { uploadSessionAttachments } from "../services/attachments-api";
 import {
   fetchRunners,
   liveRunners,
@@ -295,11 +297,51 @@ const permissionTone = computed(() =>
     : "text-muted-foreground",
 );
 
-// Attachments are local for now — the run surface has no upload yet, so the
-// chips say "picked", the toast says "not sent", and a successful send
-// clears them instead of pretending they reached the runner.
-const attachments = ref<File[]>([]);
+// Attachments: local previews (object URLs for images) plus the server-assigned
+// ids once uploaded. Object URLs are revoked on drop and after upload.
+type Attachment = {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
+  mimeType: string;
+  previewUrl?: string;
+};
+const attachments = ref<Attachment[]>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
+const dragOver = ref(false);
+
+/**
+ * Format a byte count into a human-readable KB/MB string.
+ */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Append files to the attachments list, revoking any object URL for duplicates
+ * so memory does not leak.
+ */
+function addFiles(files: File[]): void {
+  for (const file of files) {
+    const existing = attachments.value.find((a) => a.file === file);
+    if (existing) continue;
+    let previewUrl: string | undefined;
+    if (file.type.startsWith("image/")) {
+      previewUrl = URL.createObjectURL(file);
+    }
+    attachments.value.push({
+      id: crypto.randomUUID(),
+      file,
+      name: file.name,
+      size: file.size,
+      mimeType: file.type,
+      previewUrl,
+    });
+  }
+}
 
 function pickFiles(): void {
   fileInput.value?.click();
@@ -307,14 +349,53 @@ function pickFiles(): void {
 
 function onFilesPicked(event: Event): void {
   const input = event.target as HTMLInputElement;
-  for (const file of input.files ?? []) attachments.value.push(file);
+  addFiles(Array.from(input.files ?? []));
   input.value = "";
-  if (attachments.value.length > 0) {
-    toast.info("Tệp được chọn nhưng chưa gửi được — runner chưa hỗ trợ đính kèm.");
+}
+
+/**
+ * Extract files (including screenshots) from a clipboardData items list.
+ */
+function filesFromPaste(items: DataTransferItemList): File[] {
+  const files: File[] = [];
+  for (const item of items) {
+    if (item.kind === "file") {
+      const file = item.asFile();
+      if (file) files.push(file);
+    }
+  }
+  return files;
+}
+
+function onPaste(event: ClipboardEvent): void {
+  if (!event.clipboardData) return;
+  const files = filesFromPaste(event.clipboardData.items);
+  if (files.length > 0) {
+    addFiles(files);
   }
 }
 
+function onDragOver(event: DragEvent): void {
+  event.preventDefault();
+  event.dataTransfer!.dropEffect = "copy";
+  dragOver.value = true;
+}
+
+function onDragLeave(): void {
+  dragOver.value = false;
+}
+
+function onDrop(event: DragEvent): void {
+  event.preventDefault();
+  dragOver.value = false;
+  addFiles(Array.from(event.dataTransfer?.files ?? []));
+}
+
 function dropFile(index: number): void {
+  const attachment = attachments.value[index];
+  if (attachment?.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
   attachments.value.splice(index, 1);
 }
 
@@ -323,6 +404,24 @@ async function send(): Promise<void> {
   sending.value = true;
   const sessionId = props.sessionId ?? crypto.randomUUID();
   const folder = selectedFolder.value;
+
+  // Upload attachments first, then attach their ids to the run body.
+  let attachmentIds: string[] | undefined;
+  if (attachments.value.length > 0) {
+    const files = attachments.value.map((a) => a.file);
+    const uploadResult = await uploadSessionAttachments(sessionId, files);
+    if (!uploadResult.ok) {
+      toast.error(uploadResult.message);
+      sending.value = false;
+      return;
+    }
+    attachmentIds = uploadResult.attachments.map((a: AttachmentInfo) => a.id);
+    // Revoke object URLs now that the files have been sent.
+    for (const a of attachments.value) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
+  }
+
   const body = buildRunRequest({
     prompt: prompt.value,
     permission: permission.value,
@@ -334,6 +433,7 @@ async function send(): Promise<void> {
     runnerId: runnerId.value,
     selectedSession: selectedSession.value,
     isNewSessionPage: props.sessionId === null,
+    attachmentIds,
   });
   const promptText = prompt.value;
   const result = await startRun(sessionId, body);
@@ -492,31 +592,70 @@ async function stop(): Promise<void> {
       </span>
     </InputGroupAddon>
 
-    <InputGroupTextarea
-      v-model="prompt"
-      class="max-h-52 min-h-12 px-3.5 py-2.5 text-[13px] leading-relaxed"
-      placeholder="Gửi prompt cho runner…"
-      aria-label="Ô soạn prompt"
-      @keydown.enter.exact.prevent="send"
-    />
-
-    <div v-if="attachments.length > 0" class="flex flex-wrap gap-1.5 px-3.5 pb-1">
-      <span
-        v-for="(file, i) in attachments"
-        :key="`${file.name}-${i}`"
-        class="flex h-6 items-center gap-0.5 rounded-md border border-border bg-muted pr-0.5 pl-2 font-mono text-[11px] text-muted-foreground"
+    <div
+      class="relative"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @drop="onDrop"
+    >
+      <InputGroupTextarea
+        v-model="prompt"
+        class="max-h-52 min-h-12 px-3.5 py-2.5 text-[13px] leading-relaxed"
+        placeholder="Gửi prompt cho runner…"
+        aria-label="Ô soạn prompt"
+        @keydown.enter.exact.prevent="send"
+        @paste="onPaste"
+      />
+      <!-- Drag & drop overlay backdrop -->
+      <div
+        v-if="dragOver"
+        class="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/80 backdrop-blur-sm"
       >
-        <span class="max-w-[180px] truncate">{{ file.name }}</span>
+        <span class="text-sm font-medium text-foreground">Thả tệp vào đây để đính kèm</span>
+      </div>
+    </div>
+
+    <div v-if="attachments.length > 0" class="flex flex-wrap gap-2 px-3.5 pb-2">
+      <div
+        v-for="(att, i) in attachments"
+        :key="att.id"
+        class="relative flex h-20 w-20 items-center justify-center rounded-md border border-border bg-muted"
+      >
+        <img
+          v-if="att.previewUrl"
+          :src="att.previewUrl"
+          :alt="att.name"
+          class="h-20 w-20 rounded-md object-cover"
+          loading="lazy"
+        />
+        <div
+          v-else
+          class="flex h-16 w-16 items-center justify-center"
+        >
+          <FileImage :size="32" class="text-muted-foreground" />
+        </div>
+        <div
+          class="absolute bottom-0 left-0 right-0 truncate rounded-b bg-background/90 px-1 text-[9px] text-muted-foreground"
+          :title="att.name"
+        >
+          {{ att.name }}
+        </div>
+        <div
+          class="absolute top-0 right-0 flex items-center justify-center rounded-bl-none rounded-b-none rounded-tl rounded-tr bg-background/90"
+        >
+          <span class="text-[9px] text-muted-foreground">{{ formatSize(att.size) }}</span>
+        </div>
         <Button
           variant="ghost"
           size="icon-xs"
-          class="size-4"
-          :aria-label="`Bỏ ${file.name}`"
+          class="absolute -top-1 -right-1 size-5 rounded-full"
+          :aria-label="`Xoá tệp ${att.name}`"
+          title="Xoá tệp"
           @click="dropFile(i)"
         >
           <X :size="11" />
         </Button>
-      </span>
+      </div>
     </div>
 
     <InputGroupAddon align="block-end" class="justify-between px-3.5 pt-2 pb-2">
@@ -531,7 +670,7 @@ async function stop(): Promise<void> {
         >
           <Paperclip :size="15" />
         </Button>
-        <input ref="fileInput" type="file" multiple class="hidden" @change="onFilesPicked" />
+        <input ref="fileInput" type="file" multiple class="hidden" accept="image/*,.pdf,.txt,.md,.csv,.json,.xml,.yaml,.yml,.log" @change="onFilesPicked" />
         <Select v-model="permission">
           <SelectTrigger
             size="sm"
