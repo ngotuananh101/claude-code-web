@@ -32,6 +32,7 @@ export type EffortLevel = (typeof EFFORT_LEVELS)[number];
  */
 export type RunnerModel = {
   value: string;
+  resolvedModel?: string | null | undefined;
   displayName: string;
   description: string;
   supportsEffort: boolean;
@@ -71,9 +72,11 @@ function parseRunnerModel(value: unknown): RunnerModel | undefined {
   const displayName = record["displayName"];
   const description = record["description"];
   const supportsEffort = record["supportsEffort"];
+  const resolvedModel = record["resolvedModel"];
   if (displayName !== undefined && typeof displayName !== "string") return undefined;
   if (description !== undefined && typeof description !== "string") return undefined;
   if (supportsEffort !== undefined && typeof supportsEffort !== "boolean") return undefined;
+  if (resolvedModel !== undefined && typeof resolvedModel !== "string") return undefined;
 
   const levels: EffortLevel[] = [];
   const rawLevels = record["supportedEffortLevels"];
@@ -89,6 +92,9 @@ function parseRunnerModel(value: unknown): RunnerModel | undefined {
 
   return {
     value: id,
+    ...(typeof resolvedModel === "string" && resolvedModel.trim() !== ""
+      ? { resolvedModel: resolvedModel.trim() }
+      : {}),
     displayName: displayName === "" || displayName === undefined ? id : displayName,
     description: typeof description === "string" ? description : "",
     supportsEffort: supportsEffort === true,

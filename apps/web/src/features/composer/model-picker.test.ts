@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import type { RunnerModel } from "@cc-web/protocol";
 import {
   effortAt,
+  effortLabel,
   effortLevelsFor,
   effortPosition,
   FALLBACK_MODELS,
+  formatModelDescription,
+  formatModelDisplayName,
   modelFor,
   modelLabel,
+  modelTier,
   normalizeEffort,
   pickerModels,
   stepEffort,
@@ -52,16 +56,133 @@ describe("pickerModels", () => {
 });
 
 describe("modelFor / modelLabel", () => {
-  const models = [model({ value: "pro" }), model({ value: "code", displayName: "code" })];
+  const models = [
+    model({ value: "pro", displayName: "pro", description: "Custom Opus model" }),
+    model({ value: "code", displayName: "code", description: "Custom Sonnet model" }),
+    model({ value: "default", displayName: "Default (recommended)" }),
+  ];
 
   test("finds a row by value", () => {
     expect(modelFor(models, "code")?.displayName).toBe("code");
     expect(modelFor(models, "gone")).toBeUndefined();
   });
 
-  test("labels with the display name, falling back to the raw value", () => {
-    expect(modelLabel(models, "pro")).toBe("pro");
+  test("labels with formatted display name, concise for default, falling back to raw value", () => {
+    expect(modelLabel(models, "pro")).toBe("pro (Opus)");
+    expect(modelLabel(models, "default")).toBe("Mặc định");
     expect(modelLabel(models, "gone")).toBe("gone");
+  });
+});
+
+describe("modelTier", () => {
+  test("detects tier from value", () => {
+    expect(modelTier(model({ value: "opus", displayName: "pro" }))).toBe("Opus");
+    expect(modelTier(model({ value: "fable", displayName: "pro" }))).toBe("Fable");
+    expect(modelTier(model({ value: "sonnet", displayName: "code" }))).toBe("Sonnet");
+    expect(modelTier(model({ value: "haiku", displayName: "fast" }))).toBe("Haiku");
+  });
+
+  test("detects tier from description", () => {
+    expect(modelTier(model({ value: "custom-1", description: "Custom Opus model" }))).toBe("Opus");
+    expect(modelTier(model({ value: "custom-2", description: "Custom Sonnet model" }))).toBe(
+      "Sonnet",
+    );
+  });
+
+  test("detects tier from resolvedModel", () => {
+    expect(
+      modelTier(model({ value: "custom-3", description: "", resolvedModel: "claude-opus-5" })),
+    ).toBe("Opus");
+    expect(
+      modelTier(model({ value: "custom-4", description: "", resolvedModel: "claude-sonnet-5" })),
+    ).toBe("Sonnet");
+  });
+
+  test("returns null for default and unknown", () => {
+    expect(modelTier(model({ value: "default" }))).toBeNull();
+    expect(modelTier(model({ value: "unknown-model", description: "" }))).toBeNull();
+  });
+});
+
+describe("formatModelDisplayName", () => {
+  test("localizes default model to Vietnamese", () => {
+    expect(
+      formatModelDisplayName(model({ value: "default", displayName: "Default (recommended)" })),
+    ).toBe("Mặc định (khuyến nghị)");
+    expect(formatModelDisplayName(model({ value: "default", displayName: "Default" }))).toBe(
+      "Mặc định (khuyến nghị)",
+    );
+  });
+
+  test("appends base tier in parentheses for custom model aliases", () => {
+    expect(
+      formatModelDisplayName(
+        model({ value: "opus", displayName: "pro", description: "Custom Opus model" }),
+      ),
+    ).toBe("pro (Opus)");
+    expect(
+      formatModelDisplayName(
+        model({ value: "fable", displayName: "pro", description: "Custom Fable model" }),
+      ),
+    ).toBe("pro (Fable)");
+    expect(
+      formatModelDisplayName(
+        model({ value: "sonnet", displayName: "code", description: "Custom Sonnet model" }),
+      ),
+    ).toBe("code (Sonnet)");
+    expect(
+      formatModelDisplayName(
+        model({ value: "haiku", displayName: "fast", description: "Custom Haiku model" }),
+      ),
+    ).toBe("fast (Haiku)");
+  });
+
+  test("does not duplicate tier when displayName already contains it", () => {
+    expect(formatModelDisplayName(model({ value: "sonnet", displayName: "Sonnet" }))).toBe(
+      "Sonnet",
+    );
+    expect(formatModelDisplayName(model({ value: "opus", displayName: "Claude 3 Opus" }))).toBe(
+      "Claude 3 Opus",
+    );
+    expect(formatModelDisplayName(model({ value: "haiku", displayName: "Claude Haiku" }))).toBe(
+      "Claude Haiku",
+    );
+  });
+});
+
+describe("formatModelDescription", () => {
+  test("localizes descriptions into Vietnamese", () => {
+    expect(
+      formatModelDescription(
+        model({ value: "default", description: "Use the default model (currently pro[1m])" }),
+      ),
+    ).toBe("Để Claude Code tự chọn model (hiện tại pro[1m])");
+    expect(
+      formatModelDescription(model({ value: "default", description: "Use the default model" })),
+    ).toBe("Để Claude Code tự chọn model");
+    expect(formatModelDescription(model({ value: "opus", description: "Custom Opus model" }))).toBe(
+      "Model Opus tùy chỉnh",
+    );
+    expect(
+      formatModelDescription(model({ value: "sonnet", description: "Custom Sonnet model" })),
+    ).toBe("Model Sonnet tùy chỉnh");
+    expect(
+      formatModelDescription(model({ value: "haiku", description: "Custom Haiku model" })),
+    ).toBe("Model Haiku tùy chỉnh");
+    expect(
+      formatModelDescription(model({ value: "fable", description: "Custom Fable model" })),
+    ).toBe("Model Fable tùy chỉnh");
+  });
+});
+
+describe("effortLabel", () => {
+  test("translates effort levels to Vietnamese", () => {
+    expect(effortLabel(null)).toBe("tự động");
+    expect(effortLabel("low")).toBe("thấp");
+    expect(effortLabel("medium")).toBe("vừa");
+    expect(effortLabel("high")).toBe("cao");
+    expect(effortLabel("xhigh")).toBe("rất cao");
+    expect(effortLabel("max")).toBe("tối đa");
   });
 });
 

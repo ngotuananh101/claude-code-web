@@ -48,6 +48,7 @@ describe("parseRunnerModels", () => {
     expect(parseRunnerModels([full])).toEqual([
       {
         value: "opus",
+        resolvedModel: "claude-opus-5",
         displayName: "pro",
         description: "Custom Opus model",
         supportsEffort: true,

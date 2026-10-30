@@ -41,6 +41,118 @@ export const FALLBACK_MODELS: readonly PickerModel[] = [
   })),
 ];
 
+/** Known model tiers/families. */
+export const KNOWN_TIERS: readonly string[] = ["Opus", "Sonnet", "Haiku", "Fable", "Mythos"];
+
+/** Vietnamese labels for effort levels. */
+export const EFFORT_LABELS: Record<string, string> = {
+  low: "thấp",
+  medium: "vừa",
+  high: "cao",
+  xhigh: "rất cao",
+  max: "tối đa",
+};
+
+/** Get the localized label for an effort level, or 'tự động' when null. */
+export function effortLabel(effort: EffortLevel | null): string {
+  if (effort === null) return "tự động";
+  return EFFORT_LABELS[effort] ?? effort;
+}
+
+/**
+ * Detect the underlying/canonical model tier (e.g. "Opus", "Sonnet", "Haiku").
+ * Returns null if the model is the generic "default" entry or if no tier matches.
+ */
+export function modelTier(model: PickerModel): string | null {
+  if (model.value === "default") {
+    return null;
+  }
+
+  // 1. Direct family match on value (e.g. value: "opus" -> "Opus")
+  const valueLower = model.value.toLowerCase();
+  for (const tier of KNOWN_TIERS) {
+    if (valueLower === tier.toLowerCase()) {
+      return tier;
+    }
+  }
+
+  // 2. Check description (e.g. "Custom Opus model" -> "Opus")
+  if (model.description) {
+    const descLower = model.description.toLowerCase();
+    for (const tier of KNOWN_TIERS) {
+      if (descLower.includes(tier.toLowerCase())) {
+        return tier;
+      }
+    }
+  }
+
+  // 3. Check resolvedModel if present (e.g. "claude-opus-5" -> "Opus")
+  if (model.resolvedModel) {
+    const resolvedLower = model.resolvedModel.toLowerCase();
+    for (const tier of KNOWN_TIERS) {
+      if (resolvedLower.includes(tier.toLowerCase())) {
+        return tier;
+      }
+    }
+  }
+
+  // 4. Check if value contains tier (e.g. "claude-3-5-sonnet" -> "Sonnet")
+  for (const tier of KNOWN_TIERS) {
+    if (valueLower.includes(tier.toLowerCase())) {
+      return tier;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Format human-friendly display name in Vietnamese, including the base tier
+ * in parentheses when a custom model alias is used (e.g. "pro (Opus)", "code (Sonnet)").
+ */
+export function formatModelDisplayName(model: PickerModel): string {
+  if (model.value === "default" || model.displayName.toLowerCase().startsWith("default")) {
+    return "Mặc định (khuyến nghị)";
+  }
+
+  const name = model.displayName.trim() || model.value;
+  const tier = modelTier(model);
+
+  // If tier is known and the display name doesn't already contain it, append (Tier)
+  if (tier && !name.toLowerCase().includes(tier.toLowerCase())) {
+    return `${name} (${tier})`;
+  }
+
+  return name;
+}
+
+/**
+ * Format Vietnamese description for the model row when descriptions are toggled open.
+ */
+export function formatModelDescription(model: PickerModel): string {
+  if (!model.description) {
+    return "";
+  }
+  const desc = model.description.trim();
+  const descLower = desc.toLowerCase();
+
+  if (model.value === "default" || descLower.startsWith("use the default model")) {
+    const match = desc.match(/\((?:currently|hiện tại)\s+([^)]+)\)/i);
+    if (match) {
+      return `Để Claude Code tự chọn model (hiện tại ${match[1]})`;
+    }
+    return "Để Claude Code tự chọn model";
+  }
+
+  if (descLower === "custom opus model") return "Model Opus tùy chỉnh";
+  if (descLower === "custom sonnet model") return "Model Sonnet tùy chỉnh";
+  if (descLower === "custom haiku model") return "Model Haiku tùy chỉnh";
+  if (descLower === "custom fable model") return "Model Fable tùy chỉnh";
+  if (descLower === "custom mythos model") return "Model Mythos tùy chỉnh";
+
+  return desc;
+}
+
 /** What the runner advertised, or the protocol's fallback when it said nothing. */
 export function pickerModels(advertised: readonly RunnerModel[]): PickerModel[] {
   // A copy, entries included: the constants must not be mutable through the
@@ -63,7 +175,14 @@ export function modelFor(models: readonly PickerModel[], value: string): PickerM
 
 /** The label on the closed trigger: the row's display name, else the raw value. */
 export function modelLabel(models: readonly PickerModel[], value: string): string {
-  return modelFor(models, value)?.displayName ?? value;
+  if (value === "default") {
+    return "Mặc định";
+  }
+  const model = modelFor(models, value);
+  if (!model) {
+    return value;
+  }
+  return formatModelDisplayName(model);
 }
 
 /**

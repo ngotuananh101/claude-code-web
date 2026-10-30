@@ -5,9 +5,13 @@ import { computed, ref } from "vue";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
+  EFFORT_LABELS,
   effortAt,
+  effortLabel,
   effortLevelsFor,
   effortPosition,
+  formatModelDescription,
+  formatModelDisplayName,
   modelFor,
   modelLabel,
   pickerModels,
@@ -58,7 +62,7 @@ const knobPosition = computed(() => effortPosition(levels.value, props.effort));
 const activeIndex = computed(() =>
   props.effort === null ? -1 : levels.value.indexOf(props.effort),
 );
-const effortText = computed(() => props.effort ?? "tự động");
+const effortText = computed(() => effortLabel(props.effort));
 
 /** A level has been chosen beyond model choice — worth a marker on the trigger. */
 const tuned = computed(() => props.effort !== null || props.ultracode);
@@ -125,8 +129,8 @@ function percent(index: number): string {
         size="sm"
         :disabled="disabled"
         class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-        aria-label="Chọn model và effort"
-        :title="`Model: ${triggerLabel}${effort ? ` · effort ${effort}` : ''}${ultracode ? ' · ultracode' : ''}`"
+        aria-label="Chọn model và mức nỗ lực"
+        :title="`Model: ${triggerLabel}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
       >
         <Cpu :size="13" class="shrink-0" />
         <span class="max-w-[110px] truncate">{{ triggerLabel }}</span>
@@ -193,13 +197,13 @@ function percent(index: number): string {
               class="block truncate text-[13px]"
               :class="entry.value === model ? 'font-medium text-foreground' : 'text-foreground/90'"
             >
-              {{ entry.displayName }}
+              {{ formatModelDisplayName(entry) }}
             </span>
             <span
-              v-if="showDescriptions && entry.description !== ''"
+              v-if="showDescriptions && formatModelDescription(entry) !== ''"
               class="block truncate text-[11px] text-muted-foreground"
             >
-              {{ entry.description }}
+              {{ formatModelDescription(entry) }}
             </span>
             <span
               v-else-if="showDescriptions"
@@ -217,7 +221,7 @@ function percent(index: number): string {
       <div v-if="levels.length > 0" class="mt-1 border-t border-border pt-2.5">
         <div class="flex items-center justify-between px-1">
           <span class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Effort
+            Mức nỗ lực
           </span>
           <button
             type="button"
@@ -233,7 +237,7 @@ function percent(index: number): string {
           class="relative mt-3 h-7 cursor-pointer touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           role="slider"
           tabindex="0"
-          aria-label="Mức effort"
+          aria-label="Mức nỗ lực"
           aria-orientation="horizontal"
           :aria-valuemin="0"
           :aria-valuemax="levels.length - 1"
@@ -269,7 +273,7 @@ function percent(index: number): string {
         </div>
 
         <div class="mt-0.5 flex justify-between px-0.5 font-mono text-[10px] text-muted-foreground/80">
-          <span v-for="level in levels" :key="`label-${level}`">{{ level }}</span>
+          <span v-for="level in levels" :key="`label-${level}`">{{ EFFORT_LABELS[level] ?? level }}</span>
         </div>
       </div>
 

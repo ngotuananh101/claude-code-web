@@ -77,6 +77,7 @@ describe("discoverModels", () => {
     expect(models).toEqual([
       {
         value: "default",
+        resolvedModel: "claude-opus-5",
         displayName: "Default (recommended)",
         description: "Use the default model",
         supportsEffort: true,
@@ -84,6 +85,7 @@ describe("discoverModels", () => {
       },
       {
         value: "sonnet",
+        resolvedModel: "claude-sonnet-5",
         displayName: "code",
         description: "Custom Sonnet model",
         supportsEffort: true,
