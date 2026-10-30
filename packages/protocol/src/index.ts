@@ -59,7 +59,8 @@ export type CommandKind =
   | "config.inspect"
   | "workspace.fs.browse"
   | "workspace.sessions.list"
-  | "workspace.sessions.messages";
+  | "workspace.sessions.messages"
+  | "session.cleanup";
 
 export type RunnerEvent = {
   protocolVersion: ProtocolVersion;
@@ -236,6 +237,15 @@ export type RunEventOffset = {
   lastAcknowledgedSequence: number;
 };
 
+export {
+  type AttachmentInfo,
+  parseAttachmentInfo,
+  parseRunnerAttachmentItems,
+  parseSessionCleanupRequest,
+  type RunnerAttachmentItem,
+  type SessionCleanupRequest,
+  type SessionCleanupResult,
+} from "./attachments.ts";
 export {
   ConnectionRegistry,
   type OpenParams,
