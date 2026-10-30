@@ -14,7 +14,6 @@
 import { Database } from "bun:sqlite";
 import { execSync } from "node:child_process";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
-import type { DeclaredWorkspace } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
@@ -30,7 +29,7 @@ import {
   writeUnitAndEnable,
 } from "../service/systemd.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
-import { discoverWorkspaces, workspaceResolverFrom } from "../workspaces/workspaces.ts";
+import { createWorkspaceRegistry } from "../workspaces/registry.ts";
 
 /**
  * The server origin baked in at compile time by the release workflow
@@ -211,27 +210,22 @@ async function start(): Promise<void> {
   // §11.1 / §18.2: discover all workspaces — the default env dir, any persisted
   // custom workspaces in the runner db, and Claude Code projects under the home
   // directory. The declared list and the resolver both derive from this single
-  // discovery call, so they cannot disagree (§15.1).
+  // registry, so they cannot disagree (§15.1).
   //
   // The db handle is opened once here so the thunk doesn't leak a handle per
   // reconnect; the daemon opens its own handle for its read-write inbox/outbox
   // and writes to the same file, which SQLite supports concurrently for reads
   // from this handle.
   const db = openRunnerDb(dir);
-  // Cache discovery so repeated lookups (every reconnect hello, every
-  // workspacePathFor call) don't rescan the disk. Discovery is recomputed
-  // lazily when custom workspaces are registered.
-  let cachedDiscovered: DeclaredWorkspace[] | undefined;
-  const discoveredWorkspaces = () => {
-    if (cachedDiscovered === undefined) {
-      cachedDiscovered = discoverWorkspaces({
-        ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
-        ...(db === undefined ? {} : { db }),
-        ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
-      });
-    }
-    return cachedDiscovered;
-  };
+  // The registry caches discovery (every hello, reconcile and command lookup
+  // would otherwise rescan the disk) and refreshes it when a custom workspace
+  // is persisted — the run controller does that for the first `run.start` in a
+  // freshly browsed folder, and the handlers after it must see the id.
+  const registry = createWorkspaceRegistry({
+    ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
+    db,
+    ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
+  });
 
   // §5.2: ask this host's Claude Code which models it offers — custom names
   // included. Bounded and best-effort (never rejects): a probe that cannot
@@ -250,13 +244,9 @@ async function start(): Promise<void> {
     runnerVersion: "0.0.0",
     sdkVersion: "0.3.309",
     models,
-    workspacePathFor: (workspaceId) => {
-      const list = discoveredWorkspaces();
-      const resolve = workspaceResolverFrom(list);
-      return resolve(workspaceId);
-    },
+    workspacePathFor: (workspaceId) => registry.pathFor(workspaceId),
     declaredWorkspaces: () =>
-      discoveredWorkspaces().map((workspace: DeclaredWorkspace) => {
+      registry.list().map((workspace) => {
         const head = currentBranch(workspace.path);
         return {
           ...workspace,
