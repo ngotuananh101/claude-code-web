@@ -259,6 +259,8 @@ export function migrate(db: Database): void {
       created_at   INTEGER NOT NULL
     );
   `);
+  addColumnIfMissing(db, "sessions", "title", "TEXT");
+  addColumnIfMissing(db, "runners", "name", "TEXT");
 }
 
 /**

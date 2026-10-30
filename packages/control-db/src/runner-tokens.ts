@@ -22,6 +22,7 @@ export type MintedRunnerToken = {
 
 export type ListedRunner = {
   runnerId: string;
+  name?: string | null;
   createdAt: number;
   revokedAt: number | null;
 };
@@ -69,16 +70,69 @@ export function createRunnerToken(
 export function listRunners(db: Database, ownerId: string): ListedRunner[] {
   return db
     .prepare(
-      `SELECT id, created_at, revoked_at FROM runners
+      `SELECT id, name, created_at, revoked_at FROM runners
        WHERE owner_id = ? ORDER BY created_at DESC`,
     )
     .all(ownerId)
     .map((row) => {
-      const record = row as { id: string; created_at: number; revoked_at: number | null };
+      const record = row as {
+        id: string;
+        name: string | null;
+        created_at: number;
+        revoked_at: number | null;
+      };
       return {
         runnerId: record.id,
+        name: record.name ?? undefined,
         createdAt: record.created_at,
         revokedAt: record.revoked_at,
       };
     });
+}
+
+export function updateRunnerName(
+  db: Database,
+  runnerId: string,
+  ownerId: string,
+  name: string,
+): boolean {
+  const result = db
+    .prepare("UPDATE runners SET name = ? WHERE id = ? AND owner_id = ?")
+    .run(name.trim(), runnerId, ownerId);
+  return result.changes > 0;
+}
+
+export function deleteRunner(
+  db: Database,
+  runnerId: string,
+  ownerId: string,
+): { ok: boolean; deletedSessions: string[] } {
+  const runner = db
+    .query("SELECT id FROM runners WHERE id = ? AND owner_id = ?")
+    .get(runnerId, ownerId);
+  if (!runner) return { ok: false, deletedSessions: [] };
+
+  const sessionRows = db
+    .query("SELECT id FROM sessions WHERE runner_id = ? AND owner_id = ?")
+    .all(runnerId, ownerId) as Array<{ id: string }>;
+  const deletedSessions = sessionRows.map((r) => r.id);
+
+  const txn = db.transaction(() => {
+    // Delete all sessions attached to this runner
+    for (const sid of deletedSessions) {
+      db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sid);
+      db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sid);
+      db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sid);
+      db.prepare("DELETE FROM command_outbox WHERE session_id = ?").run(sid);
+      db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);
+    }
+    // Delete runner-level rows
+    db.prepare("DELETE FROM workspaces WHERE runner_id = ?").run(runnerId);
+    db.prepare("DELETE FROM runner_credentials WHERE runner_id = ?").run(runnerId);
+    db.prepare("DELETE FROM command_outbox WHERE runner_id = ?").run(runnerId);
+    db.prepare("DELETE FROM runners WHERE id = ?").run(runnerId);
+  });
+  txn();
+
+  return { ok: true, deletedSessions };
 }

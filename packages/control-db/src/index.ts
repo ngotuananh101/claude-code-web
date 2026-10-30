@@ -48,9 +48,11 @@ export {
 } from "./runner-credentials.ts";
 export {
   createRunnerToken,
+  deleteRunner,
   type ListedRunner,
   listRunners,
   type MintedRunnerToken,
+  updateRunnerName,
 } from "./runner-tokens.ts";
 export {
   type DispatchDecision,
@@ -60,10 +62,12 @@ export {
   Scheduler,
 } from "./scheduler.ts";
 export {
+  deleteSession,
   type EnsureSessionPinInput,
   ensureSessionPin,
   type SessionPin,
   sessionPin,
+  updateSessionTitle,
 } from "./sessions.ts";
 export {
   type UsageDay,

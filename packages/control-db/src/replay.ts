@@ -133,6 +133,7 @@ export function sessionOwner(db: Database, sessionId: string): string | undefine
 /** One sidebar row: enough to recognize the session and know its state. */
 export type SessionSummary = {
   sessionId: string;
+  title?: string | null;
   watermark: number;
   eventCount: number;
   /** The last journaled event's type, or null when only a dispatch exists. */
@@ -171,7 +172,8 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
               MAX(e.ingested_at) AS last_ingested_at,
               (a.session_id IS NOT NULL) AS live,
               s.runner_id AS runner_id,
-              s.workspace_id AS workspace_id
+              s.workspace_id AS workspace_id,
+              s.title AS title
        FROM run_events e
        JOIN runners r ON r.id = e.runner_id
        LEFT JOIN active_runs a ON a.session_id = e.session_id
@@ -187,12 +189,13 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     live: number;
     runner_id: string | null;
     workspace_id: string | null;
+    title: string | null;
   }>;
 
   const dispatched = db
     .prepare(
       `SELECT DISTINCT a.session_id AS session_id, a.dispatched_at AS dispatched_at,
-              s.runner_id AS runner_id, s.workspace_id AS workspace_id
+              s.runner_id AS runner_id, s.workspace_id AS workspace_id, s.title AS title
        FROM active_runs a
        JOIN runners r ON r.id = a.runner_id
        LEFT JOIN sessions s ON s.id = a.session_id
@@ -203,12 +206,14 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     dispatched_at: number;
     runner_id: string | null;
     workspace_id: string | null;
+    title: string | null;
   }>;
 
   const byId = new Map<string, SessionSummary>();
   for (const row of rows) {
     byId.set(row.session_id, {
       sessionId: row.session_id,
+      title: row.title ?? undefined,
       watermark: row.watermark,
       eventCount: row.event_count,
       lastEventType: null,
@@ -223,6 +228,7 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     if (byId.has(row.session_id)) continue;
     byId.set(row.session_id, {
       sessionId: row.session_id,
+      title: row.title ?? undefined,
       watermark: 0,
       eventCount: 0,
       lastEventType: null,
