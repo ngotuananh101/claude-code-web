@@ -8,13 +8,17 @@ import {
   Folder,
   LayoutDashboard,
   LogOut,
+  MoreHorizontal,
+  Pencil,
   Search,
   Server,
   SquarePen,
+  Trash2,
 } from "@lucide/vue";
 import type { Component } from "vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import {
   CommandDialog,
@@ -24,6 +28,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   groupSessions,
@@ -36,9 +41,19 @@ import {
 } from "../features/sessions/session-groups.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { stopTokenRefreshTimer } from "../services/auth-api.ts";
+import { deleteSession, renameSession } from "../services/sessions-api.ts";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
-import { closeSession, disconnectSocket, sessions } from "../stores/sessions.ts";
+import {
+  closeSession,
+  disconnectSocket,
+  removeSession,
+  type SessionSummary,
+  sessions,
+  updateSessionTitleInStore,
+} from "../stores/sessions.ts";
+import ConfirmDeleteDialog from "./ConfirmDeleteDialog.vue";
 import ConnectionChip from "./ConnectionChip.vue";
+import RenameDialog from "./RenameDialog.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -172,6 +187,62 @@ async function signOut(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
   await router.push("/login");
 }
+
+const activeMenuSessionId = ref<string | null>(null);
+
+const sessionToRename = ref<SessionSummary | null>(null);
+const renameDialogOpen = ref(false);
+
+function triggerRename(session: SessionSummary): void {
+  activeMenuSessionId.value = null;
+  sessionToRename.value = session;
+  renameDialogOpen.value = true;
+}
+
+async function handleRenameConfirm(newTitle: string): Promise<void> {
+  if (!sessionToRename.value) return;
+  const sid = sessionToRename.value.sessionId;
+  const ok = await renameSession(sid, newTitle);
+  if (ok) {
+    updateSessionTitleInStore(sid, newTitle);
+    toast.success("Đã đổi tên phiên.");
+  } else {
+    toast.error("Không thể đổi tên phiên.");
+  }
+  sessionToRename.value = null;
+}
+
+const sessionToDelete = ref<SessionSummary | null>(null);
+const deleteDialogOpen = ref(false);
+const deleteBusy = ref(false);
+
+function triggerDelete(session: SessionSummary): void {
+  activeMenuSessionId.value = null;
+  sessionToDelete.value = session;
+  deleteDialogOpen.value = true;
+}
+
+async function handleDeleteConfirm(): Promise<void> {
+  if (!sessionToDelete.value) return;
+  const sid = sessionToDelete.value.sessionId;
+  deleteBusy.value = true;
+  try {
+    const ok = await deleteSession(sid);
+    if (ok) {
+      removeSession(sid);
+      toast.success("Đã xoá phiên.");
+      if (route.params.sessionId === sid) {
+        void router.push("/sessions");
+      }
+    } else {
+      toast.error("Không thể xoá phiên.");
+    }
+  } finally {
+    deleteBusy.value = false;
+    deleteDialogOpen.value = false;
+    sessionToDelete.value = null;
+  }
+}
 </script>
 
 <template>
@@ -301,10 +372,14 @@ async function signOut(): Promise<void> {
             </span>
           </div>
           <ul class="grid grid-cols-1 content-start gap-0.5 pl-1.5">
-            <li v-for="row in group.sessions" :key="row.session.sessionId">
+            <li
+              v-for="row in group.sessions"
+              :key="row.session.sessionId"
+              class="group relative flex items-center"
+            >
               <Button
                 variant="ghost"
-                class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
+                class="h-auto w-full justify-between gap-2 rounded-lg pl-2.5 pr-8 py-1.5 font-normal"
                 :class="
                   row.session.sessionId === sessions.activeId &&
                   'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
@@ -318,12 +393,18 @@ async function signOut(): Promise<void> {
                   >
                     {{ row.folder }}
                   </span>
-                  <span class="min-w-0 flex-1 truncate text-left font-mono text-xs">
-                    {{ row.session.sessionId }}
+                  <span
+                    class="min-w-0 flex-1 truncate text-left text-xs"
+                    :class="row.session.title ? 'font-medium' : 'font-mono text-muted-foreground'"
+                    :title="row.session.title || row.session.sessionId"
+                  >
+                    {{ row.session.title || row.session.sessionId }}
                   </span>
                 </span>
                 <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {{ relativeTime(row.session.lastIngestedAt, now) }}
+                  <span class="group-hover:opacity-0 transition-opacity">
+                    {{ relativeTime(row.session.lastIngestedAt, now) }}
+                  </span>
                   <span
                     v-if="row.session.live"
                     class="size-[7px] animate-pulse rounded-full bg-primary"
@@ -331,6 +412,46 @@ async function signOut(): Promise<void> {
                   />
                 </span>
               </Button>
+
+              <Popover
+                :open="activeMenuSessionId === row.session.sessionId"
+                @update:open="(val: boolean) => activeMenuSessionId = val ? row.session.sessionId : null"
+              >
+                <PopoverTrigger as-child>
+                  <button
+                    type="button"
+                    class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100"
+                    :class="
+                      activeMenuSessionId === row.session.sessionId
+                        ? 'opacity-100 bg-muted text-foreground'
+                        : 'opacity-0 group-hover:opacity-100'
+                    "
+                    aria-label="Tùy chọn phiên"
+                    title="Thao tác"
+                    @click.stop
+                  >
+                    <MoreHorizontal :size="14" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent class="w-36 p-1" align="end" :side-offset="4">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+                    @click.stop="triggerRename(row.session)"
+                  >
+                    <Pencil :size="13" class="shrink-0" />
+                    <span>Đổi tên</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+                    @click.stop="triggerDelete(row.session)"
+                  >
+                    <Trash2 :size="13" class="shrink-0" />
+                    <span>Xoá phiên</span>
+                  </button>
+                </PopoverContent>
+              </Popover>
             </li>
           </ul>
         </div>
@@ -381,7 +502,7 @@ async function signOut(): Promise<void> {
           <CommandItem
             v-for="row in group.sessions"
             :key="row.session.sessionId"
-            :value="row.session.sessionId"
+            :value="row.session.title ? `${row.session.title} ${row.session.sessionId}` : row.session.sessionId"
             @select="goToSession(row.session.sessionId)"
           >
             <span
@@ -390,8 +511,11 @@ async function signOut(): Promise<void> {
             >
               {{ row.folder }}
             </span>
-            <span class="min-w-0 flex-1 truncate font-mono text-xs">
-              {{ row.session.sessionId }}
+            <span
+              class="min-w-0 flex-1 truncate text-xs"
+              :class="row.session.title ? 'font-medium' : 'font-mono text-muted-foreground'"
+            >
+              {{ row.session.title || row.session.sessionId }}
             </span>
             <span class="shrink-0 text-[11px] text-muted-foreground">
               {{ relativeTime(row.session.lastIngestedAt, now) }}
@@ -400,5 +524,24 @@ async function signOut(): Promise<void> {
         </CommandGroup>
       </CommandList>
     </CommandDialog>
+
+    <RenameDialog
+      v-model:open="renameDialogOpen"
+      title="Đổi tên phiên"
+      description="Đặt tên gợi nhớ cho phiên làm việc này."
+      :initial-value="sessionToRename?.title || ''"
+      placeholder="Nhập tên phiên..."
+      @confirm="handleRenameConfirm"
+    />
+
+    <ConfirmDeleteDialog
+      v-model:open="deleteDialogOpen"
+      title="Xoá phiên làm việc"
+      :description="`Bạn có chắc chắn muốn xoá phiên ${sessionToDelete?.title ? `“${sessionToDelete.title}” (${sessionToDelete.sessionId})` : sessionToDelete?.sessionId}?`"
+      warning="Toàn bộ lịch sử tin nhắn, sự kiện và phê duyệt của phiên này sẽ bị xoá vĩnh viễn và không thể khôi phục."
+      confirm-label="Xoá phiên"
+      :busy="deleteBusy"
+      @confirm="handleDeleteConfirm"
+    />
   </aside>
 </template>
