@@ -147,6 +147,45 @@ describe("open", () => {
   });
 });
 
+describe("open — infinite timeout", () => {
+  test("a timeoutMs of 0 sets MAX_SAFE_INTEGER expiry and schedules no timeout timer", () => {
+    const h = harness();
+
+    void h.router.open({ ...TOOL_OPEN, timeoutMs: 0 });
+
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0]!.payload.expiresAt).toBe(Number.MAX_SAFE_INTEGER);
+    expect(h.scheduled).toHaveLength(0);
+
+    const row = pendingApproval(h.db, String(h.events[0]!.payload.approvalId))!;
+    expect(row.expiresAt).toBe(Number.MAX_SAFE_INTEGER);
+    expect(row.state).toBe("pending");
+  });
+
+  test("remains answerable without expiring when timeoutMs is 0", async () => {
+    const h = harness(1_000);
+    const parked = h.router.open({ ...TOOL_OPEN, timeoutMs: 0 });
+    const approvalId = String(h.events[0]!.payload.approvalId);
+    const inputHash = String(h.events[0]!.payload.inputHash);
+
+    // Far past any finite window: the sweep leaves the row pending.
+    h.router.sweepExpired(1_000 + 365 * 24 * 60 * 60 * 1_000);
+    expect(h.events.filter((e) => e.type === "approval.expired")).toHaveLength(0);
+    expect(pendingApproval(h.db, approvalId)?.state).toBe("pending");
+
+    expect(
+      h.router.respond(
+        { approvalId, decision: "allow", inputHash },
+        { attemptId: "attempt-1", runId: "run-1" },
+      ),
+    ).toEqual({ ok: true });
+    expect((await parked) as ApprovalOutcome).toEqual({
+      behavior: "allow",
+      updatedInput: { command: "ls -la" },
+    });
+  });
+});
+
 describe("respond — allow", () => {
   test("resolves the parked callback with the original input and emits approval.resolved", async () => {
     const h = harness();

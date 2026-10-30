@@ -175,10 +175,14 @@ export type ExecuteOptions = {
   abortReason?: () => string | undefined;
 };
 
-/** How long a parked callback stays answerable: 5 minutes unless overridden. */
+/**
+ * How long a parked callback stays answerable. By default a gate never expires:
+ * a permission request waits for a human, however long that takes. Setting
+ * `CC_WEB_APPROVAL_TIMEOUT_MS` to a positive number restores a finite window.
+ */
 function approvalTimeoutMs(): number {
   const raw = Number(Bun.env["CC_WEB_APPROVAL_TIMEOUT_MS"]);
-  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
 export async function executeRun(

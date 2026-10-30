@@ -39,7 +39,8 @@ type OpenInput = {
   kind: "tool_permission" | "user_question";
   toolName: string;
   input: unknown;
-  timeoutMs: number;
+  /** Omitted, zero or negative parks the callback indefinitely. */
+  timeoutMs?: number;
 };
 
 type RespondPayload = {
@@ -103,7 +104,12 @@ export class ApprovalRouter {
     const approvalId = `apr_${crypto.randomUUID()}`;
     const toolCallId = `tc_${crypto.randomUUID()}`;
     const inputHash = canonicalInputHash(input.toolName, input.input);
-    const expiresAt = now + input.timeoutMs;
+    // A gate without a positive window never expires: the row parks at the
+    // int64 max so the expiry sweep can never select it, and no timer is
+    // scheduled. Only an explicit decision or the attempt's teardown ends it.
+    const timeoutMs = input.timeoutMs ?? 0;
+    const expiresAt =
+      timeoutMs > 0 ? now + timeoutMs : Number.MAX_SAFE_INTEGER;
 
     const inserted = insertPendingApproval(this.#db, {
       approvalId,
@@ -139,7 +145,8 @@ export class ApprovalRouter {
     this.#append("approval.requested", payload);
 
     return new Promise<ApprovalOutcome>((resolve) => {
-      const cancelTimer = this.#schedule(() => this.sweepExpired(), input.timeoutMs);
+      const cancelTimer =
+        timeoutMs > 0 ? this.#schedule(() => this.sweepExpired(), timeoutMs) : () => {};
       this.#live.set(approvalId, {
         resolve,
         attemptId: input.attemptId,

@@ -73,7 +73,9 @@ and resolves exactly the callback that asked. Same pipeline answers
      500 chars each) — structured data, not the summary blob, is what
      the card renders as option buttons. `expiresAt` is minted by the
      runner (authoritative; server treats it as display data):
-     `now + CC_WEB_APPROVAL_TIMEOUT_MS` (default 300_000).
+     `now + CC_WEB_APPROVAL_TIMEOUT_MS` when that variable is a positive
+     number, else `Number.MAX_SAFE_INTEGER` — a gate does not expire by
+     default and waits for a human until decided or the run is torn down.
      `callbackGeneration` is 0 within an attempt (§9.7: an attempt is
      single-stream, stale attempts are interrupted, never resumed); the
      field is carried for exactness per §13.1.

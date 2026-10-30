@@ -83,9 +83,17 @@ const allAnswered = computed(() =>
   questions.value.every((_, index) => (answers[index] ?? "") !== ""),
 );
 
-/** Display-side expiry fallback: the row outlived its window with no closing event. */
+/**
+ * Display-side expiry fallback: the row outlived its window with no closing event.
+ * A non-expiring gate is parked at `Number.MAX_SAFE_INTEGER` by the runner, so
+ * it never counts as expired here either.
+ */
 const displayExpired = computed(
-  () => props.terminal === undefined && expiresAt !== undefined && expiresAt < Date.now(),
+  () =>
+    props.terminal === undefined &&
+    expiresAt !== undefined &&
+    expiresAt < Number.MAX_SAFE_INTEGER - 10_000 &&
+    expiresAt < Date.now(),
 );
 
 /** Nothing decided yet, by journal or by this browser: the card takes input. */
