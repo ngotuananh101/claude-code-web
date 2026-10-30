@@ -2008,13 +2008,13 @@ describe("attachments (§attachments)", () => {
         id: "att-1",
         name: "spec.md",
         mimeType: "text/markdown",
-        size: 0,
+        size: 6,
       });
       expect(attachments[1]).toEqual({
         id: "att-2",
         name: "data.json",
         mimeType: "application/json",
-        size: 0,
+        size: 6,
       });
     } finally {
       server.stop();

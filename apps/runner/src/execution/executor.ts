@@ -347,12 +347,15 @@ export async function executeRun(
       runnerHome: options.runnerHome,
       attachments,
     });
-    attachmentInfos = downloaded.map((f) => ({
-      id: attachments.find((a) => a.name === f.name)?.id ?? f.name,
-      name: f.name,
-      mimeType: f.mimeType,
-      size: 0,
-    }));
+    attachmentInfos = downloaded.map((f) => {
+      const match = attachments.find((a) => a.name === f.name);
+      return {
+        id: match?.id ?? f.name,
+        name: f.name,
+        mimeType: f.mimeType,
+        size: match?.size ?? 0,
+      };
+    });
     effectivePrompt = injectAttachmentsContext(prompt, downloaded);
   }
 
