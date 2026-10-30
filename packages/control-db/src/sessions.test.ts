@@ -1,12 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
-import {
-  deleteSession,
-  ensureSessionPin,
-  sessionPin,
-  updateSessionTitle,
-} from "./sessions.ts";
+import { deleteSession, ensureSessionPin, sessionPin, updateSessionTitle } from "./sessions.ts";
 
 /**
  * The session pin (§2.3, ADR-006): an accepted dispatch records which

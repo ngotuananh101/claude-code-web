@@ -20,7 +20,7 @@ export type SessionPin = {
   ownerId: string;
   workspaceId: string;
   runnerId: string;
-  title?: string | null;
+  title?: string | null | undefined;
 };
 
 export type EnsureSessionPinInput = {
@@ -35,7 +35,14 @@ export function ensureSessionPin(db: Database, input: EnsureSessionPinInput): vo
   db.query(
     `INSERT OR IGNORE INTO sessions (id, owner_id, workspace_id, runner_id, created_at, title)
      VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(input.sessionId, input.ownerId, input.workspaceId, input.runnerId, Date.now(), input.title ?? null);
+  ).run(
+    input.sessionId,
+    input.ownerId,
+    input.workspaceId,
+    input.runnerId,
+    Date.now(),
+    input.title ?? null,
+  );
 }
 
 export function updateSessionTitle(

@@ -1,4 +1,10 @@
-import { listSessions, workspacesForOwner } from "@cc-web/control-db";
+import {
+  deleteSession,
+  listSessions,
+  type Scheduler,
+  updateSessionTitle,
+  workspacesForOwner,
+} from "@cc-web/control-db";
 import { SESSIONS_CAPABILITY } from "@cc-web/protocol";
 import type { Dispatcher } from "../dispatch/dispatcher.ts";
 import type { PendingRpcRequests } from "../rpc/pending-requests.ts";
@@ -208,5 +214,94 @@ export async function handleWorkspaceSessionMessages(
     kind: "workspace.sessions.messages",
     payload,
     capability: SESSIONS_CAPABILITY,
+  });
+}
+
+/**
+ * Update a session's title (friendly name).
+ */
+export async function handleUpdateSessionTitle(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  sessionId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("BAD_REQUEST", "malformed JSON body", 400);
+  }
+
+  const title =
+    typeof body === "object" &&
+    body !== null &&
+    "title" in body &&
+    typeof (body as { title: unknown }).title === "string"
+      ? (body as { title: string }).title
+      : "";
+
+  const ok = updateSessionTitle(options.db, sessionId, authorized.userId, title);
+  if (!ok) {
+    return new Response("not found", { status: 404 });
+  }
+
+  return new Response(JSON.stringify({ ok: true, sessionId, title: title.trim() }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * Delete a session and its associated history/records.
+ */
+export async function handleDeleteSession(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  scheduler: Scheduler,
+  sessionId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const active = scheduler.activeRunFor(sessionId);
+  if (active) {
+    scheduler.release(active.runId);
+  }
+
+  const ok = deleteSession(options.db, sessionId, authorized.userId);
+  if (!ok) {
+    return new Response("not found", { status: 404 });
+  }
+
+  return new Response(JSON.stringify({ ok: true, sessionId }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }

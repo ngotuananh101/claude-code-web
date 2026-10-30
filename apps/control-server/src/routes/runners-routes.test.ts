@@ -343,4 +343,70 @@ describe("runner registry routes", () => {
     expect(body.runners[0]?.models).toEqual(advertised);
     socket.close();
   });
+
+  test("PATCH /api/runners/:id renames the runner", async () => {
+    const { url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string };
+
+    const response = await fetch(`${url}/api/runners/${minted.runnerId}`, {
+      method: "PATCH",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Runner Văn Phòng" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      runnerId: minted.runnerId,
+      name: "Runner Văn Phòng",
+    });
+
+    const listResp = await fetch(`${url}/api/runners`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    const listBody = (await listResp.json()) as {
+      runners: Array<{ runnerId: string; name?: string }>;
+    };
+    expect(listBody.runners[0]?.name).toBe("Runner Văn Phòng");
+  });
+
+  test("DELETE /api/runners/:id deletes the runner and cascades sessions", async () => {
+    const { db, url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string };
+
+    db.query(
+      "INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at) VALUES ('sess-r', 'user-1', 'default', ?, ?)",
+    ).run(minted.runnerId, Date.now());
+
+    const response = await fetch(`${url}/api/runners/${minted.runnerId}`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      runnerId: minted.runnerId,
+      deletedSessions: ["sess-r"],
+    });
+
+    const listResp = await fetch(`${url}/api/runners`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    const listBody = (await listResp.json()) as { runners: Array<{ runnerId: string }> };
+    expect(listBody.runners).toHaveLength(0);
+
+    const sessionRow = db.query("SELECT id FROM sessions WHERE id = 'sess-r'").get();
+    expect(sessionRow).toBeNull();
+  });
 });

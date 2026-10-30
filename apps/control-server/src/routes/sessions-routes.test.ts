@@ -437,3 +437,67 @@ describe("GET /api/workspaces/:workspaceId/sessions/:sessionId/messages", () => 
     expect(response.status).toBe(503);
   });
 });
+
+describe("session rename and delete routes", () => {
+  test("PATCH /api/sessions/:id renames the session", async () => {
+    const { db, url, cookie } = await start();
+    db.query(
+      "INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at) VALUES ('sess-123', 'user-1', 'default', 'runner-a', ?)",
+    ).run(Date.now());
+
+    const response = await fetch(`${url}/api/sessions/sess-123`, {
+      method: "PATCH",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Tên phiên mới" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      sessionId: "sess-123",
+      title: "Tên phiên mới",
+    });
+
+    const row = db.query("SELECT title FROM sessions WHERE id = 'sess-123'").get() as {
+      title: string;
+    };
+    expect(row.title).toBe("Tên phiên mới");
+  });
+
+  test("PATCH /api/sessions/:id returns 404 for unknown session", async () => {
+    const { url, cookie } = await start();
+    const response = await fetch(`${url}/api/sessions/unknown`, {
+      method: "PATCH",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Test" }),
+    });
+    expect(response.status).toBe(404);
+  });
+
+  test("DELETE /api/sessions/:id deletes the session", async () => {
+    const { db, url, cookie } = await start();
+    db.query(
+      "INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at) VALUES ('sess-del', 'user-1', 'default', 'runner-a', ?)",
+    ).run(Date.now());
+
+    const response = await fetch(`${url}/api/sessions/sess-del`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, sessionId: "sess-del" });
+
+    const row = db.query("SELECT id FROM sessions WHERE id = 'sess-del'").get();
+    expect(row).toBeNull();
+  });
+
+  test("DELETE /api/sessions/:id returns 404 for unknown session", async () => {
+    const { url, cookie } = await start();
+    const response = await fetch(`${url}/api/sessions/unknown`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(404);
+  });
+});

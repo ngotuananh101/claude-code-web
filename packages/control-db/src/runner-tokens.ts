@@ -22,7 +22,7 @@ export type MintedRunnerToken = {
 
 export type ListedRunner = {
   runnerId: string;
-  name?: string | null;
+  name?: string | null | undefined;
   createdAt: number;
   revokedAt: number | null;
 };

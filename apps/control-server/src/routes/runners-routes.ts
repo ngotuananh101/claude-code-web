@@ -1,7 +1,15 @@
-import { createRunnerToken, listRunners, revokeRunner } from "@cc-web/control-db";
+import {
+  createRunnerToken,
+  deleteRunner,
+  listRunners,
+  revokeRunner,
+  type Scheduler,
+  updateRunnerName,
+} from "@cc-web/control-db";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
+import { jsonError } from "./api-error.ts";
 
 /**
  * The owner's runner registry over HTTP (§6.1, connector model): mint a
@@ -134,4 +142,104 @@ export async function handleRevokeRunner(
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
+}
+
+/**
+ * Update a runner's name (friendly name).
+ */
+export async function handleUpdateRunnerName(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  runnerId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("BAD_REQUEST", "malformed JSON body", 400);
+  }
+
+  const name =
+    typeof body === "object" &&
+    body !== null &&
+    "name" in body &&
+    typeof (body as { name: unknown }).name === "string"
+      ? (body as { name: string }).name
+      : "";
+
+  const ok = updateRunnerName(options.db, runnerId, authorized.userId, name);
+  if (!ok) {
+    return new Response("not found", { status: 404 });
+  }
+
+  return new Response(JSON.stringify({ ok: true, runnerId, name: name.trim() }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * Delete a runner and cascade delete all its sessions and related data.
+ * If runner has an active socket connection, disconnect it.
+ */
+export async function handleDeleteRunner(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  runnerGateway: RunnerGateway,
+  scheduler: Scheduler,
+  runnerId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  // Revoke / disconnect live socket if any
+  runnerGateway.revoke(runnerId);
+
+  const result = deleteRunner(options.db, runnerId, authorized.userId);
+  if (!result.ok) {
+    return new Response("not found", { status: 404 });
+  }
+
+  // Release any active runs for deleted sessions
+  for (const sid of result.deletedSessions) {
+    const active = scheduler.activeRunFor(sid);
+    if (active) {
+      scheduler.release(active.runId);
+    }
+  }
+
+  return new Response(
+    JSON.stringify({ ok: true, runnerId, deletedSessions: result.deletedSessions }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    },
+  );
 }

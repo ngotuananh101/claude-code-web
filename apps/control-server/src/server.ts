@@ -53,12 +53,16 @@ import {
 } from "./routes/mutation-routes.ts";
 import {
   handleCreateRunner,
+  handleDeleteRunner,
   handleListRunners,
   handleRevokeRunner,
+  handleUpdateRunnerName,
 } from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
 import {
+  handleDeleteSession,
   handleListSessions,
+  handleUpdateSessionTitle,
   handleWorkspaceSessionMessages,
   handleWorkspaceSessionsList,
 } from "./routes/sessions-routes.ts";
@@ -356,8 +360,45 @@ export function createServer(options: ServerOptions): ServerHandle {
         );
       }
 
+      const runnerMatch = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
+      if (runnerMatch) {
+        const runnerId = decodeURIComponent(runnerMatch[1] ?? "");
+        if (request.method === "PATCH") {
+          return handleUpdateRunnerName(request, options, allowed, browserGateway, runnerId);
+        }
+        if (request.method === "DELETE") {
+          return handleDeleteRunner(
+            request,
+            options,
+            allowed,
+            browserGateway,
+            runnerGateway,
+            scheduler,
+            runnerId,
+          );
+        }
+      }
+
       if (url.pathname === "/api/sessions" && request.method === "GET") {
         return handleListSessions(request, options, allowed, browserGateway);
+      }
+
+      const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+      if (sessionMatch) {
+        const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
+        if (request.method === "PATCH") {
+          return handleUpdateSessionTitle(request, options, allowed, browserGateway, sessionId);
+        }
+        if (request.method === "DELETE") {
+          return handleDeleteSession(
+            request,
+            options,
+            allowed,
+            browserGateway,
+            scheduler,
+            sessionId,
+          );
+        }
       }
 
       if (url.pathname === "/api/workspaces" && request.method === "GET") {

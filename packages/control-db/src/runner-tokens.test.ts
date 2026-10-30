@@ -2,12 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
 import { verifyRunnerCredential } from "./runner-credentials.ts";
-import {
-  createRunnerToken,
-  deleteRunner,
-  listRunners,
-  updateRunnerName,
-} from "./runner-tokens.ts";
+import { createRunnerToken, deleteRunner, listRunners, updateRunnerName } from "./runner-tokens.ts";
 import { ensureSessionPin, sessionPin } from "./sessions.ts";
 
 function freshDb(): Database {
@@ -144,7 +139,9 @@ describe("updateRunnerName & deleteRunner", () => {
       db.query("SELECT COUNT(*) AS count FROM workspaces WHERE runner_id = ?").get(runnerId),
     ).toEqual({ count: 0 });
     expect(
-      db.query("SELECT COUNT(*) AS count FROM runner_credentials WHERE runner_id = ?").get(runnerId),
+      db
+        .query("SELECT COUNT(*) AS count FROM runner_credentials WHERE runner_id = ?")
+        .get(runnerId),
     ).toEqual({ count: 0 });
   });
 

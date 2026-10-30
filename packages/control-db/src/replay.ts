@@ -133,7 +133,7 @@ export function sessionOwner(db: Database, sessionId: string): string | undefine
 /** One sidebar row: enough to recognize the session and know its state. */
 export type SessionSummary = {
   sessionId: string;
-  title?: string | null;
+  title?: string | null | undefined;
   watermark: number;
   eventCount: number;
   /** The last journaled event's type, or null when only a dispatch exists. */
