@@ -65,7 +65,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
 
       <div v-else class="flex items-center gap-1.5 shrink-0">
         <Clock :size="14" />
-        <span>{{ turn.durationText ? `Worked for ${turn.durationText}` : "Agent" }}</span>
+        <span>{{ turn.durationText ? `Đã xử lý trong ${turn.durationText}` : "Agent" }}</span>
       </div>
 
       <!-- Horizontal divider line filling remaining width -->

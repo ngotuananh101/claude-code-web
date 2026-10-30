@@ -110,7 +110,7 @@ const sortIcon = computed<Component>(() => {
 const sortLabels: Record<SessionSort, string> = {
   recent: "mới nhất trước",
   oldest: "cũ nhất trước",
-  name: "theo id",
+  name: "theo tên",
 };
 const sortTitle = computed(() => `Sắp xếp: ${sortLabels[sort.value]} — bấm để đổi`);
 
@@ -491,7 +491,7 @@ async function handleDeleteConfirm(): Promise<void> {
       title="Tìm phiên"
       description="Chọn một phiên để mở journal của nó."
     >
-      <CommandInput placeholder="Tìm phiên theo id…" />
+      <CommandInput placeholder="Tìm phiên theo tên hoặc id…" />
       <CommandList>
         <CommandEmpty>Không có phiên nào khớp.</CommandEmpty>
         <CommandGroup

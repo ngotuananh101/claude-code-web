@@ -83,14 +83,14 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           <span
             v-if="step.diffStats.added > 0"
             class="inline-flex shrink-0 items-center font-mono text-[11px] text-emerald-600 dark:text-emerald-400"
-            title="+added lines"
+            title="+dòng thêm"
           >
             +{{ step.diffStats.added }}
           </span>
           <span
             v-if="step.diffStats.removed > 0"
             class="inline-flex shrink-0 items-center font-mono text-[11px] text-rose-600 dark:text-rose-400"
-            title="-removed lines"
+            title="-dòng xoá"
           >
             -{{ step.diffStats.removed }}
           </span>
@@ -152,12 +152,12 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
             class="rounded-md border border-border/60 bg-muted/40 p-2.5 font-mono text-[11px] text-muted-foreground"
           >
             <div class="mb-1 flex items-center justify-between">
-              <span class="font-semibold text-foreground/60">Input</span>
+              <span class="font-semibold text-foreground/60">Đầu vào</span>
               <button
                 type="button"
-                @click.stop="copyToClipboard(step.inputSummary!, 'input')"
+                @click.stop="copyToClipboard(step.inputSummary!, 'đầu vào')"
                 class="inline-flex items-center gap-0.5 rounded border border-border/30 px-1 py-0.25 text-[10px] text-muted-foreground hover:text-foreground"
-                title="Sao chép input"
+                title="Sao chép đầu vào"
               >
                 <Copy :size="10" />
               </button>
@@ -171,12 +171,12 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
             class="rounded-md border border-border/60 bg-muted/40 p-2.5 font-mono text-[11px] text-muted-foreground"
           >
             <div class="mb-1 flex items-center justify-between">
-              <span class="font-semibold text-foreground/60">Output</span>
+              <span class="font-semibold text-foreground/60">Đầu ra</span>
               <button
                 type="button"
-                @click.stop="copyToClipboard(step.outputSummary!, 'output')"
+                @click.stop="copyToClipboard(step.outputSummary!, 'đầu ra')"
                 class="inline-flex items-center gap-0.5 rounded border border-border/30 px-1 py-0.25 text-[10px] text-muted-foreground hover:text-foreground"
-                title="Sao chép output"
+                title="Sao chép đầu ra"
               >
                 <Copy :size="10" />
               </button>

@@ -44,9 +44,9 @@ const props = defineProps<{ sessionId: string }>();
 
 type Tab = "files" | "changes" | "diagnostics";
 const TAB_LABELS: Record<Tab, string> = {
-  files: "Files",
-  changes: "Changes",
-  diagnostics: "Diagnostics",
+  files: "Tệp tin",
+  changes: "Thay đổi",
+  diagnostics: "Chẩn đoán",
 };
 
 const tab = ref<Tab>("files");
@@ -658,7 +658,7 @@ watch(tab, (next) => {
             <template v-else>
               <div class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5">
                 <div class="text-muted-foreground">
-                  Baseline: attempt {{ snapshotStatus.baseline.attemptId }}
+                  Bản chụp gốc: lượt {{ snapshotStatus.baseline.attemptId }}
                   <span v-if="snapshotStatus.baseline.sessionId !== null">
                     — phiên {{ snapshotStatus.baseline.sessionId }}
                   </span>
@@ -815,7 +815,7 @@ watch(tab, (next) => {
       <!-- Diagnostics -->
       <template v-else>
         <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
-          <span>cấu hình runner</span>
+          <span>Cấu hình runner</span>
           <button type="button" class="text-primary hover:underline" @click="loadDiagnostics">
             làm mới
           </button>
@@ -836,19 +836,19 @@ watch(tab, (next) => {
             </div>
           </template>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">git</dt>
+            <dt class="text-muted-foreground">Git</dt>
             <dd>{{ diagnostics.report.gitAvailable ? "có" : "không" }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">provider auth</dt>
+            <dt class="text-muted-foreground">Xác thực provider</dt>
             <dd>{{ diagnostics.report.providerAuth }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">runtime</dt>
+            <dt class="text-muted-foreground">Môi trường chạy</dt>
             <dd>{{ diagnostics.report.runtime }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">workspace root</dt>
+            <dt class="text-muted-foreground">Thư mục gốc</dt>
             <dd class="truncate" :title="diagnostics.report.workspaceRoot">
               {{ diagnostics.report.workspaceRoot }}
             </dd>

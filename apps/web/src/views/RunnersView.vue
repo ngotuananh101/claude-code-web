@@ -98,9 +98,9 @@ async function copyToken(): Promise<void> {
   if (minted.value === null) return;
   try {
     await navigator.clipboard.writeText(minted.value.token);
-    toast.success("Token đã copy");
+    toast.success("Đã sao chép token.");
   } catch {
-    toast.error("Không copy được token — chọn và copy thủ công.");
+    toast.error("Không sao chép được token — chọn và sao chép thủ công.");
   }
 }
 
@@ -188,7 +188,7 @@ onMounted(() => void load());
         cc-web / runners
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
       </p>
-      <h1 class="mb-2 text-[26px] font-medium tracking-tight">Connectors.</h1>
+      <h1 class="mb-2 text-[26px] font-medium tracking-tight">Kết nối Runner.</h1>
       <p class="mb-6 text-sm leading-relaxed text-muted-foreground">
         Runner là connector chạy trên máy chứa dự án của bạn: nó tự kết nối ra
         server này, nhận lệnh, và ghi lại những gì agent đã làm vào journal.
@@ -206,7 +206,7 @@ onMounted(() => void load());
         <div class="grid gap-3.5">
           <p class="text-sm font-medium">Token runner dùng một lần</p>
           <p class="text-[13px] text-muted-foreground">
-            Chỉ hiển thị một lần — server chỉ lưu hash của nó. Copy ngay bây giờ.
+            Chỉ hiển thị một lần — server chỉ lưu hash của nó. Hãy sao chép ngay bây giờ.
           </p>
           <div class="flex items-center gap-3 rounded-md border border-border bg-muted px-3 py-2.5">
             <span class="min-w-0 flex-1 break-all font-mono text-[13px] select-all">{{ minted.token }}</span>
@@ -216,11 +216,11 @@ onMounted(() => void load());
               class="shrink-0"
               @click="copyToken"
             >
-              copy
+              sao chép
             </Button>
           </div>
           <div class="grid gap-1">
-            <span class="font-mono text-xs tracking-wider text-muted-foreground uppercase">runner id</span>
+            <span class="font-mono text-xs tracking-wider text-muted-foreground uppercase">mã runner</span>
             <span class="break-all font-mono text-[13px] select-all">{{ minted.runnerId }}</span>
           </div>
           <pre class="whitespace-pre-wrap break-all rounded-md border-l-2 border-border px-3.5 py-2.5 font-mono text-[12.5px] leading-relaxed text-muted-foreground">{{ setupCommands }}</pre>

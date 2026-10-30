@@ -196,7 +196,22 @@ async function refreshNow(): Promise<void> {
         <header
           class="z-10 mx-auto flex w-full max-w-4xl items-baseline justify-between gap-4 px-4 pt-4 pb-3 md:px-6"
         >
-          <span class="truncate font-mono text-[13px]">{{ active.sessionId }}</span>
+          <div class="flex min-w-0 items-center gap-2 truncate">
+            <span
+              class="truncate text-sm"
+              :class="active.title ? 'font-medium font-sans text-foreground' : 'font-mono text-[13px] text-muted-foreground'"
+              :title="active.title || active.sessionId"
+            >
+              {{ active.title || active.sessionId }}
+            </span>
+            <span
+              v-if="active.title"
+              class="truncate font-mono text-xs text-muted-foreground"
+              :title="active.sessionId"
+            >
+              ({{ active.sessionId }})
+            </span>
+          </div>
           <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
             <span>{{ active.watermark }}</span>
             <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">

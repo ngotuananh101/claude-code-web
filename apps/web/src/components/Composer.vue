@@ -175,6 +175,11 @@ type ChosenFolder = {
 
 const selectedFolder = ref<ChosenFolder | null>(null);
 
+const selectedRunnerName = computed(() => {
+  const found = runners.value.find((r) => r.runnerId === runnerId.value);
+  return found?.name ? found.name : null;
+});
+
 const selectedSessionLabel = computed(() => {
   if (selectedSession.value === NEW_SESSION) return "Phiên mới";
   const found = workspaceSessions.value?.find((s) => s.sessionId === selectedSession.value);
@@ -386,11 +391,12 @@ async function stop(): Promise<void> {
         <SelectTrigger
           size="sm"
           aria-label="Chọn runner"
-          class="h-7! max-w-[150px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-          :title="runnerId ? `Runner: ${runnerId}` : 'Chọn runner'"
+          class="h-7! max-w-[170px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+          :title="runnerId ? (selectedRunnerName ? `${selectedRunnerName} (${runnerId})` : `Runner: ${runnerId}`) : 'Chọn runner'"
         >
           <Server :size="13" class="shrink-0" />
-          <span v-if="runnerId" class="truncate font-mono text-xs">{{ shortRunnerId(runnerId) }}</span>
+          <span v-if="selectedRunnerName" class="truncate font-sans font-medium text-xs text-foreground">{{ selectedRunnerName }}</span>
+          <span v-else-if="runnerId" class="truncate font-mono text-xs">{{ shortRunnerId(runnerId) }}</span>
           <span v-else class="text-xs">Chọn runner</span>
         </SelectTrigger>
         <SelectContent position="popper">
@@ -398,9 +404,14 @@ async function stop(): Promise<void> {
             v-for="r in runners"
             :key="r.runnerId"
             :value="r.runnerId"
-            class="max-w-[320px] font-mono text-xs"
+            class="max-w-[320px] text-xs"
           >
-            {{ r.runnerId }}
+            <div class="flex items-center gap-1.5 truncate">
+              <span v-if="r.name" class="font-sans font-medium text-foreground truncate">{{ r.name }}</span>
+              <span class="font-mono text-muted-foreground text-[11px] truncate" :class="{ 'text-foreground': !r.name }">
+                {{ r.name ? `(${r.runnerId})` : r.runnerId }}
+              </span>
+            </div>
           </SelectItem>
         </SelectContent>
       </Select>

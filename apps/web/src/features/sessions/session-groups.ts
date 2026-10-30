@@ -42,7 +42,11 @@ export const SESSION_SORTS: readonly SessionSort[] = ["recent", "oldest", "name"
 
 function compareSessions(sort: SessionSort) {
   return (a: SessionSummary, b: SessionSummary): number => {
-    if (sort === "name") return a.sessionId.localeCompare(b.sessionId);
+    if (sort === "name") {
+      const nameA = a.title || a.sessionId;
+      const nameB = b.title || b.sessionId;
+      return nameA.localeCompare(nameB);
+    }
     const delta = b.lastIngestedAt - a.lastIngestedAt;
     return sort === "recent" ? delta : -delta;
   };

@@ -253,7 +253,7 @@ const recent = computed(() =>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.sessions ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Runs</dt>
+              <dt class="text-xs text-muted-foreground">Lượt chạy</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.runs ?? "—" }}</dd>
             </div>
             <div>
@@ -290,14 +290,20 @@ const recent = computed(() =>
                 :to="`/sessions/${s.sessionId}`"
                 class="flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-muted/60"
               >
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 truncate font-mono text-xs">
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs">
                   <span
                     v-if="folderFor(s)"
                     class="shrink-0 rounded bg-muted px-1.5 py-0.5 font-sans text-[10px] text-muted-foreground"
                   >
                     {{ folderFor(s) }}
                   </span>
-                  <span class="truncate">{{ s.sessionId }}</span>
+                  <span
+                    class="truncate"
+                    :class="s.title ? 'font-medium font-sans' : 'font-mono text-muted-foreground'"
+                    :title="s.title || s.sessionId"
+                  >
+                    {{ s.title || s.sessionId }}
+                  </span>
                 </span>
                 <span class="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
                   {{ s.eventCount }} sự kiện · {{ relativeTime(s.lastIngestedAt) }}
