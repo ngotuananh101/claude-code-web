@@ -32,8 +32,11 @@ export type UnitOptions = {
   scope?: UnitScope | undefined;
 };
 
-export function userUnitPath(homeDir: string): string {
-  const configHome = process.env["XDG_CONFIG_HOME"] ?? `${homeDir}/.config`;
+export function userUnitPath(homeDir?: string): string {
+  if (homeDir) {
+    return `${homeDir}/.config/systemd/user/${UNIT_NAME}`;
+  }
+  const configHome = process.env["XDG_CONFIG_HOME"] ?? `${process.env["HOME"]}/.config`;
   return `${configHome}/systemd/user/${UNIT_NAME}`;
 }
 
