@@ -35,6 +35,11 @@ import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
+  handleGetAttachment,
+  handleGetRunnerAttachment,
+  handleUploadAttachments,
+} from "./routes/attachments-routes.ts";
+import {
   COOKIE_NAME,
   handleLogin,
   handleLogout,
@@ -111,6 +116,11 @@ export type ServerOptions = {
    * entrypoint passes one; tests omit it and get an ephemeral port.
    */
   port?: number;
+  /**
+   * Directory that stores uploaded attachment files on disk (§4.4). When absent
+   * the server defaults to `./data/attachments` under its CWD.
+   */
+  attachmentsDir?: string;
 };
 
 export type ServerHandle = {
@@ -383,6 +393,18 @@ export function createServer(options: ServerOptions): ServerHandle {
         return handleListSessions(request, options, allowed, browserGateway);
       }
 
+      // Upload attachments for a session: POST /api/sessions/:sessionId/attachments
+      const sessionAttachmentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/attachments$/);
+      if (sessionAttachmentsMatch && request.method === "POST") {
+        return handleUploadAttachments(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(sessionAttachmentsMatch[1] ?? ""),
+        );
+      }
+
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
       if (sessionMatch) {
         const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
@@ -396,9 +418,32 @@ export function createServer(options: ServerOptions): ServerHandle {
             allowed,
             browserGateway,
             scheduler,
+            runnerGateway,
+            dispatcher,
             sessionId,
           );
         }
+      }
+
+      // Fetch an attachment by id: browser (owner) and runner endpoints.
+      const attachmentGetMatch = url.pathname.match(/^\/api\/attachments\/([^/]+)$/);
+      if (attachmentGetMatch && request.method === "GET") {
+        return handleGetAttachment(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(attachmentGetMatch[1] ?? ""),
+        );
+      }
+
+      const runnerAttachmentMatch = url.pathname.match(/^\/api\/runner\/attachments\/([^/]+)$/);
+      if (runnerAttachmentMatch && request.method === "GET") {
+        return handleGetRunnerAttachment(
+          request,
+          options,
+          decodeURIComponent(runnerAttachmentMatch[1] ?? ""),
+        );
       }
 
       if (url.pathname === "/api/workspaces" && request.method === "GET") {

@@ -38,6 +38,38 @@ export function insertSessionAttachment(db: Database, record: SessionAttachmentR
   );
 }
 
+/**
+ * Look up a single attachment by id, without an owner filter.
+ *
+ * Used by the runner-credentialled endpoint: ownership is verified through the
+ * session pin (`sessionPin`), not by scoping the read here — the runner reaches
+ * an attachment through its session, not through the owner's authorization.
+ */
+export function getSessionAttachmentById(
+  db: Database,
+  id: string,
+): SessionAttachmentRecord | undefined {
+  const row = db
+    .query(
+      `SELECT id, session_id AS sessionId, owner_id AS ownerId, name, mime_type AS mimeType,
+            size, storage_path AS storagePath, created_at AS createdAt
+     FROM session_attachments
+     WHERE id = ?`,
+    )
+    .get(id) as {
+    id: string;
+    sessionId: string;
+    ownerId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    storagePath: string;
+    createdAt: number;
+  } | null;
+
+  return row === null ? undefined : row;
+}
+
 export function getSessionAttachment(
   db: Database,
   id: string,

@@ -1,5 +1,15 @@
-import { type Scheduler, sessionPin, workspacesForOwner } from "@cc-web/control-db";
-import { EFFORT_LEVELS, type EffortLevel, MODEL_IDS } from "@cc-web/protocol";
+import {
+  getSessionAttachment,
+  type Scheduler,
+  sessionPin,
+  workspacesForOwner,
+} from "@cc-web/control-db";
+import {
+  EFFORT_LEVELS,
+  type EffortLevel,
+  MODEL_IDS,
+  type RunnerAttachmentItem,
+} from "@cc-web/protocol";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import type { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
@@ -59,6 +69,7 @@ export async function handleDispatchRun(
     runnerId?: unknown;
     branch?: unknown;
     resumeSessionId?: unknown;
+    attachmentIds?: unknown;
   };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
@@ -157,6 +168,35 @@ export async function handleDispatchRun(
       return new Response("bad request", { status: 400 });
     }
     resumeSessionId = record.resumeSessionId.trim();
+  }
+
+  // §4.4: attachmentIds binds already-uploaded files to this run. Each id must be
+  // a string the owner can read — a missing or foreign one is a bad request, not
+  // a silent drop. The lookup happens before runner selection so a bad id is a
+  // 400 even when no runner is ready.
+  let attachments: RunnerAttachmentItem[] | undefined;
+  if (record.attachmentIds !== undefined) {
+    if (!Array.isArray(record.attachmentIds)) {
+      return new Response("bad request", { status: 400 });
+    }
+    for (const id of record.attachmentIds) {
+      if (typeof id !== "string" || id.trim() === "") {
+        return new Response("bad request", { status: 400 });
+      }
+    }
+    attachments = [];
+    for (const id of record.attachmentIds as string[]) {
+      const attachment = getSessionAttachment(options.db, id, authorized.userId);
+      if (attachment === undefined) {
+        return new Response("bad request", { status: 400 });
+      }
+      attachments.push({
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      });
+    }
   }
 
   // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
@@ -344,6 +384,7 @@ export async function handleDispatchRun(
       ...(ultracode === undefined ? {} : { ultracode }),
       ...(branch === undefined ? {} : { branch }),
       ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+      ...(attachments === undefined ? {} : { attachments }),
     },
     scheduler.capacityFor(ready, {
       runnerId: ready,

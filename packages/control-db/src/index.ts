@@ -19,6 +19,7 @@ export {
 export {
   deleteSessionAttachments,
   getSessionAttachment,
+  getSessionAttachmentById,
   insertSessionAttachment,
   listSessionAttachments,
   type SessionAttachmentRecord,

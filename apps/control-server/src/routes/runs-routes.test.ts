@@ -1405,3 +1405,103 @@ describe("POST /api/sessions/:id/runs branch (M4)", () => {
     expect(await undeclared.text()).toBe("unknown_branch");
   });
 });
+
+describe("POST /api/sessions/:id/runs attachmentIds", () => {
+  test("attachmentIds are mapped to RunnerAttachmentItem[] in the run.start payload", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // Seed an attachment owned by user-1.
+    const attId = "att-dispatch-1";
+    db.query(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(attId, "session-1", "user-1", "photo.png", "image/png", 42, "/tmp/x", Date.now());
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: [attId] }),
+    });
+    expect(response.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) =>
+          (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello" &&
+          Array.isArray((JSON.parse(row.payload) as { attachments?: unknown }).attachments),
+      ),
+    );
+
+    const payloads = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    const withAtt = payloads.find(
+      (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+    );
+    expect(withAtt).toBeDefined();
+    const payload = JSON.parse(withAtt!.payload) as {
+      attachments?: Array<{ id: string; name: string; mimeType: string; size: number }>;
+    };
+    expect(payload.attachments).toEqual([
+      { id: attId, name: "photo.png", mimeType: "image/png", size: 42 },
+    ]);
+  });
+
+  test("attachmentIds referencing another owner's attachment is a bad request", async () => {
+    const { db, url, auth } = await start();
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other", "hash", 1, Date.now());
+    db.query(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run("att-other", "sess-att-other", "user-2", "x.txt", "text/plain", 1, "/tmp/x", Date.now());
+
+    const cookie1 = `cc_session=${await auth.issueAccessToken("user-1")}`;
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie1, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: ["att-other"] }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("a non-array attachmentIds is a bad request", async () => {
+    const { url, cookie } = await start();
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: "not-an-array" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("attachmentIds with a non-string element is a bad request", async () => {
+    const { url, cookie } = await start();
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: [42] }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("an unknown attachmentId is a bad request", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", attachmentIds: ["does-not-exist"] }),
+    });
+    expect(response.status).toBe(400);
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+});

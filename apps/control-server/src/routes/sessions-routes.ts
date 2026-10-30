@@ -1,7 +1,10 @@
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import {
   deleteSession,
   listSessions,
   type Scheduler,
+  sessionPin,
   updateSessionTitle,
   workspacesForOwner,
 } from "@cc-web/control-db";
@@ -268,6 +271,11 @@ export async function handleUpdateSessionTitle(
 
 /**
  * Delete a session and its associated history/records.
+ *
+ * Attachment metadata rows are removed by `deleteSession`; the files on disk are
+ * removed here when an explicit `attachmentsDir` was configured, and a
+ * `session.cleanup` command is enqueued to the pinned runner so it can reclaim
+ * any attachments it holds locally (§4.4).
  */
 export async function handleDeleteSession(
   request: Request,
@@ -275,6 +283,8 @@ export async function handleDeleteSession(
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
   scheduler: Scheduler,
+  runnerGateway: RunnerGateway,
+  dispatcher: Dispatcher | undefined,
   sessionId: string,
 ): Promise<Response> {
   const origin = request.headers.get("origin");
@@ -290,6 +300,10 @@ export async function handleDeleteSession(
     return new Response("unauthorized", { status: 401 });
   }
 
+  // Read the pin before deletion so the session's runner id is known after the
+  // row is gone — the pin is what routes the cleanup command.
+  const pin = sessionPin(options.db, sessionId);
+
   const active = scheduler.activeRunFor(sessionId);
   if (active) {
     scheduler.release(active.runId);
@@ -300,8 +314,36 @@ export async function handleDeleteSession(
     return new Response("not found", { status: 404 });
   }
 
-  // TODO: forward `res.attachmentStoragePaths` to the runner so it deletes the
-  // files on disk. (See §4.4 / task 3.)
+  // §4.4: remove the session's attachment directory on disk if it was configured
+  // and the directory exists. The metadata rows are already gone; this reclaims
+  // the bytes. Missing-on-disk is not an error — the session may have none.
+  if (options.attachmentsDir !== undefined && res.attachmentStoragePaths.length > 0) {
+    const sessionDir = join(options.attachmentsDir, sessionId);
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+
+  // Enroll the pinned runner in cleanup so it deletes any attachments it holds
+  // locally. Only a ready runner is addressed — a connected-but-not-ready one
+  // has not reconciled and cannot be trusted with the cleanup (§6.2). The command
+  // stays in the outbox until reconnect, and the runner's inbox dedupes on boot.
+  // `session.cleanup` is a one-shot command, not an RPC with a waiter.
+  if (
+    pin !== undefined &&
+    dispatcher !== undefined &&
+    options.outbox !== undefined &&
+    runnerGateway.stateOf(pin.runnerId) === "ready"
+  ) {
+    const commandId = `cmd_${crypto.randomUUID()}`;
+    await options.outbox.enqueue({
+      commandId,
+      runnerId: pin.runnerId,
+      kind: "session.cleanup",
+      issuedAt: new Date().toISOString(),
+      payload: { sessionId },
+      sessionId,
+    });
+    dispatcher.drain(pin.runnerId);
+  }
 
   return new Response(JSON.stringify({ ok: true, sessionId }), {
     status: 200,

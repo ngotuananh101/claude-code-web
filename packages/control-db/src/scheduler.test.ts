@@ -181,6 +181,38 @@ describe("scheduler", () => {
     expect("resumeSessionId" in payload).toBe(false);
   });
 
+  test("a dispatch with attachments carries them on the run.start payload", async () => {
+    const { db, scheduler } = setup();
+
+    const attachments = [{ id: "att-1", name: "a.png", mimeType: "image/png", size: 100 }];
+    const decision = await scheduler.dispatch({ ...request, attachments }, capacity());
+    expect(decision.ok).toBe(true);
+
+    const row = db.query("SELECT payload FROM command_outbox").get() as {
+      payload: string;
+    };
+    expect(JSON.parse(row.payload)).toEqual({
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+      prompt: "hello",
+      attachments: [{ id: "att-1", name: "a.png", mimeType: "image/png", size: 100 }],
+    });
+  });
+
+  test("a dispatch without attachments omits the key, never an empty list", async () => {
+    const { db, scheduler } = setup();
+
+    await scheduler.dispatch(request, capacity());
+
+    const row = db.query("SELECT payload FROM command_outbox").get() as {
+      payload: string;
+    };
+    const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    expect("attachments" in payload).toBe(false);
+  });
+
   test("a refused dispatch writes nothing to the outbox", async () => {
     const { db, scheduler } = setup();
 

@@ -18,6 +18,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import type { RunnerAttachmentItem } from "@cc-web/protocol";
 import { CommandOutbox } from "./command-outbox.ts";
 import { ensureSessionPin } from "./sessions.ts";
 
@@ -83,6 +84,12 @@ export type DispatchRequest = {
    * Carries in the run.start payload, next to `prompt`.
    */
   resumeSessionId?: string;
+  /**
+   * File attachments bound to this dispatch (§4.4). The runner downloads each
+   * from the runner attachment endpoint and makes it available to the SDK stream.
+   * Absent means no attachments — the key is omitted, never sent as an empty list.
+   */
+  attachments?: RunnerAttachmentItem[];
 };
 
 export type DispatchDecision =
@@ -167,6 +174,7 @@ export class Scheduler {
         ...(request.resumeSessionId === undefined
           ? {}
           : { resumeSessionId: request.resumeSessionId }),
+        ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
       },
     });
 
