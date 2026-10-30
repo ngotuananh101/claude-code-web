@@ -19,7 +19,6 @@ import type { Database } from "bun:sqlite";
 import {
   attemptWatermark,
   type CommandOutbox,
-  expirePendingApprovalsForAttempt,
   ingestEvent,
   readSessionEvents,
   Scheduler,
@@ -30,6 +29,7 @@ import {
 } from "@cc-web/control-db";
 import { PROTOCOL_VERSION, RunRegistry, WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
 import type { Server } from "bun";
+import { abandonAttemptApprovals } from "./approvals/abandon.ts";
 import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
@@ -178,11 +178,17 @@ export function createServer(options: ServerOptions): ServerHandle {
     verifyCredential: options.verifyRunnerCredential,
     onReady: (runnerId) => dispatcher?.drain(runnerId),
     onReceipt: (runnerId, receipt) => dispatcher?.handleReceipt(runnerId, receipt),
-    // §14.3: an abandoned approval's cards must not sit pending forever — the
-    // projection closes them here, CAS-only, when reconciliation proves the
-    // runner's gate is gone.
+    // §14.3: an abandoned approval's cards must not sit pending forever. The
+    // projection closes the rows here, CAS-only, when reconciliation proves the
+    // runner's gate is gone — and because no `approval.expired` will ever
+    // arrive from that gate, the server journals and broadcasts one itself
+    // (§13.1: every non-user terminal is emitted).
     onAbandonApproval: (_runnerId, action) => {
-      expirePendingApprovalsForAttempt(options.db, action.attemptId);
+      abandonAttemptApprovals({
+        db: options.db,
+        attemptId: action.attemptId,
+        publish: (event) => browserGateway.publish(event),
+      });
     },
     // §15.1: the runner's hello/reconcile declaration replaces its rows — the
     // registration path §11.1 defers to, so the composer can list real

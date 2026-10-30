@@ -212,15 +212,26 @@ describe("expirePendingApprovalsForAttempt", () => {
 
     const closed = expirePendingApprovalsForAttempt(db, "attempt-1");
 
-    expect(closed).toBe(1);
+    // The closed rows carry their session context: the caller journals one
+    // `approval.expired` per row, and it needs to address the session it
+    // belongs to.
+    expect(closed).toEqual([
+      {
+        approvalId: "apr-1",
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        runnerId: "runner-a",
+      },
+    ]);
     expect(approvalForSession(db, "apr-1")?.state).toBe("expired");
     expect(approvalForSession(db, "apr-2")?.state).toBe("pending");
     expect(approvalForSession(db, "apr-3")?.state).toBe("resolved");
   });
 
-  test("answers zero for an attempt with no pending rows", () => {
+  test("answers an empty list for an attempt with no pending rows", () => {
     const db = setup();
-    expect(expirePendingApprovalsForAttempt(db, "attempt-missing")).toBe(0);
+    expect(expirePendingApprovalsForAttempt(db, "attempt-missing")).toEqual([]);
   });
 });
 

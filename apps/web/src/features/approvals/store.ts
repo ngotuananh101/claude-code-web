@@ -15,6 +15,8 @@ import { type ApprovalDecision, submitApprovalDecision } from "../../services/ap
 export type ApprovalUiState = {
   deciding: boolean;
   decision?: ApprovalDecision;
+  /** The server closed the gate without a decision (reconcile abandon, §14.3). */
+  closed?: boolean;
 };
 
 const states = reactive(new Map<string, ApprovalUiState>());
@@ -26,6 +28,15 @@ export function approvalUi(approvalId: string): ApprovalUiState {
     states.set(approvalId, state);
   }
   return state;
+}
+
+/**
+ * Read an approval's UI state without creating one. Surfaces that merely ask
+ * "has this browser closed it?" — the process accordion — must not grow the
+ * map for every approval in the transcript.
+ */
+export function peekApprovalUi(approvalId: string): ApprovalUiState | undefined {
+  return states.get(approvalId);
 }
 
 export async function submitDecision(
@@ -45,6 +56,11 @@ export async function submitDecision(
   }
   if (outcome === "conflict") {
     toast.info("Quyết định này đã được ghi nhận trước đó.");
+    return;
+  }
+  if (outcome === "expired") {
+    state.closed = true;
+    toast.info("Phê duyệt đã đóng — không còn nhận quyết định.");
     return;
   }
   if (outcome === "not_found") {

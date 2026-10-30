@@ -79,14 +79,29 @@ export async function handleApprovalDecision(
     return new Response("not found", { status: 404 });
   }
 
+  // Reconciliation's `abandon_approval` already closed this row (§14.3): there
+  // is no gate left to decide, and the route's generic "not_pending" would read
+  // to the browser as "someone already recorded your decision", which is false.
+  if (row.state === "expired") {
+    return new Response("expired", { status: 409 });
+  }
+
   // A crash-orphaned row can outlive its window without a terminal event (the
   // runner sweeps silently), so the projection can still say "pending" long
   // after the gate is gone. Recording a decision then would write an audit
   // trail the runner never honored — refuse, and let the sweep close the row.
   // The grace covers clock skew and a decision already in flight at expiry;
   // the runner's own expiry check stays the boundary authority.
+  //
+  // Only a still-pending row takes this branch: a `decided` one past its
+  // window was decided, and the honest answer is the CAS's `not_pending` —
+  // "expired" there would tell the operator their decision was never recorded.
   const EXPIRY_GRACE_MS = 15_000;
-  if (typeof row.expiresAt === "number" && row.expiresAt + EXPIRY_GRACE_MS < Date.now()) {
+  if (
+    row.state === "pending" &&
+    typeof row.expiresAt === "number" &&
+    row.expiresAt + EXPIRY_GRACE_MS < Date.now()
+  ) {
     return new Response("expired", { status: 409 });
   }
 

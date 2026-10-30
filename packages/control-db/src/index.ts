@@ -11,6 +11,7 @@ export {
   approvalForSession,
   closeApproval,
   type DecisionOutcome,
+  type ExpiredApproval,
   expirePendingApprovalsForAttempt,
   recordApprovalDecision,
   type UpsertApprovalRequestedInput,
@@ -34,10 +35,14 @@ export {
 } from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
+  appendServerEvent,
   attemptWatermark,
   type IngestResult,
   ingestEvent,
   type JournalEvent,
+  SERVER_EVENT_SEQUENCE_BASE,
+  type ServerEventAppend,
+  type ServerEventInput,
 } from "./journal.ts";
 export {
   listSessions,

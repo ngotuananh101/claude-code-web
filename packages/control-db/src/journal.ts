@@ -102,6 +102,74 @@ export function ingestEvent(
 }
 
 /**
+ * The local sequence a server-originated event starts at (§14.3).
+ *
+ * The journal's positions are the runner's transcript, but one terminal has no
+ * runner left to emit it: reconciliation abandoning a crash-orphaned approval
+ * (§13.1 requires `approval.expired` for every non-user terminal). Those rows
+ * are placed far above any counter a runner could reach so they can never
+ * collide with a real position, and — because the acknowledgement watermark
+ * counts contiguously from 1 — they can never inflate an ACK either.
+ */
+export const SERVER_EVENT_SEQUENCE_BASE = 1_000_000_000_000;
+
+export type ServerEventInput = {
+  runnerId: string;
+  sessionId: string;
+  runId: string;
+  attemptId: string;
+  type: string;
+  payload: unknown;
+  occurredAt?: string;
+};
+
+export type ServerEventAppend = IngestResult & {
+  /** The event exactly as journaled — the caller broadcasts this verbatim. */
+  event: JournalEvent;
+};
+
+/**
+ * Journal an event the control server originates itself.
+ *
+ * The identity is freshly minted, and the position is the highest reserved one
+ * of the attempt plus one. The read and the insert are synchronous on the
+ * server's single event loop, so no second writer can interleave between them;
+ * a runner can only ever hold positions below the base. Returns the same
+ * `IngestResult` as `ingestEvent` plus the journaled event — the caller
+ * broadcasts `stored` rows to browsers exactly as it does runner events.
+ */
+export function appendServerEvent(
+  db: Database,
+  input: ServerEventInput,
+  options: { now?: number } = {},
+): ServerEventAppend {
+  const now = options.now ?? Date.now();
+  const { next } = db
+    .prepare(
+      `SELECT COALESCE(MAX(local_sequence), ?) + 1 AS next
+       FROM run_events WHERE attempt_id = ? AND local_sequence >= ?`,
+    )
+    .get(SERVER_EVENT_SEQUENCE_BASE - 1, input.attemptId, SERVER_EVENT_SEQUENCE_BASE) as {
+    next: number;
+  };
+
+  const event: JournalEvent = {
+    eventId: `evt_srv_${crypto.randomUUID()}`,
+    runnerId: input.runnerId,
+    bootId: "control-server",
+    sessionId: input.sessionId,
+    runId: input.runId,
+    attemptId: input.attemptId,
+    localSequence: next,
+    occurredAt: input.occurredAt ?? new Date(now).toISOString(),
+    type: input.type,
+    payload: input.payload,
+  };
+
+  return { ...ingestEvent(db, event, { now }), event };
+}
+
+/**
  * The highest contiguous local sequence the journal holds for an attempt,
  * counting from 1 (§12.2). This is the number an ACK may carry: anything higher
  * would tell the runner a gap was delivered when it was not.

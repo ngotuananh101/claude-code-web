@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { APPROVAL_NO_EXPIRY } from "@cc-web/protocol";
 import { computed, reactive } from "vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { approvalUi, submitDecision } from "../features/approvals/store";
+import { approvalNeedsDecision, isDisplayExpired } from "../features/approvals/terminal.ts";
 
 /**
  * An inline decision card in the journal (§13.2), rendered in place of the
@@ -89,21 +89,15 @@ const allAnswered = computed(() =>
  * A non-expiring gate is parked at `APPROVAL_NO_EXPIRY` by the runner, so it
  * never counts as expired here either.
  */
-const displayExpired = computed(
-  () =>
-    props.terminal === undefined &&
-    expiresAt !== undefined &&
-    expiresAt < APPROVAL_NO_EXPIRY - 10_000 &&
-    expiresAt < Date.now(),
-);
+const displayExpired = computed(() => isDisplayExpired(expiresAt));
 
 /** Nothing decided yet, by journal or by this browser: the card takes input. */
-const interactive = computed(() => {
-  if (props.terminal !== undefined) return false;
-  if (displayExpired.value) return false;
-  if (ui?.deciding || ui?.decision !== undefined) return false;
-  return true;
-});
+const interactive = computed(
+  () =>
+    approvalNeedsDecision({ terminal: props.terminal, expiresAt, closed: ui?.closed }) &&
+    !ui?.deciding &&
+    ui?.decision === undefined,
+);
 
 const stateLabel = computed(() => {
   if (props.terminal !== undefined) {
@@ -114,6 +108,7 @@ const stateLabel = computed(() => {
   if (displayExpired.value) return "Đã hết hạn";
   if (ui?.decision === "allow") return "Đã cho phép";
   if (ui?.decision === "deny") return "Đã từ chối";
+  if (ui?.closed) return "Đã đóng";
   return undefined;
 });
 

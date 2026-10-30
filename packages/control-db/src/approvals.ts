@@ -223,16 +223,57 @@ export function closeApproval(
   return result.changes > 0;
 }
 
+/** One row an abandon closed, with the session context a journal event needs. */
+export type ExpiredApproval = {
+  approvalId: string;
+  sessionId: string;
+  runId: string;
+  attemptId: string;
+  runnerId: string;
+};
+
 /**
  * Reconciliation's `abandon_approval` (§14.3): the runner reports its gate
  * dead while the projection still says pending. Those cards would sit in
  * "đang chờ" forever — no `approval.resolved` will ever arrive for them. The
  * sweep closes them CAS-only (`pending → expired`); rows the operator already
- * decided on are history and stay untouched. Returns the number closed.
+ * decided on are history and stay untouched.
+ *
+ * Returns the closed rows themselves, not a count: §13.1 requires every
+ * non-user terminal to be emitted as `approval.expired`, and this is the only
+ * place the ids exist once the gate is gone.
  */
-export function expirePendingApprovalsForAttempt(db: Database, attemptId: string): number {
-  const result = db
-    .prepare("UPDATE approvals SET state = 'expired' WHERE attempt_id = ? AND state = 'pending'")
-    .run(attemptId);
-  return result.changes;
+export function expirePendingApprovalsForAttempt(
+  db: Database,
+  attemptId: string,
+): ExpiredApproval[] {
+  const tx = db.transaction((): ExpiredApproval[] => {
+    const rows = db
+      .prepare(
+        `SELECT approval_id, session_id, run_id, attempt_id, runner_id
+         FROM approvals WHERE attempt_id = ? AND state = 'pending'`,
+      )
+      .all(attemptId) as Array<{
+      approval_id: string;
+      session_id: string;
+      run_id: string;
+      attempt_id: string;
+      runner_id: string;
+    }>;
+    if (rows.length === 0) return [];
+
+    db.prepare(
+      "UPDATE approvals SET state = 'expired' WHERE attempt_id = ? AND state = 'pending'",
+    ).run(attemptId);
+
+    return rows.map((row) => ({
+      approvalId: row.approval_id,
+      sessionId: row.session_id,
+      runId: row.run_id,
+      attemptId: row.attempt_id,
+      runnerId: row.runner_id,
+    }));
+  });
+
+  return tx();
 }

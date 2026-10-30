@@ -61,6 +61,17 @@ describe("submitApprovalDecision", () => {
     expect(result).toBe("conflict");
   });
 
+  test("a 409 whose body says expired answers expired, not conflict", async () => {
+    // The projection row was closed by reconciliation's abandon, not by a
+    // decision: telling the operator "already recorded" would be a lie.
+    globalThis.fetch = (async () =>
+      new Response("expired", { status: 409 })) as unknown as typeof fetch;
+
+    const result = await submitApprovalDecision("apr-1", "allow");
+
+    expect(result).toBe("expired");
+  });
+
   test("a 404 answers not_found", async () => {
     capture(404, {});
 

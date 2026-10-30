@@ -2,6 +2,8 @@
 import type { BrowserReplayEvent } from "@cc-web/protocol";
 import { AlertCircle, Check, ChevronDown, ChevronRight, CircleStop, Loader2 } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
+import { peekApprovalUi } from "@/features/approvals/store.ts";
+import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
 import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
 import {
   processBodyVisible,
@@ -42,12 +44,24 @@ function terminalOf(step: ApprovalStep) {
   return props.terminalFor?.(step.event);
 }
 
-const resolvedApprovals = computed(() =>
-  approvalSteps.value.filter((step) => terminalOf(step) !== undefined),
-);
-const pendingApprovals = computed(() =>
-  approvalSteps.value.filter((step) => terminalOf(step) === undefined),
-);
+/**
+ * Whether this card still needs a human — the same rule the card itself
+ * applies (§13.2). A gate can go read-only before its journal terminal lands
+ * (the route answered "expired", or its window passed), and the accordion must
+ * not keep advertising "Đang chờ phê duyệt…" for a card nobody can answer.
+ */
+function needsDecision(step: ApprovalStep): boolean {
+  const payload = (step.event.payload ?? {}) as Record<string, unknown>;
+  const approvalId = typeof payload["approvalId"] === "string" ? payload["approvalId"] : "";
+  return approvalNeedsDecision({
+    terminal: terminalOf(step),
+    expiresAt: typeof payload["expiresAt"] === "number" ? payload["expiresAt"] : undefined,
+    closed: approvalId !== "" && peekApprovalUi(approvalId)?.closed === true,
+  });
+}
+
+const closedApprovals = computed(() => approvalSteps.value.filter((step) => !needsDecision(step)));
+const pendingApprovals = computed(() => approvalSteps.value.filter((step) => needsDecision(step)));
 
 /** Open while running or failed; collapsed once the run settles. */
 const isOpen = ref(props.status === "running" || props.status === "error");
@@ -118,7 +132,7 @@ const summaryLabel = computed(() =>
               <AgentToolStep v-else-if="step.kind === 'tool'" :step="step" />
             </template>
             <ApprovalCard
-              v-for="step in resolvedApprovals"
+              v-for="step in closedApprovals"
               :key="step.key"
               :event="step.event"
               :terminal="terminalOf(step)"

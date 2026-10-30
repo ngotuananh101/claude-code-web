@@ -9,7 +9,13 @@ import { authFetch } from "./auth-api.ts";
 
 export type ApprovalDecision = "allow" | "deny";
 
-export type DecisionOutcome = "decided" | "conflict" | "not_found" | "unauthorized" | "error";
+export type DecisionOutcome =
+  | "decided"
+  | "conflict"
+  | "expired"
+  | "not_found"
+  | "unauthorized"
+  | "error";
 
 export async function submitApprovalDecision(
   approvalId: string,
@@ -28,7 +34,13 @@ export async function submitApprovalDecision(
   }
 
   if (response.status === 202) return "decided";
-  if (response.status === 409) return "conflict";
+  if (response.status === 409) {
+    // The route distinguishes a closed gate from a second decision by the body:
+    // "expired" means reconciliation abandoned the approval (§14.3), anything
+    // else means a decision was already recorded. Read the body only here, so
+    // the happy path never pays for it.
+    return (await response.text().catch(() => "")) === "expired" ? "expired" : "conflict";
+  }
   if (response.status === 404) return "not_found";
   if (response.status === 401) return "unauthorized";
   return "error";

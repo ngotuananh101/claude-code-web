@@ -1,7 +1,13 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
-import { attemptWatermark, ingestEvent, type JournalEvent } from "./journal.ts";
+import {
+  appendServerEvent,
+  attemptWatermark,
+  ingestEvent,
+  type JournalEvent,
+  SERVER_EVENT_SEQUENCE_BASE,
+} from "./journal.ts";
 
 /**
  * The server-side journal (§12.1, §12.2).
@@ -147,5 +153,66 @@ describe("the acknowledgement watermark", () => {
   test("an attempt with nothing stored has watermark zero", () => {
     const db = setup();
     expect(attemptWatermark(db, "attempt-nobody")).toBe(0);
+  });
+});
+
+describe("appending an event the server originates", () => {
+  test("stores it above the runner's range without inflating the watermark", () => {
+    const db = setup();
+    ingestEvent(db, event({ localSequence: 1 }));
+    ingestEvent(db, event({ eventId: "evt-2", localSequence: 2 }));
+
+    const result = appendServerEvent(db, {
+      runnerId: "runner-a",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      type: "approval.expired",
+      payload: { approvalId: "apr-1", reason: "abandoned" },
+      occurredAt: "2026-10-24T00:01:00.000Z",
+    });
+
+    expect(result.status).toBe("stored");
+    expect(result.sessionSequence).toBe(3);
+    // §12.2: an ACK may only vouch for what the runner itself sent. The server
+    // row sits far above the reserved base, so the contiguous count is still 2.
+    expect(attemptWatermark(db, "attempt-1")).toBe(2);
+
+    const rows = db
+      .prepare("SELECT type, payload, occurred_at FROM run_events WHERE event_id LIKE 'evt_srv_%'")
+      .all() as Array<{ type: string; payload: string; occurred_at: string }>;
+    expect(rows).toEqual([
+      {
+        type: "approval.expired",
+        payload: JSON.stringify({ approvalId: "apr-1", reason: "abandoned" }),
+        occurred_at: "2026-10-24T00:01:00.000Z",
+      },
+    ]);
+  });
+
+  test("gives successive server events distinct, increasing positions", () => {
+    const db = setup();
+    const input = {
+      runnerId: "runner-a",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      type: "approval.expired" as const,
+      payload: { approvalId: "apr-1", reason: "abandoned" as const },
+    };
+
+    expect(appendServerEvent(db, input).status).toBe("stored");
+    expect(
+      appendServerEvent(db, { ...input, payload: { approvalId: "apr-2", reason: "abandoned" } })
+        .status,
+    ).toBe("stored");
+
+    const sequences = db
+      .prepare("SELECT local_sequence, session_sequence FROM run_events ORDER BY session_sequence")
+      .all() as Array<{ local_sequence: number; session_sequence: number }>;
+    expect(sequences).toEqual([
+      { local_sequence: SERVER_EVENT_SEQUENCE_BASE, session_sequence: 1 },
+      { local_sequence: SERVER_EVENT_SEQUENCE_BASE + 1, session_sequence: 2 },
+    ]);
   });
 });

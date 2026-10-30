@@ -203,6 +203,38 @@ describe("POST /api/approvals/:id/decision", () => {
     expect(second.status).toBe(409);
   });
 
+  test("an abandoned approval answers 409 expired, not a bare conflict", async () => {
+    // §14.3 closed this row because the runner's gate is gone; no decision was
+    // ever recorded. The browser needs to be able to tell the operator that,
+    // instead of showing "already recorded".
+    const { db, url, cookie } = await start();
+    upsertApprovalRequested(db, APPROVAL);
+    db.prepare("UPDATE approvals SET state = 'expired' WHERE approval_id = 'apr-1'").run();
+
+    const response = await decide(url, cookie, "apr-1", { decision: "allow" });
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toBe("expired");
+  });
+
+  test("a decided approval past its window answers not_pending, never expired", async () => {
+    // The row was already decided — the decision IS the record. Saying the gate
+    // "closed" would be false, and it is the only guard standing between the
+    // operator and a second submit while the runner's terminal is in flight.
+    const { db, url, cookie } = await start();
+    upsertApprovalRequested(db, { ...APPROVAL, expiresAt: Date.now() + 60_000 });
+    const first = await decide(url, cookie, "apr-1", { decision: "deny" });
+    expect(first.status).toBe(202);
+    db.prepare("UPDATE approvals SET expires_at = ? WHERE approval_id = 'apr-1'").run(
+      Date.now() - 15_001,
+    );
+
+    const second = await decide(url, cookie, "apr-1", { decision: "allow" });
+
+    expect(second.status).toBe(409);
+    expect(await second.text()).toBe("not_pending");
+  });
+
   test("a decision past the approval's window answers 409 and writes nothing", async () => {
     // Crash-orphaned row: the runner swept (or died with) the pending approval
     // and its terminal event never landed, so the projection still says
