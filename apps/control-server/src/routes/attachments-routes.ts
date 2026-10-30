@@ -70,8 +70,12 @@ export async function handleUploadAttachments(
     return new Response("unauthorized", { status: 401 });
   }
 
+  if (!sessionId || sessionId.trim() === "") {
+    return new Response("bad request", { status: 400 });
+  }
+
   const pin = sessionPin(options.db, sessionId);
-  if (pin === undefined || pin.ownerId !== authorized.userId) {
+  if (pin !== undefined && pin.ownerId !== authorized.userId) {
     // Existence is not another user's to learn: 404 before any other signal.
     return new Response("not found", { status: 404 });
   }

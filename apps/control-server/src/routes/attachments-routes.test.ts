@@ -169,8 +169,9 @@ describe("POST /api/sessions/:sessionId/attachments", () => {
   });
 
   test("uploading to a session the owner does not own returns 404", async () => {
-    const { url, cookie } = await start();
-    const response = await fetch(`${url}/api/sessions/nope/attachments`, {
+    const { db, url, cookie } = await start();
+    await seedSession(db, "foreign-session", "user-2");
+    const response = await fetch(`${url}/api/sessions/foreign-session/attachments`, {
       method: "POST",
       headers: { Origin: origin, Cookie: cookie },
       body: (() => {
@@ -180,6 +181,23 @@ describe("POST /api/sessions/:sessionId/attachments", () => {
       })(),
     });
     expect(response.status).toBe(404);
+  });
+
+  test("uploading to a new unpinned session succeeds", async () => {
+    const dir = makeAttachmentsDir();
+    const { url, cookie } = await start(dir);
+    const form = new FormData();
+    form.append("files", new File(["hello unpinned"], "fresh.txt", { type: "text/plain" }));
+    const response = await fetch(`${url}/api/sessions/fresh-new-session/attachments`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+      body: form,
+    });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as { ok: boolean; attachments: Array<{ name: string }> };
+    expect(body.ok).toBe(true);
+    expect(body.attachments).toHaveLength(1);
+    expect(body.attachments[0]!.name).toBe("fresh.txt");
   });
 
   test("a single file over 20 MB is rejected with 413", async () => {
