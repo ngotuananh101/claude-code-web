@@ -295,10 +295,13 @@ export async function handleDeleteSession(
     scheduler.release(active.runId);
   }
 
-  const ok = deleteSession(options.db, sessionId, authorized.userId);
-  if (!ok) {
+  const res = deleteSession(options.db, sessionId, authorized.userId);
+  if (!res.ok) {
     return new Response("not found", { status: 404 });
   }
+
+  // TODO: forward `res.attachmentStoragePaths` to the runner so it deletes the
+  // files on disk. (See §4.4 / task 3.)
 
   return new Response(JSON.stringify({ ok: true, sessionId }), {
     status: 200,

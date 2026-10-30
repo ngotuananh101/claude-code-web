@@ -261,6 +261,28 @@ export function migrate(db: Database): void {
   `);
   addColumnIfMissing(db, "sessions", "title", "TEXT");
   addColumnIfMissing(db, "runners", "name", "TEXT");
+
+  // §4.4: session attachments. One or more files a user attached to a session,
+  // each living in the runner's workspace on disk. `storage_path` is the path
+  // the runner deletes when the session is torn down. `owner_id` mirrors the
+  // session row's so reads are scoped to the authorized owner without a join.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_attachments (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      owner_id    TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      mime_type   TEXT NOT NULL,
+      size        INTEGER NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at  INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_session_attachments_session
+      ON session_attachments (session_id);
+  `);
 }
 
 /**

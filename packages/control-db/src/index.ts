@@ -17,6 +17,13 @@ export {
   upsertApprovalRequested,
 } from "./approvals.ts";
 export {
+  deleteSessionAttachments,
+  getSessionAttachment,
+  insertSessionAttachment,
+  listSessionAttachments,
+  type SessionAttachmentRecord,
+} from "./attachments.ts";
+export {
   type CommandKind,
   CommandOutbox,
   type DeliveryState,

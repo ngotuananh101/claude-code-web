@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { insertSessionAttachment } from "./attachments.ts";
 import { migrate } from "./db.ts";
 import { deleteSession, ensureSessionPin, sessionPin, updateSessionTitle } from "./sessions.ts";
 
@@ -116,8 +117,8 @@ describe("session rename and delete", () => {
       "INSERT INTO command_outbox (command_id, runner_id, kind, payload, fingerprint, issued_at, session_id, delivery_state, created_at) VALUES ('c1', 'runner-a', 'run.start', '{}', 'fp', 'now', 'session-1', 'queued', 1)",
     ).run();
 
-    const deleted = deleteSession(db, "session-1", "user-1");
-    expect(deleted).toBe(true);
+    const res = deleteSession(db, "session-1", "user-1");
+    expect(res.ok).toBe(true);
 
     expect(sessionPin(db, "session-1")).toBeUndefined();
     expect(
@@ -143,8 +144,47 @@ describe("session rename and delete", () => {
       runnerId: "runner-a",
     });
 
-    const deleted = deleteSession(db, "session-1", "user-2");
-    expect(deleted).toBe(false);
+    const res = deleteSession(db, "session-1", "user-2");
+    expect(res.ok).toBe(false);
+    expect(res.attachmentStoragePaths).toEqual([]);
     expect(sessionPin(db, "session-1")).toBeDefined();
+  });
+
+  test("deleteSession returns attachment storage paths for cleanup", () => {
+    const db = setup();
+    ensureSessionPin(db, {
+      sessionId: "session-1",
+      ownerId: "user-1",
+      workspaceId: "ws",
+      runnerId: "runner-a",
+    });
+
+    insertSessionAttachment(db, {
+      id: "att-1",
+      sessionId: "session-1",
+      ownerId: "user-1",
+      name: "file.png",
+      mimeType: "image/png",
+      size: 2048,
+      storagePath: "/disk/att-1",
+      createdAt: 1000,
+    });
+    insertSessionAttachment(db, {
+      id: "att-2",
+      sessionId: "session-1",
+      ownerId: "user-1",
+      name: "doc.pdf",
+      mimeType: "application/pdf",
+      size: 4096,
+      storagePath: "/disk/att-2",
+      createdAt: 1000,
+    });
+
+    const res = deleteSession(db, "session-1", "user-1");
+    expect(res.ok).toBe(true);
+    expect(res.attachmentStoragePaths.sort()).toEqual(["/disk/att-1", "/disk/att-2"]);
+
+    // The session itself is gone.
+    expect(sessionPin(db, "session-1")).toBeUndefined();
   });
 });

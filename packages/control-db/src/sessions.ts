@@ -57,21 +57,41 @@ export function updateSessionTitle(
   return result.changes > 0;
 }
 
-export function deleteSession(db: Database, sessionId: string, ownerId: string): boolean {
+export function deleteSession(
+  db: Database,
+  sessionId: string,
+  ownerId: string,
+): { ok: boolean; attachmentStoragePaths: string[] } {
   const session = db
     .query("SELECT id FROM sessions WHERE id = ? AND owner_id = ?")
     .get(sessionId, ownerId);
-  if (!session) return false;
+  if (!session) {
+    return { ok: false, attachmentStoragePaths: [] };
+  }
 
   const txn = db.transaction(() => {
+    // Collect attachment storage paths before they're deleted; the caller
+    // (the control server) will instruct the runner to remove the files on disk.
+    const attachmentRows = db
+      .query("SELECT storage_path FROM session_attachments WHERE session_id = ? AND owner_id = ?")
+      .all(sessionId, ownerId) as Array<{ storage_path: string }>;
+    const attachmentStoragePaths = attachmentRows.map((row) => row.storage_path);
+
+    db.prepare("DELETE FROM session_attachments WHERE session_id = ? AND owner_id = ?").run(
+      sessionId,
+      ownerId,
+    );
     db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM command_outbox WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+
+    return attachmentStoragePaths;
   });
-  txn();
-  return true;
+
+  const attachmentStoragePaths = txn();
+  return { ok: true, attachmentStoragePaths };
 }
 
 export function sessionPin(db: Database, sessionId: string): SessionPin | undefined {
