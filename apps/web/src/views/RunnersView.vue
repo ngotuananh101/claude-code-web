@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { Pencil, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
+import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
+import RenameDialog from "@/components/RenameDialog.vue";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { authFetch } from "@/services/auth-api.ts";
+import { deleteRunner, renameRunner } from "@/services/runners-api.ts";
+import { removeSession } from "@/stores/sessions.ts";
 
 /**
  * The runners console (§6.1): the owner's connectors and the one-time token
@@ -14,6 +19,7 @@ import { authFetch } from "@/services/auth-api.ts";
 
 type RunnerRow = {
   runnerId: string;
+  name?: string | null;
   createdAt: number;
   revokedAt: number | null;
 };
@@ -25,6 +31,13 @@ const mintBusy = ref(false);
 const confirming = ref<string | null>(null);
 const revokeBusy = ref(false);
 const origin = location.origin;
+
+const runnerToRename = ref<RunnerRow | null>(null);
+const renameDialogOpen = ref(false);
+
+const runnerToDelete = ref<RunnerRow | null>(null);
+const deleteDialogOpen = ref(false);
+const deleteBusy = ref(false);
 
 /** The journal's numbering: the newest runner is event 0001. */
 const mintedSeq = computed(() => {
@@ -48,8 +61,6 @@ function pad(n: number): string {
 }
 
 function fmt(ms: number): string {
-  // Pinned vi-VN for the same reason as the rail's timestamps: deterministic
-  // alongside the Vietnamese labels around it.
   return new Date(ms).toLocaleString("vi-VN", {
     year: "numeric",
     month: "short",
@@ -89,9 +100,54 @@ async function copyToken(): Promise<void> {
     await navigator.clipboard.writeText(minted.value.token);
     toast.success("Token đã copy");
   } catch {
-    // An unfocused window or a clipboard the page may not write. The value
-    // stays select-all, so the owner can still copy it by hand.
     toast.error("Không copy được token — chọn và copy thủ công.");
+  }
+}
+
+function triggerRename(runner: RunnerRow): void {
+  runnerToRename.value = runner;
+  renameDialogOpen.value = true;
+}
+
+async function handleRenameConfirm(newName: string): Promise<void> {
+  if (!runnerToRename.value) return;
+  const runner = runnerToRename.value;
+  const ok = await renameRunner(runner.runnerId, newName);
+  if (ok) {
+    runner.name = newName.trim() || null;
+    toast.success("Đã đổi tên runner.");
+  } else {
+    toast.error("Không thể đổi tên runner.");
+  }
+  runnerToRename.value = null;
+}
+
+function triggerDelete(runner: RunnerRow): void {
+  runnerToDelete.value = runner;
+  deleteDialogOpen.value = true;
+}
+
+async function handleDeleteConfirm(): Promise<void> {
+  if (!runnerToDelete.value) return;
+  const runner = runnerToDelete.value;
+  deleteBusy.value = true;
+  try {
+    const result = await deleteRunner(runner.runnerId);
+    if (result.ok) {
+      runners.value = runners.value.filter((r) => r.runnerId !== runner.runnerId);
+      if (result.deletedSessions && result.deletedSessions.length > 0) {
+        for (const sid of result.deletedSessions) {
+          removeSession(sid);
+        }
+      }
+      toast.success("Đã xoá runner.");
+    } else {
+      toast.error("Không thể xoá runner.");
+    }
+  } finally {
+    deleteBusy.value = false;
+    deleteDialogOpen.value = false;
+    runnerToDelete.value = null;
   }
 }
 
@@ -194,24 +250,76 @@ onMounted(() => void load());
         </span>
         <div class="flex min-w-0 items-center gap-3">
           <div class="grid min-w-0 flex-1 gap-0.5">
-            <span class="break-all font-mono text-[13px]">{{ runner.runnerId }}</span>
+            <div class="flex items-center gap-2">
+              <span
+                class="truncate text-sm"
+                :class="runner.name ? 'font-medium text-foreground' : 'font-mono text-[13px]'"
+              >
+                {{ runner.name || runner.runnerId }}
+              </span>
+              <span
+                v-if="runner.name"
+                class="truncate font-mono text-xs text-muted-foreground"
+              >
+                ({{ runner.runnerId }})
+              </span>
+            </div>
             <span class="font-mono text-xs text-muted-foreground">
               đã kết nối {{ fmt(runner.createdAt) }}
               <template v-if="runner.revokedAt !== null"> · đã thu hồi {{ fmt(runner.revokedAt) }}</template>
             </span>
           </div>
-          <Button
-            v-if="runner.revokedAt === null"
-            variant="outline"
-            size="xs"
-            class="shrink-0"
-            :disabled="revokeBusy"
-            @click="revoke(runner.runnerId)"
-          >
-            {{ confirming === runner.runnerId ? "chắc chắn?" : "thu hồi" }}
-          </Button>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Đổi tên runner"
+              class="text-muted-foreground hover:text-foreground"
+              @click="triggerRename(runner)"
+            >
+              <Pencil :size="14" />
+            </Button>
+            <Button
+              v-if="runner.revokedAt === null"
+              variant="outline"
+              size="xs"
+              class="shrink-0"
+              :disabled="revokeBusy"
+              @click="revoke(runner.runnerId)"
+            >
+              {{ confirming === runner.runnerId ? "chắc chắn?" : "thu hồi" }}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="Xoá runner"
+              class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              @click="triggerDelete(runner)"
+            >
+              <Trash2 :size="14" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>
+
+    <RenameDialog
+      v-model:open="renameDialogOpen"
+      title="Đổi tên runner"
+      description="Đặt tên gợi nhớ cho runner này để dễ dàng nhận biết."
+      :initial-value="runnerToRename?.name || ''"
+      placeholder="Nhập tên runner..."
+      @confirm="handleRenameConfirm"
+    />
+
+    <ConfirmDeleteDialog
+      v-model:open="deleteDialogOpen"
+      title="Xoá runner"
+      :description="runnerToDelete?.name ? `Bạn có chắc chắn muốn xoá runner “${runnerToDelete.name}” (${runnerToDelete.runnerId})?` : `Bạn có chắc chắn muốn xoá runner ${runnerToDelete?.runnerId}?`"
+      :warning="runnerToDelete?.revokedAt !== null ? 'Xoá runner này sẽ xoá vĩnh viễn dữ liệu runner cùng toàn bộ phiên làm việc, lượt chạy liên quan khỏi hệ thống.' : 'Runner này đang hoạt động. Việc xoá sẽ ngắt kết nối ngay lập tức và xoá vĩnh viễn runner cùng toàn bộ phiên làm việc, lượt chạy liên quan.'"
+      confirm-label="Xoá runner"
+      :busy="deleteBusy"
+      @confirm="handleDeleteConfirm"
+    />
   </ScrollArea>
 </template>
