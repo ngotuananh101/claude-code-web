@@ -49,6 +49,13 @@ export type DispatcherOptions = {
    */
   onRejectedStart?: (runId: string, commandId: string, reason: string) => void;
   now?: () => Date;
+  /**
+   * Opens the sealed `payloadSecure` column back to its cleartext value
+   * (§18.1, P3-C Task 5b). When absent the stored value is used as-is. When it
+   * returns `null` the redacted `payload` is used as a fallback so a tampered
+   * or foreign-key row still produces a (keyless) frame rather than throwing.
+   */
+  openSecurePayload?: (stored: unknown) => unknown | null;
 };
 
 export class Dispatcher {
@@ -56,12 +63,14 @@ export class Dispatcher {
   readonly #gateway: CommandSink;
   readonly #onRejectedStart: DispatcherOptions["onRejectedStart"];
   readonly #now: () => Date;
+  readonly #openSecurePayload: DispatcherOptions["openSecurePayload"];
 
   constructor(options: DispatcherOptions) {
     this.#outbox = options.outbox;
     this.#gateway = options.gateway;
     this.#onRejectedStart = options.onRejectedStart;
     this.#now = options.now ?? (() => new Date());
+    this.#openSecurePayload = options.openSecurePayload;
   }
 
   /**
@@ -88,7 +97,10 @@ export class Dispatcher {
     const skipped = pending.length;
 
     for (const command of pending) {
-      const result = this.#gateway.sendCommand(runnerId, toEnvelope(command));
+      const result = this.#gateway.sendCommand(
+        runnerId,
+        toEnvelope(command, this.#openSecurePayload),
+      );
       if (!result.ok) break;
 
       // Only now, and only for this command: a send that did not happen must not
@@ -131,19 +143,32 @@ export class Dispatcher {
   }
 }
 
-/** §9.1's envelope, rebuilt from the stored row. */
-export function toEnvelope(command: OutboxCommand): RunnerCommand {
+/**
+ * §9.1's envelope, rebuilt from the stored row.
+ *
+ * `openSecurePayload` decrypts the sealed `payloadSecure` column back to its
+ * cleartext value (§18.1, P3-C Task 5b). When absent the stored value is used
+ * as-is; when it returns `null` the redacted `payload` is the fallback so a
+ * tampered or foreign-key row still yields a (keyless) frame instead of
+ * throwing.
+ */
+export function toEnvelope(
+  command: OutboxCommand,
+  openSecurePayload?: (stored: unknown) => unknown | null,
+): RunnerCommand {
+  let payload = command.payloadSecure ?? command.payload;
+  if (command.payloadSecure !== undefined && openSecurePayload !== undefined) {
+    const opened = openSecurePayload(command.payloadSecure);
+    payload = opened === null ? command.payload : opened;
+  }
+
   const envelope: RunnerCommand = {
     protocolVersion: PROTOCOL_VERSION,
     commandId: command.commandId,
     runnerId: command.runnerId,
     kind: command.kind,
     issuedAt: command.issuedAt,
-    // §18.1: the live WebSocket frame carries the cleartext payload (with the
-    // profile API key) when the outbox stored one in `payload_secure`; the
-    // redacted `payload` is the fallback for commands without secrets and for
-    // rows recovered after a restart that lost the cleartext column.
-    payload: command.payloadSecure ?? command.payload,
+    payload,
   };
 
   // Absent fields are omitted rather than sent as `null`: the runner validates

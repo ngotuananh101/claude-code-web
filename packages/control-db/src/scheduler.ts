@@ -133,15 +133,33 @@ type ActiveRow = {
 /** Told after a successful dispatch, so delivery happens as part of the call. */
 export type DispatchListener = (runnerId: string, commandId: string) => void;
 
+/**
+ * Options for the `Scheduler` constructor.
+ */
+export type SchedulerOptions = {
+  /** Called after a command is persisted to the outbox, so delivery is part of
+   * the dispatch call (§14.3 step 4). Absent means no auto-drain. */
+  onDispatched?: DispatchListener;
+  /**
+   * Seals a cleartext secure payload before it is persisted to
+   * `command_outbox.payload_secure` (§18.1, P3-C Task 5b). When a profile is
+   * present the cleartext `apiKey` lives in `payloadSecure`; without this seam
+   * the object is stored as-is for backward compatibility.
+   */
+  sealSecurePayload?: (value: unknown) => unknown;
+};
+
 export class Scheduler {
   readonly #db: Database;
   readonly #outbox: CommandOutbox;
   readonly #onDispatched: DispatchListener | undefined;
+  readonly #sealSecurePayload: ((value: unknown) => unknown) | undefined;
 
-  constructor(db: Database, options: { onDispatched?: DispatchListener } = {}) {
+  constructor(db: Database, options: SchedulerOptions = {}) {
     this.#db = db;
     this.#outbox = new CommandOutbox(db);
     this.#onDispatched = options.onDispatched;
+    this.#sealSecurePayload = options.sealSecurePayload;
   }
 
   async dispatch(request: DispatchRequest, capacity: RunnerCapacity): Promise<DispatchDecision> {
@@ -216,7 +234,13 @@ export class Scheduler {
       attemptId: request.attemptId,
       workspaceId: request.workspaceId,
       payload: persistedPayload,
-      ...(hasProfile ? { payloadSecure: cleartextPayload } : {}),
+      ...(hasProfile
+        ? {
+            payloadSecure: this.#sealSecurePayload
+              ? this.#sealSecurePayload(cleartextPayload)
+              : cleartextPayload,
+          }
+        : {}),
     });
 
     // The pin is written only for an accepted dispatch — a refusal must never

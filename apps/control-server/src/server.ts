@@ -16,6 +16,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
 import {
   attemptWatermark,
   type CommandOutbox,
@@ -34,6 +35,7 @@ import type { Server } from "bun";
 import { abandonAttemptApprovals } from "./approvals/abandon.ts";
 import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
+import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import { Dispatcher } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
@@ -138,6 +140,12 @@ export type ServerOptions = {
    * it and gets the loop's 15s default.
    */
   scheduleTickMs?: number;
+  /**
+   * Seam for sealing profile API keys at rest (§18.1, P3-C Task 5b). When
+   * absent, `createServer` builds an ephemeral box from random bytes so that
+   * tests compile and nothing is ever stored cleartext even without a secret.
+   */
+  secretBox?: SecretBox;
 };
 
 export type ServerHandle = {
@@ -168,6 +176,12 @@ export function createServer(options: ServerOptions): ServerHandle {
   // cycle here rather than inside either class is what lets both be tested on
   // their own.
   let dispatcher: Dispatcher | undefined;
+
+  // §18.1, P3-C Task 5b: the secret box seals profile API keys at rest and in
+  // the command outbox's secure column. Production gets it from the server
+  // secret via `buildServerOptions`; tests omit it and get an ephemeral box
+  // from random bytes so nothing is ever stored cleartext.
+  const secretBox = options.secretBox ?? createSecretBox(randomBytes(32));
 
   // Built first so the runner gateway's ingest hook can broadcast into it
   // without a later-binding dance: browser replay (§12.5) is downstream of
@@ -324,6 +338,11 @@ export function createServer(options: ServerOptions): ServerHandle {
         reopenRejectedSchedule(options.db, outbox, { commandId, runId });
         console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
       },
+      openSecurePayload: (stored) => {
+        if (typeof stored !== "string") return null;
+        const plain = secretBox.open(stored);
+        return plain === null ? null : JSON.parse(plain);
+      },
     });
   }
 
@@ -337,6 +356,7 @@ export function createServer(options: ServerOptions): ServerHandle {
   // means `dispatch()` is a complete operation: decide, persist, deliver.
   const scheduler = new Scheduler(options.db, {
     onDispatched: (runnerId) => dispatcher?.drain(runnerId),
+    sealSecurePayload: (value) => secretBox.seal(JSON.stringify(value)),
   });
 
   // §11.5: the server owns the clock. The loop dispatches due schedules as
@@ -559,10 +579,10 @@ export function createServer(options: ServerOptions): ServerHandle {
           return new Response("unauthorized", { status: 401 });
         }
         if (request.method === "GET") {
-          return handleListProfiles(request, { db: options.db }, authorized);
+          return handleListProfiles(request, { db: options.db, secretBox }, authorized);
         }
         if (request.method === "POST") {
-          return handleCreateProfile(request, { db: options.db }, authorized);
+          return handleCreateProfile(request, { db: options.db, secretBox }, authorized);
         }
       }
       if (profileIdMatch) {
@@ -578,13 +598,13 @@ export function createServer(options: ServerOptions): ServerHandle {
           return new Response("unauthorized", { status: 401 });
         }
         if (request.method === "GET") {
-          return handleGetProfile(request, { db: options.db }, authorized);
+          return handleGetProfile(request, { db: options.db, secretBox }, authorized);
         }
         if (request.method === "PUT") {
-          return handleUpdateProfile(request, { db: options.db }, authorized);
+          return handleUpdateProfile(request, { db: options.db, secretBox }, authorized);
         }
         if (request.method === "DELETE") {
-          return handleDeleteProfile(request, { db: options.db }, authorized);
+          return handleDeleteProfile(request, { db: options.db, secretBox }, authorized);
         }
       }
 
@@ -592,7 +612,7 @@ export function createServer(options: ServerOptions): ServerHandle {
       if (runsMatch && request.method === "POST") {
         return handleDispatchRun(
           request,
-          options,
+          { ...options, secretBox },
           allowed,
           browserGateway,
           runnerGateway,

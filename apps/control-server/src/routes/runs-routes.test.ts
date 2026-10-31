@@ -1729,4 +1729,107 @@ describe("POST /api/sessions/:id/runs profileId", () => {
 
     expect(res.status).toBe(400);
   });
+
+  test("with a sealed profile, payload_secure does not contain the plaintext key", async () => {
+    // Create the profile through the HTTP route so the key is sealed at rest.
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const createRes = await fetch(`${url}/api/config/profiles`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Sealed",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN",
+        apiKey: "sk-secret-key",
+        modelMapping: { sonnet: "prime" },
+        settingsJson: "{}",
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as { id: string };
+
+    // The stored column is sealed, not cleartext.
+    const row = db
+      .query("SELECT api_key_encrypted FROM config_profiles WHERE id = ?")
+      .get(created.id) as { api_key_encrypted: string | null };
+    expect(row.api_key_encrypted).not.toContain("sk-secret-key");
+    expect(row.api_key_encrypted).toMatch(/^v1\./);
+
+    // Dispatch a run selecting this profile.
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: created.id }),
+    });
+    expect(res.status).toBe(202);
+
+    // Wait for the outbox row + runner inbox to be populated.
+    await waitFor(
+      () => (db.query("SELECT COUNT(*) AS n FROM command_outbox").get() as { n: number }).n === 1,
+    );
+    await waitFor(
+      () => (inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n === 1,
+    );
+
+    // The persisted payload_secure must NOT contain the plaintext key.
+    const outboxRow = db
+      .query(
+        "SELECT payload_secure FROM command_outbox WHERE run_id = (SELECT run_id FROM active_runs WHERE session_id = ?)",
+      )
+      .get("session-1") as { payload_secure: string | null };
+    expect(outboxRow.payload_secure).not.toContain("sk-secret-key");
+
+    // The runner's inbox (delivered via the live frame) DOES contain the key.
+    const inboxRow = inbox.query("SELECT payload FROM command_inbox").get() as { payload: string };
+    const delivered = JSON.parse(inboxRow.payload) as { profile: { apiKey: string } };
+    expect(delivered.profile.apiKey).toBe("sk-secret-key");
+  });
+
+  test("a non-sealed (legacy) stored key returns 400 profile_key_unreadable", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // Create the profile through the HTTP route so the key is sealed.
+    const createRes = await fetch(`${url}/api/config/profiles`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Legacy",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN",
+        apiKey: "sk-legacy-key",
+        modelMapping: {},
+        settingsJson: "{}",
+      }),
+    });
+    const created = (await createRes.json()) as { id: string };
+
+    // Corrupt the stored value: replace the sealed v1. envelope with a bare
+    // cleartext string that starts with "v1." but is not a valid seal. This
+    // simulates a row from a different server secret (the opener returns null).
+    db.query("UPDATE config_profiles SET api_key_encrypted = ? WHERE id = ?").run(
+      "v1.invalid.broken",
+      created.id,
+    );
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: created.id }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("profile_key_unreadable");
+
+    // No command should have been enqueued or delivered.
+    expect((db.query("SELECT COUNT(*) AS n FROM command_outbox").get() as { n: number }).n).toBe(0);
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
 });

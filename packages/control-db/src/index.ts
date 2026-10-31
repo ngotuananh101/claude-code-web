@@ -51,6 +51,7 @@ export {
   getProfileById,
   getProfileWithSecret,
   listProfilesForOwner,
+  maskApiKey,
   type ProfileWithSecret,
   type UpdateProfilePatch,
   updateProfile,
@@ -93,10 +94,12 @@ export {
 } from "./scheduled-tasks.ts";
 export {
   type DispatchDecision,
+  type DispatchListener,
   type DispatchRequest,
   type RunnerCapacity,
   type RunnerState,
   Scheduler,
+  type SchedulerOptions,
 } from "./scheduler.ts";
 export {
   deleteSession,

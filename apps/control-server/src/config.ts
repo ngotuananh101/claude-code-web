@@ -17,6 +17,7 @@ import { CommandOutbox, verifyRunnerCredential } from "@cc-web/control-db";
 import { AuthService } from "./auth/auth-service.ts";
 import { hashPassword, verifyPassword } from "./auth/password.ts";
 import { createSigner } from "./auth/tokens.ts";
+import { createSecretBox } from "./config/secret-box.ts";
 import type { ServerOptions } from "./server.ts";
 
 /** Where the control server keeps its state on disk. */
@@ -64,6 +65,9 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
     allowedOrigins: config.allowedOrigins,
     ...(config.port === undefined ? {} : { port: config.port }),
     ...(config.attachmentsDir === undefined ? {} : { attachmentsDir: config.attachmentsDir }),
+    // §18.1, P3-C Task 5b: derive the secret box from the server secret so the
+    // same key seals every profile at rest across restarts.
+    secretBox: createSecretBox(config.secret),
     // Read through the database on every upgrade, so a rotation or revoke takes
     // effect on the next connection rather than at the next restart (§6.3).
     verifyRunnerCredential: (credential) => {

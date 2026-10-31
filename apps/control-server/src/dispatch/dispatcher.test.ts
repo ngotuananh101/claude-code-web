@@ -482,4 +482,68 @@ describe("dispatcher", () => {
       expect(calls).toEqual([]);
     });
   });
+
+  describe("openSecurePayload (§18.1, P3-C Task 5b)", () => {
+    test("openSecurePayload is applied to the live frame", async () => {
+      // The outbox stores a sealed string in payloadSecure; the dispatcher's
+      // opener decrypts it so the runner receives the cleartext object.
+      const { outbox, gateway, socket, sent } = setup();
+
+      const opened = { prompt: "hello", profile: { apiKey: "sk-secret" } };
+      const opener = (stored: unknown) =>
+        typeof stored === "string" && stored === "sealed:v1:ct" ? opened : null;
+
+      await outbox.enqueue({
+        ...command,
+        payload: { prompt: "hello", profile: { apiKey: "[REDACTED]" } },
+        payloadSecure: "sealed:v1:ct",
+      });
+
+      const dispatcher = new Dispatcher({ outbox, gateway, openSecurePayload: opener });
+      readyRunner(gateway, socket, sent);
+      dispatcher.drain("runner-a");
+
+      expect((sent[0]?.command as { payload: unknown })?.payload).toEqual(opened);
+    });
+
+    test("when opener returns null, the redacted payload is delivered instead", async () => {
+      const { outbox, gateway, socket, sent } = setup();
+
+      await outbox.enqueue({
+        ...command,
+        payload: { prompt: "hello", profile: { apiKey: "[REDACTED]" } },
+        payloadSecure: "sealed:tampered:ct",
+      });
+
+      // Opener returns null (tampered or wrong key) → fall back to redacted payload.
+      const dispatcher = new Dispatcher({ outbox, gateway, openSecurePayload: () => null });
+      readyRunner(gateway, socket, sent);
+      dispatcher.drain("runner-a");
+
+      expect((sent[0]?.command as { payload: unknown })?.payload).toEqual({
+        prompt: "hello",
+        profile: { apiKey: "[REDACTED]" },
+      });
+    });
+
+    test("without an opener the stored payloadSecure is used as-is", async () => {
+      const { outbox, gateway, socket, sent } = setup();
+
+      await outbox.enqueue({
+        ...command,
+        payload: { prompt: "hello", profile: { apiKey: "[REDACTED]" } },
+        payloadSecure: { prompt: "hello", profile: { apiKey: "sk-secret" } },
+      });
+
+      // No opener → payloadSecure used directly (backward compatible).
+      const dispatcher = new Dispatcher({ outbox, gateway });
+      readyRunner(gateway, socket, sent);
+      dispatcher.drain("runner-a");
+
+      expect((sent[0]?.command as { payload: unknown })?.payload).toEqual({
+        prompt: "hello",
+        profile: { apiKey: "sk-secret" },
+      });
+    });
+  });
 });

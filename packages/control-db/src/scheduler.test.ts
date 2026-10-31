@@ -522,3 +522,74 @@ describe("scheduler — rejected run.start frees the session slot (§9.4, §14.2
     expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-1" });
   });
 });
+
+describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
+  test("with sealSecurePayload, the stored payloadSecure is the sealed value, not the cleartext object", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const sealed: Array<{ input: unknown; output: unknown }> = [];
+    const scheduler = new Scheduler(db, {
+      sealSecurePayload: (value) => {
+        const s = `SEAL(${JSON.stringify(value)})`;
+        sealed.push({ input: value, output: s });
+        return s;
+      },
+    });
+
+    const profileRequest = {
+      ...request,
+      profile: {
+        profileId: "prof-1",
+        name: "9Router",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN" as const,
+        apiKey: "sk-secret-key",
+        modelMapping: { sonnet: "prime" },
+      },
+    };
+
+    await scheduler.dispatch(profileRequest, capacity());
+
+    // The sealer was called with the cleartext payload.
+    expect(sealed.length).toBe(1);
+    const sealedInput = sealed[0]!.input as Record<string, unknown>;
+    expect((sealedInput.profile as Record<string, unknown>).apiKey).toBe("sk-secret-key");
+
+    // The stored payload_secure is the JSON-stringified output of the sealer,
+    // not the original cleartext object. The sealer was called with the
+    // cleartext payload (verified above); what is persisted is the sealer's
+    // return value.
+    const row = db
+      .query("SELECT payload_secure FROM command_outbox WHERE run_id = ?")
+      .get("run-1") as { payload_secure: string };
+    const stored = JSON.parse(row.payload_secure) as string;
+    expect(stored).toBe(sealed[0]!.output as string);
+    expect(stored).toMatch(/^SEAL\(.*\)$/);
+  });
+
+  test("without sealSecurePayload, the cleartext payloadSecure is stored as-is", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const scheduler = new Scheduler(db);
+
+    const profileRequest = {
+      ...request,
+      profile: {
+        profileId: "prof-1",
+        name: "9Router",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN" as const,
+        apiKey: "sk-secret-key",
+      },
+    };
+
+    await scheduler.dispatch(profileRequest, capacity());
+
+    const row = db
+      .query("SELECT payload_secure FROM command_outbox WHERE run_id = ?")
+      .get("run-1") as { payload_secure: string | null };
+    expect(row.payload_secure).not.toBeNull();
+    const parsed = JSON.parse(row.payload_secure!) as { profile: { apiKey: string } };
+    expect(parsed.profile.apiKey).toBe("sk-secret-key");
+  });
+});

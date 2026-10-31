@@ -83,7 +83,7 @@ export type ProfileWithSecret = {
  * middle. Returns `undefined` when no key is present so the edit form can
  * render a "set / unset" affordance without leaking length.
  */
-function maskApiKey(key: string | null | undefined): string | undefined {
+export function maskApiKey(key: string | null | undefined): string | undefined {
   if (!key) return undefined;
   if (key.length <= 6) return `${key.slice(0, 1)}***${key.slice(-1)}`;
   return `${key.slice(0, 3)}***${key.slice(-3)}`;

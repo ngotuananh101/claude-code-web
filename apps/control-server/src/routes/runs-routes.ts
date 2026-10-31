@@ -215,7 +215,30 @@ export async function handleDispatchRun(
     if (profileRow === null) {
       return new Response("unknown_profile", { status: 400 });
     }
-    profile = buildProfilePayload(profileRow);
+    // Open the sealed API key. A legacy row stored the cleartext directly;
+    // a sealed row looks like `v1.…`. When `secretBox` is absent (tests that
+    // bypass buildServerOptions) or the value isn't a sealed envelope, fall
+    // back to the raw value so existing tests still pass.
+    let cleartextApiKey: string | undefined;
+    if (profileRow.apiKey !== undefined && options.secretBox !== undefined) {
+      const stored = profileRow.apiKey;
+      if (stored.startsWith("v1.")) {
+        const opened = options.secretBox.open(stored);
+        if (opened === null) {
+          return new Response("profile_key_unreadable", { status: 400 });
+        }
+        cleartextApiKey = opened;
+      } else {
+        // Legacy cleartext storage — pass through unchanged.
+        cleartextApiKey = stored;
+      }
+    } else if (profileRow.apiKey !== undefined) {
+      cleartextApiKey = profileRow.apiKey;
+    }
+    profile = buildProfilePayload({
+      ...profileRow,
+      apiKey: cleartextApiKey,
+    });
   }
 
   // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
