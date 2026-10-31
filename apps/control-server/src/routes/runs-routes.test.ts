@@ -1750,12 +1750,12 @@ describe("POST /api/sessions/:id/runs profileId", () => {
       }),
     });
     expect(createRes.status).toBe(201);
-    const created = (await createRes.json()) as { id: string };
+    const created = (await createRes.json()) as { profile: { id: string } };
 
     // The stored column is sealed, not cleartext.
     const row = db
       .query("SELECT api_key_encrypted FROM config_profiles WHERE id = ?")
-      .get(created.id) as { api_key_encrypted: string | null };
+      .get(created.profile.id) as { api_key_encrypted: string | null };
     expect(row.api_key_encrypted).not.toContain("sk-secret-key");
     expect(row.api_key_encrypted).toMatch(/^v1\./);
 
@@ -1763,7 +1763,7 @@ describe("POST /api/sessions/:id/runs profileId", () => {
     const res = await fetch(`${url}/api/sessions/session-1/runs`, {
       method: "POST",
       headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "hello", profileId: created.id }),
+      body: JSON.stringify({ prompt: "hello", profileId: created.profile.id }),
     });
     expect(res.status).toBe(202);
 
@@ -1808,20 +1808,20 @@ describe("POST /api/sessions/:id/runs profileId", () => {
         settingsJson: "{}",
       }),
     });
-    const created = (await createRes.json()) as { id: string };
+    const created = (await createRes.json()) as { profile: { id: string } };
 
     // Corrupt the stored value: replace the sealed v1. envelope with a bare
     // cleartext string that starts with "v1." but is not a valid seal. This
     // simulates a row from a different server secret (the opener returns null).
     db.query("UPDATE config_profiles SET api_key_encrypted = ? WHERE id = ?").run(
       "v1.invalid.broken",
-      created.id,
+      created.profile.id,
     );
 
     const res = await fetch(`${url}/api/sessions/session-1/runs`, {
       method: "POST",
       headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: "hello", profileId: created.id }),
+      body: JSON.stringify({ prompt: "hello", profileId: created.profile.id }),
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("profile_key_unreadable");

@@ -8,7 +8,12 @@ import {
   maskApiKey,
   updateProfile,
 } from "@cc-web/control-db";
-import { type ModelMapping, type ProfileAuthField, parseModelMapping } from "@cc-web/protocol";
+import {
+  type ModelMapping,
+  type ProfileAuthField,
+  type ProfileDetail,
+  parseModelMapping,
+} from "@cc-web/protocol";
 import type { SecretBox } from "../config/secret-box.ts";
 
 /**
@@ -203,10 +208,32 @@ function jsonError(code: string, message: string, status: number): Response {
 }
 
 /**
+ * Build the browser-facing detail for one profile: the stored row plus the key
+ * mask derived from the opened plaintext (§18.1). The mask is omitted when the
+ * stored key is absent or its seal cannot be opened — masking ciphertext would
+ * render `v1.***xyz` as if it were the operator's key.
+ */
+function profileDetail(
+  options: ConfigOptions,
+  profileId: string,
+  userId: string,
+): ProfileDetail | null {
+  const detail = getProfileById(options.db, profileId, userId);
+  if (detail === null) return null;
+  const withSecret = getProfileWithSecret(options.db, profileId, userId);
+  if (withSecret?.apiKey !== undefined) {
+    const plain = options.secretBox.open(withSecret.apiKey);
+    if (plain !== null) detail.apiKeyMasked = maskApiKey(plain)!;
+  }
+  return detail;
+}
+
+/**
  * `GET /api/config/profiles`
  *
- * Returns the list of profiles for the authenticated owner. Each summary carries
- * `hasKey` (boolean presence flag) but never the raw API key.
+ * Returns `{ profiles }` for the authenticated owner, matching the envelope the
+ * other list routes use. Each summary carries `hasKey` (boolean presence flag)
+ * but never the raw API key.
  */
 export async function handleListProfiles(
   _request: Request,
@@ -214,7 +241,7 @@ export async function handleListProfiles(
   authorized: AuthorizedUser,
 ): Promise<Response> {
   const profiles = listProfilesForOwner(options.db, authorized.userId);
-  return new Response(JSON.stringify(profiles), {
+  return new Response(JSON.stringify({ profiles }), {
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
@@ -223,10 +250,10 @@ export async function handleListProfiles(
 /**
  * `GET /api/config/profiles/:id`
  *
- * Returns a single browser-facing profile detail. The API key is never returned
- * in cleartext — only `apiKeyMasked` (if present) and `hasKey`. If the sealed
- * value cannot be opened (wrong key, tampered), `apiKeyMasked` is omitted but
- * `hasKey` stays true so the edit form can offer a "set / unset" affordance.
+ * Returns `{ profile }` with the browser-facing detail. The API key is never
+ * returned in cleartext — only `apiKeyMasked` (if present) and `hasKey`. If the
+ * sealed value cannot be opened (wrong key, tampered), `apiKeyMasked` is omitted
+ * but `hasKey` stays true so the edit form can offer a "set / unset" affordance.
  */
 export async function handleGetProfile(
   request: Request,
@@ -234,26 +261,12 @@ export async function handleGetProfile(
   authorized: AuthorizedUser,
 ): Promise<Response> {
   const profileId = extractProfileId(request);
-  const withSecret = getProfileWithSecret(options.db, profileId, authorized.userId);
-  if (withSecret === null) {
-    return new Response("not found", { status: 404 });
-  }
-
-  const detail = getProfileById(options.db, profileId, authorized.userId);
+  const detail = profileDetail(options, profileId, authorized.userId);
   if (detail === null) {
     return new Response("not found", { status: 404 });
   }
 
-  // Re-derive the mask from the cleartext, not from the stored sealed string.
-  // If the seal cannot be opened, omit apiKeyMasked but keep hasKey.
-  if (withSecret.apiKey !== undefined) {
-    const plain = options.secretBox.open(withSecret.apiKey);
-    if (plain !== null) {
-      detail.apiKeyMasked = maskApiKey(plain)!;
-    }
-  }
-
-  return new Response(JSON.stringify(detail), {
+  return new Response(JSON.stringify({ profile: detail }), {
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
@@ -262,8 +275,8 @@ export async function handleGetProfile(
 /**
  * `POST /api/config/profiles`
  *
- * Creates a new profile for the authenticated owner. Returns the created
- * profile's id and name.
+ * Creates a new profile for the authenticated owner. Returns `{ profile }` with
+ * the created profile's browser-facing detail.
  */
 export async function handleCreateProfile(
   request: Request,
@@ -290,7 +303,10 @@ export async function handleCreateProfile(
     settingsJson,
   });
 
-  return new Response(JSON.stringify(created), {
+  // The client needs the new id to open the saved profile; return the same
+  // `{ profile }` envelope as GET/PUT.
+  const detail = profileDetail(options, created.id, authorized.userId);
+  return new Response(JSON.stringify({ profile: detail }), {
     status: 201,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
@@ -320,11 +336,12 @@ export async function handleUpdateProfile(
     return new Response("not found", { status: 404 });
   }
 
-  // When the body supplies an apiKey field: a non-empty value is sealed before
-  // persistence; an empty string clears the stored key.
+  // §4.2: an omitted or empty apiKey preserves the stored key — the edit form
+  // posts its (empty) credential input back on every save. Only a non-empty
+  // value becomes a patch; clearing a key has no UI affordance.
   let patchApiKey: string | undefined;
-  if (apiKeyPresent) {
-    patchApiKey = apiKey === undefined || apiKey === "" ? "" : options.secretBox.seal(apiKey);
+  if (apiKeyPresent && apiKey !== undefined && apiKey !== "") {
+    patchApiKey = options.secretBox.seal(apiKey);
   }
 
   const updated = updateProfile(options.db, profileId, authorized.userId, {
@@ -341,15 +358,11 @@ export async function handleUpdateProfile(
   }
 
   // Return the freshly-masked detail so the browser sees the new mask.
-  const withSecret = getProfileWithSecret(options.db, profileId, authorized.userId);
-  const detail = getProfileById(options.db, profileId, authorized.userId);
-  if (detail !== null && withSecret !== null && withSecret.apiKey !== undefined) {
-    const plain = options.secretBox.open(withSecret.apiKey);
-    if (plain !== null) {
-      detail.apiKeyMasked = maskApiKey(plain)!;
-    }
+  const detail = profileDetail(options, profileId, authorized.userId);
+  if (detail === null) {
+    return new Response("not found", { status: 404 });
   }
-  return new Response(JSON.stringify(detail), {
+  return new Response(JSON.stringify({ profile: detail }), {
     status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });

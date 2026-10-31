@@ -46,8 +46,8 @@ describe("config-routes (/api/config/profiles)", () => {
       authorized,
     );
     expect(createRes.status).toBe(201);
-    const created = (await createRes.json()) as { id: string; name: string };
-    expect(created.id).toBeDefined();
+    const created = (await createRes.json()) as { profile: { profileId: string; name: string } };
+    expect(created.profile.profileId).toBeDefined();
 
     // GET /api/config/profiles
     const listReq = new Request("http://localhost/api/config/profiles");
@@ -57,10 +57,10 @@ describe("config-routes (/api/config/profiles)", () => {
       authorized,
     );
     expect(listRes.status).toBe(200);
-    const list = (await listRes.json()) as Array<{ id: string; hasKey: boolean }>;
-    expect(list.length).toBe(1);
-    expect(list[0]!.hasKey).toBe(true);
-    expect((list[0] as Record<string, unknown>).apiKey).toBeUndefined();
+    const list = (await listRes.json()) as { profiles: Array<{ id: string; hasKey: boolean }> };
+    expect(list.profiles.length).toBe(1);
+    expect(list.profiles[0]!.hasKey).toBe(true);
+    expect((list.profiles[0] as Record<string, unknown>).apiKey).toBeUndefined();
 
     // Rejects invalid endpoint
     const badReq = new Request("http://localhost/api/config/profiles", {
@@ -115,30 +115,35 @@ describe("config-routes (/api/config/profiles)", () => {
       }),
     });
     const createRes = await handleCreateProfile(createReq, { db, secretBox }, authorized);
-    const created = (await createRes.json()) as { id: string };
+    const created = (await createRes.json()) as { profile: { profileId: string } };
 
     // Update without supplying apiKey — the stored key must survive.
-    const updateReq = new Request(`http://localhost/api/config/profiles/${created.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "Updated Name",
-        endpoint: "http://10.0.0.1:8080",
-        authField: "ANTHROPIC_API_KEY",
-        settingsJson: "{}",
-      }),
-    });
+    const updateReq = new Request(
+      `http://localhost/api/config/profiles/${created.profile.profileId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Updated Name",
+          endpoint: "http://10.0.0.1:8080",
+          authField: "ANTHROPIC_API_KEY",
+          settingsJson: "{}",
+        }),
+      },
+    );
     const updateRes = await handleUpdateProfile(updateReq, { db, secretBox }, authorized);
     expect(updateRes.status).toBe(200);
 
     // Re-read via the secret path to confirm the key was preserved.
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
     expect(getRes.status).toBe(200);
-    const detail = (await getRes.json()) as { hasKey: boolean; apiKeyMasked: string };
-    expect(detail.hasKey).toBe(true);
+    const detail = (await getRes.json()) as {
+      profile: { hasKey: boolean; apiKeyMasked: string };
+    };
+    expect(detail.profile.hasKey).toBe(true);
     // The masked value must be derived from the preserved plaintext "sk-original-key".
-    expect(detail.apiKeyMasked).toBe("sk-***key");
+    expect(detail.profile.apiKeyMasked).toBe("sk-***key");
   });
 
   test("DELETE then GET returns 404", async () => {
@@ -157,15 +162,18 @@ describe("config-routes (/api/config/profiles)", () => {
       }),
     });
     const createRes = await handleCreateProfile(createReq, { db, secretBox }, authorized);
-    const created = (await createRes.json()) as { id: string };
+    const created = (await createRes.json()) as { profile: { profileId: string } };
 
-    const delReq = new Request(`http://localhost/api/config/profiles/${created.id}`, {
-      method: "DELETE",
-    });
+    const delReq = new Request(
+      `http://localhost/api/config/profiles/${created.profile.profileId}`,
+      {
+        method: "DELETE",
+      },
+    );
     const delRes = await handleDeleteProfile(delReq, { db, secretBox }, authorized);
     expect(delRes.status).toBe(200);
 
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
     expect(getRes.status).toBe(404);
   });
@@ -246,12 +254,12 @@ describe("config-routes (/api/config/profiles)", () => {
     );
     expect(createRes.status).toBe(201);
 
-    const created = (await createRes.json()) as { id: string };
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const created = (await createRes.json()) as { profile: { profileId: string } };
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox: makeSecretBox() }, authorized);
     expect(getRes.status).toBe(200);
-    const detail = (await getRes.json()) as { settings: unknown };
-    expect(detail.settings).toEqual({});
+    const detail = (await getRes.json()) as { profile: { settings: unknown } };
+    expect(detail.profile.settings).toEqual({});
   });
 
   test("settingsJson rejects non-JSON value", async () => {
@@ -359,13 +367,13 @@ describe("config-routes (/api/config/profiles)", () => {
     });
     const res = await handleCreateProfile(req, { db, secretBox }, authorized);
     expect(res.status).toBe(201);
-    const created = (await res.json()) as { id: string };
+    const created = (await res.json()) as { profile: { profileId: string } };
 
     // Query SQLite directly: the stored column must not be plaintext and must
     // start with the v1. envelope prefix.
     const row = db
       .query("SELECT api_key_encrypted FROM config_profiles WHERE id = ?")
-      .get(created.id) as { api_key_encrypted: string | null };
+      .get(created.profile.profileId) as { api_key_encrypted: string | null };
 
     expect(row.api_key_encrypted).not.toBeNull();
     expect(row.api_key_encrypted).not.toContain("sk-secret-key");
@@ -389,15 +397,17 @@ describe("config-routes (/api/config/profiles)", () => {
       }),
     });
     const res = await handleCreateProfile(req, { db, secretBox }, authorized);
-    const created = (await res.json()) as { id: string };
+    const created = (await res.json()) as { profile: { profileId: string } };
 
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
     expect(getRes.status).toBe(200);
-    const detail = (await getRes.json()) as { hasKey: boolean; apiKeyMasked: string };
+    const detail = (await getRes.json()) as {
+      profile: { hasKey: boolean; apiKeyMasked: string };
+    };
     // maskApiKey("sk-secret-key") => "sk-***key"
-    expect(detail.hasKey).toBe(true);
-    expect(detail.apiKeyMasked).toBe("sk-***key");
+    expect(detail.profile.hasKey).toBe(true);
+    expect(detail.profile.apiKeyMasked).toBe("sk-***key");
     // The sealed value must not appear in any response field.
     expect(JSON.stringify(detail)).not.toMatch(/^v1\./);
   });
@@ -419,7 +429,7 @@ describe("config-routes (/api/config/profiles)", () => {
       }),
     });
     const res = await handleCreateProfile(req, { db, secretBox }, authorized);
-    const created = (await res.json()) as { id: string };
+    const created = (await res.json()) as { profile: { profileId: string } };
 
     // Simulate a rotated server secret: the column holds a well-formed envelope
     // sealed by a DIFFERENT key. open() fails, and the response must not fall
@@ -427,21 +437,23 @@ describe("config-routes (/api/config/profiles)", () => {
     const foreign = createSecretBox(new Uint8Array(32).fill(43)).seal("sk-rotated");
     db.query("UPDATE config_profiles SET api_key_encrypted = ? WHERE id = ?").run(
       foreign,
-      created.id,
+      created.profile.profileId,
     );
 
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
     expect(getRes.status).toBe(200);
-    const detail = (await getRes.json()) as { hasKey: boolean; apiKeyMasked?: string };
-    expect(detail.hasKey).toBe(true);
-    expect(detail.apiKeyMasked).toBeUndefined();
+    const detail = (await getRes.json()) as {
+      profile: { hasKey: boolean; apiKeyMasked?: string };
+    };
+    expect(detail.profile.hasKey).toBe(true);
+    expect(detail.profile.apiKeyMasked).toBeUndefined();
     // Neither the plaintext nor the sealed envelope may appear anywhere.
     expect(JSON.stringify(detail)).not.toContain("sk-rotated");
     expect(JSON.stringify(detail)).not.toContain("v1.");
   });
 
-  test("PUT with empty-string apiKey clears the stored key", async () => {
+  test("PUT with empty-string apiKey preserves the stored key (spec §4.2)", async () => {
     const db = makeDb();
     const secretBox = makeSecretBox();
 
@@ -449,7 +461,7 @@ describe("config-routes (/api/config/profiles)", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: "Clearer",
+        name: "Preserver",
         endpoint: "http://192.168.2.3:20128",
         authField: "ANTHROPIC_AUTH_TOKEN",
         apiKey: "sk-original-key",
@@ -458,34 +470,39 @@ describe("config-routes (/api/config/profiles)", () => {
     });
     const created = (await (
       await handleCreateProfile(createReq, { db, secretBox }, authorized)
-    ).json()) as {
-      id: string;
-    };
+    ).json()) as { profile: { profileId: string } };
 
-    // Empty string means "clear".
-    const updateReq = new Request(`http://localhost/api/config/profiles/${created.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "Clearer",
-        endpoint: "http://192.168.2.3:20128",
-        authField: "ANTHROPIC_AUTH_TOKEN",
-        apiKey: "",
-        settingsJson: "{}",
-      }),
-    });
+    // The edit form posts the credential input as-is; an empty string is what
+    // the operator leaves when they mean "keep the stored key" (§4.2).
+    const updateReq = new Request(
+      `http://localhost/api/config/profiles/${created.profile.profileId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Preserver",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "",
+          settingsJson: "{}",
+        }),
+      },
+    );
     const updateRes = await handleUpdateProfile(updateReq, { db, secretBox }, authorized);
     expect(updateRes.status).toBe(200);
 
     const row = db
       .query("SELECT api_key_encrypted FROM config_profiles WHERE id = ?")
-      .get(created.id) as { api_key_encrypted: string | null };
-    expect(row.api_key_encrypted).toBeNull();
+      .get(created.profile.profileId) as { api_key_encrypted: string | null };
+    expect(row.api_key_encrypted).not.toBeNull();
+    expect(row.api_key_encrypted).toMatch(/^v1\./);
 
-    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`);
     const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
-    const detail = (await getRes.json()) as { hasKey: boolean; apiKeyMasked?: string };
-    expect(detail.hasKey).toBe(false);
-    expect(detail.apiKeyMasked).toBeUndefined();
+    const detail = (await getRes.json()) as {
+      profile: { hasKey: boolean; apiKeyMasked?: string };
+    };
+    expect(detail.profile.hasKey).toBe(true);
+    expect(detail.profile.apiKeyMasked).toBe("sk-***key");
   });
 });
