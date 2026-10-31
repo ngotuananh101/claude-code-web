@@ -1,13 +1,6 @@
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-// `@lezer/highlight` is a transitive dependency of `@codemirror/language` and is
-// present at build time (vite resolves it through the dependency graph), but
-// bun's store-based linker does not hoist it to a top-level `node_modules`, so
-// `tsc` cannot resolve the bare-specifier import. The @ts-expect-error silences
-// only that resolution gap; the types still load because `@codemirror/language`'s
-// own `.d.ts` imports from `@lezer/highlight` and resolves it transitively.
-// @ts-expect-error @lezer/highlight not hoisted by bun linker; resolves via vite
 import { tags } from "@lezer/highlight";
 
 /**
