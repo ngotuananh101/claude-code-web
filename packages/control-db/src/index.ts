@@ -68,6 +68,17 @@ export {
   updateRunnerName,
 } from "./runner-tokens.ts";
 export {
+  advanceSchedule,
+  cancelScheduleForOwner,
+  computeNextFire,
+  dueSchedules,
+  listActiveSchedules,
+  projectScheduleEvent,
+  runKnown,
+  type ScheduleEventInput,
+  type ScheduleRecord,
+} from "./scheduled-tasks.ts";
+export {
   type DispatchDecision,
   type DispatchRequest,
   type RunnerCapacity,
