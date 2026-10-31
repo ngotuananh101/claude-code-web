@@ -85,6 +85,34 @@ describe("createScheduleObserver", () => {
     ]);
   });
 
+  test("a human schedule never replaces the cron expression the server parses", () => {
+    // The control server recomputes every later fire from `cron`; a display
+    // string such as "Every minute" does not parse. The model's expression is
+    // the only machine-readable source.
+    const observe = createScheduleObserver({ timezone: "UTC" });
+    observe(
+      assistant({
+        type: "tool_use",
+        id: "toolu_4",
+        name: "CronCreate",
+        input: { cron: "* * * * *", recurring: true, prompt: "Trả lời đúng một từ: TICK" },
+      }),
+    );
+    const events = observe(
+      result(
+        {
+          id: "6a004bca",
+          humanSchedule: "Every minute",
+          recurring: true,
+          durable: false,
+          nextFireAt: 1793452812422,
+        },
+        { type: "tool_result", tool_use_id: "toolu_4", content: "Scheduled" },
+      ),
+    );
+    expect(events[0]?.payload).toMatchObject({ cron: "* * * * *", recurring: true });
+  });
+
   test("an error result mirrors nothing", () => {
     const observe = createScheduleObserver({ timezone: "UTC" });
     observe(assistant(cronCreateUse));

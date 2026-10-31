@@ -46,9 +46,12 @@ function cronCreated(
   structured: Record<string, unknown> | undefined,
   timezone: string,
 ): ScheduleEvent | undefined {
-  // The structured result is the CLI's own answer; the tool input is the model's
-  // request. Prefer the answer, fall back to the request.
-  const cron = nonEmpty(structured?.["humanSchedule"]) ?? nonEmpty(input["cron"]);
+  // The control server recomputes every later fire from this string, so the
+  // model's expression is the source of truth: the structured result's
+  // `humanSchedule` is display text ("Every minute") that cron-parser cannot
+  // read, and it only matches the expression for one-shot cron strings by
+  // accident. It remains the fallback for a CLI that answers in plain text.
+  const cron = nonEmpty(input["cron"]) ?? nonEmpty(structured?.["humanSchedule"]);
   const prompt = nonEmpty(input["prompt"]);
   if (cron === undefined || prompt === undefined) return undefined;
 
