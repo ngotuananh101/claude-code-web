@@ -36,7 +36,7 @@ import { abandonAttemptApprovals } from "./approvals/abandon.ts";
 import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
 import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
-import { Dispatcher } from "./dispatch/dispatcher.ts";
+import { Dispatcher, openSealedPayload } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
   handleGetAttachment,
@@ -338,11 +338,7 @@ export function createServer(options: ServerOptions): ServerHandle {
         reopenRejectedSchedule(options.db, outbox, { commandId, runId });
         console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
       },
-      openSecurePayload: (stored) => {
-        if (typeof stored !== "string") return null;
-        const plain = secretBox.open(stored);
-        return plain === null ? null : JSON.parse(plain);
-      },
+      openSecurePayload: (stored) => openSealedPayload(stored, (sealed) => secretBox.open(sealed)),
     });
   }
 

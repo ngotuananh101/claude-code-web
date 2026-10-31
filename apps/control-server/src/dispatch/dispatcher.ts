@@ -181,3 +181,25 @@ export function toEnvelope(
 
   return envelope;
 }
+
+/**
+ * The opener the server hands to `toEnvelope` (§18.1, P3-C Task 5b).
+ *
+ * Opening a stored payload is two steps — decrypt, then JSON-decode — and both
+ * must answer `null` rather than throw: a row sealed by another key, tampered
+ * with, or written by a future format that seals a non-JSON plaintext still
+ * falls back to the redacted payload instead of aborting the drain.
+ */
+export function openSealedPayload(
+  stored: unknown,
+  open: (sealed: string) => string | null,
+): unknown | null {
+  if (typeof stored !== "string") return null;
+  const plain = open(stored);
+  if (plain === null) return null;
+  try {
+    return JSON.parse(plain);
+  } catch {
+    return null;
+  }
+}

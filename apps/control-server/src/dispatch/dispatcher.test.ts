@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { CommandOutbox, migrate } from "@cc-web/control-db";
 import { RunnerGateway } from "../websocket/runner/runner-gateway.ts";
-import { Dispatcher } from "./dispatcher.ts";
+import { Dispatcher, openSealedPayload } from "./dispatcher.ts";
 
 /**
  * Dispatch on the live transport (§9.2, §14.3).
@@ -545,5 +545,23 @@ describe("dispatcher", () => {
         profile: { apiKey: "sk-secret" },
       });
     });
+  });
+});
+
+describe("openSealedPayload", () => {
+  test("parses a sealed JSON payload", () => {
+    const stored = openSealedPayload("v1.sealed", () => '{"ok":true}');
+    expect(stored).toEqual({ ok: true });
+  });
+
+  test("returns null when the opened plaintext is not JSON", () => {
+    // A future or foreign writer could seal a non-JSON string; the drain must
+    // fall back to the redacted payload rather than throw from JSON.parse.
+    expect(openSealedPayload("v1.sealed", () => "not json")).toBeNull();
+  });
+
+  test("returns null for a non-string stored value or a failed open", () => {
+    expect(openSealedPayload({ apiKey: "sk-cleartext" }, () => '{"a":1}')).toBeNull();
+    expect(openSealedPayload("v1.sealed", () => null)).toBeNull();
   });
 });
