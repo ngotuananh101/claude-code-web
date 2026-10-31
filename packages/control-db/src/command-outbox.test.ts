@@ -287,4 +287,42 @@ describe("command outbox", () => {
     expect(row.kind).toBe("workspace.revert");
     expect(JSON.parse(row.payload)).toEqual({ op: "workspace.revert", planDigest: "d1" });
   });
+
+  test("a command with a secure payload stores it separately from the redacted payload", async () => {
+    const { db, outbox: o } = outbox();
+
+    await o.enqueue({
+      ...command,
+      payload: { profile: { apiKey: "[REDACTED]" } },
+      payloadSecure: { profile: { apiKey: "sk-secret" } },
+    });
+
+    const row = db
+      .query("SELECT payload, payload_secure FROM command_outbox WHERE command_id = ?")
+      .get("cmd-1") as { payload: string; payload_secure: string | null };
+
+    // The persisted payload is redacted; the secure column holds the cleartext.
+    expect(JSON.parse(row.payload)).toEqual({ profile: { apiKey: "[REDACTED]" } });
+    expect(JSON.parse(row.payload_secure!)).toEqual({ profile: { apiKey: "sk-secret" } });
+
+    // pendingFor returns the cleartext in payloadSecure so the dispatcher can
+    // use it for the live frame.
+    const pending = o.pendingFor("runner-a");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.payload).toEqual({ profile: { apiKey: "[REDACTED]" } });
+    expect(pending[0]?.payloadSecure).toEqual({ profile: { apiKey: "sk-secret" } });
+  });
+
+  test("a command without a secure payload has a null payload_secure column", async () => {
+    const { db, outbox: o } = outbox();
+
+    await o.enqueue(command);
+
+    const row = db
+      .query("SELECT payload_secure FROM command_outbox WHERE command_id = ?")
+      .get("cmd-1") as { payload_secure: string | null };
+
+    expect(row.payload_secure).toBeNull();
+    expect(o.get("cmd-1")?.payloadSecure).toBeUndefined();
+  });
 });

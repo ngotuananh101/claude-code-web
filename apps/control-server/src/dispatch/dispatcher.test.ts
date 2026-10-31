@@ -121,6 +121,55 @@ describe("dispatcher", () => {
     ]);
   });
 
+  test("a command with a secure payload delivers the cleartext on the live frame", async () => {
+    const { outbox, gateway, dispatcher, socket, sent } = setup();
+    readyRunner(gateway, socket, sent);
+
+    // §18.1: the persisted payload masks the apiKey, while `payloadSecure`
+    // carries it on the WebSocket frame to the runner.
+    await outbox.enqueue({
+      ...command,
+      payload: { prompt: "hello", profile: { apiKey: "[REDACTED]" } },
+      payloadSecure: { prompt: "hello", profile: { apiKey: "sk-secret" } },
+    });
+
+    dispatcher.drain("runner-a");
+
+    expect(sent).toEqual([
+      {
+        type: "command",
+        command: {
+          protocolVersion: 1,
+          commandId: "cmd-1",
+          runnerId: "runner-a",
+          sessionId: "session-1",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          workspaceId: "workspace-1",
+          kind: "run.start",
+          issuedAt: "2026-10-23T00:00:00.000Z",
+          payload: { prompt: "hello", profile: { apiKey: "sk-secret" } },
+        },
+      },
+    ]);
+
+    // The persisted row keeps the redacted payload.
+    const row = outbox.get("cmd-1");
+    expect(row?.payload).toEqual({ prompt: "hello", profile: { apiKey: "[REDACTED]" } });
+    expect(row?.payloadSecure).toEqual({ prompt: "hello", profile: { apiKey: "sk-secret" } });
+  });
+
+  test("a command without a secure payload falls back to the persisted payload", async () => {
+    const { outbox, gateway, dispatcher, socket, sent } = setup();
+    readyRunner(gateway, socket, sent);
+    await outbox.enqueue(command);
+
+    dispatcher.drain("runner-a");
+
+    // No payloadSecure stored, so the envelope carries the plain payload.
+    expect(sent[0]?.command?.payload).toEqual({ prompt: "hello" });
+  });
+
   test("a connected runner is not sent work, because it has not reconciled", async () => {
     const { outbox, gateway, dispatcher, socket, sent } = setup();
     gateway.handleOpen(socket as never, { authorization: "Bearer cck_valid" });

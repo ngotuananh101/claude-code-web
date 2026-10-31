@@ -139,7 +139,11 @@ export function toEnvelope(command: OutboxCommand): RunnerCommand {
     runnerId: command.runnerId,
     kind: command.kind,
     issuedAt: command.issuedAt,
-    payload: command.payload,
+    // §18.1: the live WebSocket frame carries the cleartext payload (with the
+    // profile API key) when the outbox stored one in `payload_secure`; the
+    // redacted `payload` is the fallback for commands without secrets and for
+    // rows recovered after a restart that lost the cleartext column.
+    payload: command.payloadSecure ?? command.payload,
   };
 
   // Absent fields are omitted rather than sent as `null`: the runner validates

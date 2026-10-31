@@ -5,7 +5,7 @@ import type {
   ProfileDetail,
   ProfileSummary,
 } from "@cc-web/protocol";
-import { Save, Trash2 } from "@lucide/vue";
+import { Plus, Save, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProfileForm } from "@/features/profiles/profiles-logic.ts";
 import {
   formToJson,

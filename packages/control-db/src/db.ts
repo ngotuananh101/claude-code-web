@@ -109,6 +109,11 @@ export function migrate(db: Database): void {
   addColumnIfMissing(db, "command_outbox", "run_id", "TEXT");
   addColumnIfMissing(db, "command_outbox", "attempt_id", "TEXT");
   addColumnIfMissing(db, "command_outbox", "workspace_id", "TEXT");
+  // §18.1: cleartext payload for the live WebSocket frame, kept separate from
+  // `payload` so on-disk persistence can mask secrets while the runner still
+  // receives them over the authenticated socket. Nullable — commands without
+  // secrets carry no secure payload and the dispatcher falls back to `payload`.
+  addColumnIfMissing(db, "command_outbox", "payload_secure", "TEXT");
 
   // The drain query is "undelivered commands for one runner", so index exactly
   // that rather than scanning the table per reconnect.

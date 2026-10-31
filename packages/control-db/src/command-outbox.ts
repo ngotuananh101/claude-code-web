@@ -30,7 +30,19 @@ export type EnqueueInput = {
   commandId: string;
   runnerId: string;
   kind: CommandKind;
+  /**
+   * The payload persisted to `command_outbox.payload`. Secrets such as profile
+   * API keys are redacted here so on-disk state never holds cleartext material.
+   */
   payload: unknown;
+  /**
+   * The cleartext payload used only for the live WebSocket frame. Stored in the
+   * `payload_secure` column, which the dispatcher reads when rebuilding the
+   * frame from the row. After a restart the column is gone or NULL, so the
+   * dispatcher falls back to the redacted `payload` — the runner rejects the
+   * missing secret rather than receiving a bad key.
+   */
+  payloadSecure?: unknown;
   issuedAt: string;
   expiresAt?: string;
   runId?: string;
@@ -55,6 +67,8 @@ export type OutboxCommand = {
   runId: string | undefined;
   workspaceId: string | undefined;
   rejectionReason: string | undefined;
+  /** Cleartext payload for the live WebSocket frame; undefined when none was stored. */
+  payloadSecure: unknown | undefined;
 };
 
 type Row = {
@@ -62,6 +76,7 @@ type Row = {
   runner_id: string;
   kind: string;
   payload: string;
+  payload_secure: string | null;
   fingerprint: string;
   issued_at: string;
   expires_at: string | null;
@@ -111,16 +126,17 @@ export class CommandOutbox {
     this.#db
       .query(
         `INSERT INTO command_outbox
-           (command_id, runner_id, kind, payload, fingerprint, issued_at, expires_at,
+           (command_id, runner_id, kind, payload, payload_secure, fingerprint, issued_at, expires_at,
             session_id, run_id, attempt_id, workspace_id,
             delivery_state, attempt_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
       )
       .run(
         input.commandId,
         input.runnerId,
         input.kind,
         JSON.stringify(input.payload ?? null),
+        input.payloadSecure === undefined ? null : JSON.stringify(input.payloadSecure ?? null),
         fingerprint,
         input.issuedAt,
         input.expiresAt ?? null,
@@ -275,6 +291,10 @@ export class CommandOutbox {
 export async function fingerprintOf(input: EnqueueInput): Promise<string> {
   // Canonicalised so key order and `undefined` do not change the hash; without
   // that, an identical retry would look like a different command.
+  //
+  // The fingerprint is computed from the redacted `payload`, not from
+  // `payloadSecure`: two re-dispatches of the same logical command must share an
+  // id even though the cleartext key travels alongside.
   return fingerprint({
     commandId: input.commandId,
     runnerId: input.runnerId,
@@ -289,6 +309,8 @@ function toCommand(row: Row): OutboxCommand {
     runnerId: row.runner_id,
     kind: row.kind as CommandKind,
     payload: JSON.parse(row.payload) as unknown,
+    payloadSecure:
+      row.payload_secure === null ? undefined : (JSON.parse(row.payload_secure) as unknown),
     issuedAt: row.issued_at,
     expiresAt: row.expires_at ?? undefined,
     deliveryState: row.delivery_state as DeliveryState,

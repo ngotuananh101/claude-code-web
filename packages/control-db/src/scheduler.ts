@@ -18,7 +18,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { RunnerAttachmentItem } from "@cc-web/protocol";
+import type { RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
 import { CommandOutbox } from "./command-outbox.ts";
 import { ensureSessionPin } from "./sessions.ts";
 
@@ -100,6 +100,15 @@ export type DispatchRequest = {
   /** The schedule's cron expression, for the chat label (§11.5). Rides the
    * payload next to `scheduleId`, same rule: omitted when absent. */
   scheduleCron?: string;
+  /**
+   * An upstream provider profile selected for this run (§17.1, §18.1). When
+   * present, the run.start payload carries the resolved `RunProfilePayload`
+   * with the cleartext `apiKey`. The on-disk outbox persists a redacted copy
+   * (apiKey replaced with `[REDACTED]`) while the live WebSocket frame delivers
+   * the key to the runner. Absent means no profile — the key is omitted,
+   * never sent as `null`.
+   */
+  profile?: RunProfilePayload;
 };
 
 export type DispatchDecision =
@@ -165,6 +174,38 @@ export class Scheduler {
     // Enqueue carries the envelope fields, not just the payload: the dispatcher
     // rebuilds the frame from the stored row alone, and a missing `sessionId`
     // would leave the runner unable to attribute the work.
+    // §17.1, §18.1: when a profile is selected, the cleartext `apiKey` rides the
+    // live WebSocket frame so the runner receives it, while the on-disk outbox
+    // persists a redacted copy so `SELECT payload FROM command_outbox` never
+    // holds the secret. The dispatcher's `toEnvelope` rebuilds the frame from
+    // the stored row using `payloadSecure` when present, falling back to the
+    // redacted `payload` after a restart (the runner rejects the missing key).
+    const cleartextPayload = {
+      sessionId: request.sessionId,
+      runId: request.runId,
+      attemptId: request.attemptId,
+      workspaceId: request.workspaceId,
+      prompt: request.prompt,
+      ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
+      ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
+      ...(request.model === undefined ? {} : { model: request.model }),
+      ...(request.effort === undefined ? {} : { effort: request.effort }),
+      ...(request.ultracode === undefined ? {} : { ultracode: request.ultracode }),
+      ...(request.branch === undefined ? {} : { branch: request.branch }),
+      ...(request.resumeSessionId === undefined
+        ? {}
+        : { resumeSessionId: request.resumeSessionId }),
+      ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
+      ...(request.scheduleId === undefined ? {} : { scheduleId: request.scheduleId }),
+      ...(request.scheduleCron === undefined ? {} : { scheduleCron: request.scheduleCron }),
+      ...(request.profile === undefined ? {} : { profile: request.profile }),
+    };
+
+    const hasProfile = request.profile !== undefined;
+    const persistedPayload = hasProfile
+      ? { ...cleartextPayload, profile: redactProfileApiKey(request.profile!) }
+      : cleartextPayload;
+
     await this.#outbox.enqueue({
       commandId,
       runnerId: capacity.runnerId,
@@ -174,25 +215,8 @@ export class Scheduler {
       runId: request.runId,
       attemptId: request.attemptId,
       workspaceId: request.workspaceId,
-      payload: {
-        sessionId: request.sessionId,
-        runId: request.runId,
-        attemptId: request.attemptId,
-        workspaceId: request.workspaceId,
-        prompt: request.prompt,
-        ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
-        ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
-        ...(request.model === undefined ? {} : { model: request.model }),
-        ...(request.effort === undefined ? {} : { effort: request.effort }),
-        ...(request.ultracode === undefined ? {} : { ultracode: request.ultracode }),
-        ...(request.branch === undefined ? {} : { branch: request.branch }),
-        ...(request.resumeSessionId === undefined
-          ? {}
-          : { resumeSessionId: request.resumeSessionId }),
-        ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
-        ...(request.scheduleId === undefined ? {} : { scheduleId: request.scheduleId }),
-        ...(request.scheduleCron === undefined ? {} : { scheduleCron: request.scheduleCron }),
-      },
+      payload: persistedPayload,
+      ...(hasProfile ? { payloadSecure: cleartextPayload } : {}),
     });
 
     // The pin is written only for an accepted dispatch — a refusal must never
@@ -292,4 +316,14 @@ export class Scheduler {
       .get(runnerId) as { n: number };
     return { ...base, activeRuns: row.n };
   }
+}
+
+/**
+ * Build a redacted copy of a profile payload for on-disk persistence: the
+ * cleartext `apiKey` is replaced with `[REDACTED]` so `command_outbox.payload`
+ * never holds the secret. The live WebSocket frame carries the original via
+ * `payload_secure` (§18.1).
+ */
+function redactProfileApiKey(profile: RunProfilePayload): RunProfilePayload {
+  return profile.apiKey === undefined ? profile : { ...profile, apiKey: "[REDACTED]" };
 }

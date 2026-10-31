@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   CommandOutbox,
+  createProfile,
   issueRunnerCredential,
   migrate,
   upsertRunnerWorkspaces,
@@ -1526,5 +1527,206 @@ describe("POST /api/sessions/:id/runs attachmentIds", () => {
     expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
       0,
     );
+  });
+});
+
+/**
+ * Profile dispatch (§17.1, §18.1): when the body names a `profileId`, the route
+ * resolves it to a `RunProfilePayload` and forwards it in the run.start payload.
+ * The cleartext API key travels on the WebSocket frame but is masked in the
+ * `command_outbox` row (§4.5 / §7.2).
+ */
+describe("POST /api/sessions/:id/runs profileId", () => {
+  test("resolves a valid profileId and forwards RunProfilePayload in run.start payload", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const profile = createProfile(db, {
+      ownerId: "user-1",
+      name: "9Router",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      apiKey: "sk-secret-key",
+      modelMapping: { sonnet: "prime" },
+      settingsJson: "{}",
+    });
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: profile.id }),
+    });
+    expect(res.status).toBe(202);
+
+    // The runner's inbox receives the cleartext payload over the WebSocket frame.
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+      ),
+    );
+    const sent = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    const parsed = JSON.parse(sent[0]!.payload) as Record<string, unknown>;
+    expect(parsed.profile).toBeDefined();
+    const profilePayload = parsed.profile as Record<string, unknown>;
+    expect(profilePayload.endpoint).toBe("http://192.168.2.3:20128");
+    expect(profilePayload.apiKey).toBe("sk-secret-key");
+    expect(profilePayload.name).toBe("9Router");
+    expect(profilePayload.authField).toBe("ANTHROPIC_AUTH_TOKEN");
+    expect((profilePayload.modelMapping as Record<string, unknown>).sonnet).toBe("prime");
+  });
+
+  test("the command_outbox row masks the apiKey while the live frame carries it", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const profile = createProfile(db, {
+      ownerId: "user-1",
+      name: "9Router",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      apiKey: "sk-secret-key",
+      modelMapping: { sonnet: "prime" },
+      settingsJson: "{}",
+    });
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: profile.id }),
+    });
+    expect(res.status).toBe(202);
+
+    // Wait for the runner to accept the command (and for the outbox row to exist).
+    await waitFor(
+      () => (db.query("SELECT COUNT(*) AS n FROM command_outbox").get() as { n: number }).n === 1,
+    );
+
+    // The persisted payload must NOT contain the cleartext key.
+    const persisted = db.query("SELECT payload FROM command_outbox").get() as { payload: string };
+    const persistedParsed = JSON.parse(persisted.payload) as {
+      profile?: { apiKey?: string };
+    };
+    expect(persistedParsed.profile?.apiKey).toBe("[REDACTED]");
+    expect(persisted.payload).not.toContain("sk-secret-key");
+
+    // The runner's inbox (delivered via the live frame) DOES contain the key.
+    await waitFor(
+      () => (inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n === 1,
+    );
+    const delivered = inbox.query("SELECT payload FROM command_inbox").get() as {
+      payload: string;
+    };
+    const deliveredParsed = JSON.parse(delivered.payload) as {
+      profile?: { apiKey?: string };
+    };
+    expect(deliveredParsed.profile?.apiKey).toBe("sk-secret-key");
+  });
+
+  test("an unknown profileId is a bad request with unknown_profile", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: "prof_doesnotexist" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("unknown_profile");
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("a profile owned by another user is unknown_profile, not leaked", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // Another user owns a profile.
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other-owner", "hash", 1, Date.now());
+    const foreign = createProfile(db, {
+      ownerId: "user-2",
+      name: "Foreign",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      apiKey: "sk-foreign-key",
+      modelMapping: {},
+      settingsJson: "{}",
+    });
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: foreign.id }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("unknown_profile");
+    expect((inbox.query("SELECT COUNT(*) AS n FROM command_inbox").get() as { n: number }).n).toBe(
+      0,
+    );
+  });
+
+  test("an absent profileId omits the profile key from the payload", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(res.status).toBe(202);
+
+    await waitFor(() =>
+      (inbox.query("SELECT payload FROM command_inbox").all() as Array<{ payload: string }>).some(
+        (row) => (JSON.parse(row.payload) as { prompt?: string }).prompt === "hello",
+      ),
+    );
+    const payloads = inbox.query("SELECT payload FROM command_inbox").all() as Array<{
+      payload: string;
+    }>;
+    expect(
+      payloads.some((row) => "profile" in (JSON.parse(row.payload) as Record<string, unknown>)),
+    ).toBe(false);
+  });
+
+  test("a non-string profileId is a bad request", async () => {
+    const { url, cookie } = await start();
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: 42 }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  test("an empty-string profileId is a bad request", async () => {
+    const { url, cookie } = await start();
+
+    const res = await fetch(`${url}/api/sessions/session-1/runs`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello", profileId: "" }),
+    });
+
+    expect(res.status).toBe(400);
   });
 });

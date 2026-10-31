@@ -1,4 +1,5 @@
 import {
+  getProfileWithSecret,
   getSessionAttachment,
   type Scheduler,
   sessionPin,
@@ -9,6 +10,7 @@ import {
   type EffortLevel,
   MODEL_IDS,
   type RunnerAttachmentItem,
+  type RunProfilePayload,
 } from "@cc-web/protocol";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
@@ -70,6 +72,7 @@ export async function handleDispatchRun(
     branch?: unknown;
     resumeSessionId?: unknown;
     attachmentIds?: unknown;
+    profileId?: unknown;
   };
   const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
   if (prompt === "") {
@@ -197,6 +200,22 @@ export async function handleDispatchRun(
         size: attachment.size,
       });
     }
+  }
+
+  // §17.1, §18.1: when the body names a profile, resolve it to the full
+  // RunProfilePayload (with the cleartext API key) before dispatch. An unknown
+  // or foreign-owned id is refused with `unknown_profile` — never 404, to avoid
+  // leaking whether a profile id exists under another owner.
+  let profile: RunProfilePayload | undefined;
+  if (record.profileId !== undefined) {
+    if (typeof record.profileId !== "string" || record.profileId.trim() === "") {
+      return new Response("bad request", { status: 400 });
+    }
+    const profileRow = getProfileWithSecret(options.db, record.profileId, authorized.userId);
+    if (profileRow === null) {
+      return new Response("unknown_profile", { status: 400 });
+    }
+    profile = buildProfilePayload(profileRow);
   }
 
   // §2.3/ADR-006: a session's first accepted dispatch pinned it to a
@@ -385,6 +404,7 @@ export async function handleDispatchRun(
       ...(branch === undefined ? {} : { branch }),
       ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
       ...(attachments === undefined ? {} : { attachments }),
+      ...(profile === undefined ? {} : { profile }),
     },
     scheduler.capacityFor(ready, {
       runnerId: ready,
@@ -441,4 +461,29 @@ export async function handleCancelRun(
     status: 202,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
+}
+
+/**
+ * Map a `ProfileWithSecret` (DB row shape) to the wire `RunProfilePayload` the
+ * runner consumes. Fields are included only when non-empty so a profile with no
+ * model mapping or settings does not render those keys on the wire.
+ */
+function buildProfilePayload(row: {
+  id: string;
+  name: string;
+  endpoint: string;
+  authField: "ANTHROPIC_AUTH_TOKEN" | "ANTHROPIC_API_KEY";
+  apiKey: string | undefined;
+  modelMapping: Record<string, unknown>;
+  settings: Record<string, unknown>;
+}): RunProfilePayload {
+  return {
+    profileId: row.id,
+    name: row.name,
+    endpoint: row.endpoint,
+    authField: row.authField,
+    ...(row.apiKey === undefined ? {} : { apiKey: row.apiKey }),
+    ...(Object.keys(row.modelMapping).length === 0 ? {} : { modelMapping: row.modelMapping }),
+    ...(Object.keys(row.settings).length === 0 ? {} : { settings: row.settings }),
+  };
 }
