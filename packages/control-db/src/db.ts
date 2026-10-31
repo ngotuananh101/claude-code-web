@@ -338,6 +338,29 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS scheduled_tasks_session
       ON scheduled_tasks (session_id, next_fire_at);
   `);
+
+  // §17.1 / §18.1: upstream provider profiles (P3-C). Stored per-owner; the
+  // raw API key is held encrypted at rest and never returned to browser
+  // callers — only a presence flag or a masked representation.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS config_profiles (
+      id                TEXT PRIMARY KEY,
+      owner_id          TEXT NOT NULL,
+      name              TEXT NOT NULL,
+      endpoint          TEXT NOT NULL,
+      auth_field        TEXT NOT NULL,
+      api_key_encrypted TEXT,
+      model_mapping     TEXT NOT NULL,
+      settings_json     TEXT NOT NULL,
+      created_at        INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS config_profiles_owner
+      ON config_profiles (owner_id, updated_at DESC);
+  `);
 }
 
 /**

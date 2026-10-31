@@ -45,6 +45,17 @@ export {
   type ServerEventInput,
 } from "./journal.ts";
 export {
+  type CreateProfileInput,
+  createProfile,
+  deleteProfile,
+  getProfileById,
+  getProfileWithSecret,
+  listProfilesForOwner,
+  type ProfileWithSecret,
+  type UpdateProfilePatch,
+  updateProfile,
+} from "./profiles.ts";
+export {
   listSessions,
   type ReplayEvent,
   readSessionEvents,
