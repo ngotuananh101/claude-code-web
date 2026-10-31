@@ -8,7 +8,7 @@ import type {
   ScheduledTask,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { classifyDiffLines } from "../features/inspect/diff";
 import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
@@ -110,6 +110,21 @@ const schedulesLoading = ref(false);
 const cancellingScheduleId = ref<string | null>(null);
 let schedulesEpoch = 0;
 
+// "trong 2 phút" is computed from a clock, so the clock has to move: a
+// rendered row only re-evaluates when its dependencies change. The 30 s tick
+// keeps the phrases honest without re-fetching anything.
+const now = ref(Date.now());
+let nowTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  nowTimer = setInterval(() => {
+    now.value = Date.now();
+  }, 30_000);
+});
+onBeforeUnmount(() => {
+  if (nowTimer !== null) clearInterval(nowTimer);
+  nowTimer = null;
+});
+
 /**
  * Every load bumps this; a response whose epoch is stale is dropped instead of
  * written into a panel that has since moved to another directory, tab or
@@ -140,8 +155,7 @@ const diffLines = computed(() => {
 const scheduleRows = computed(() => {
   const tasks = schedules.value;
   if (tasks === null) return [];
-  const now = Date.now();
-  return tasks.map((task) => ({ ...toScheduleRow(task, now), cron: task.cron }));
+  return tasks.map((task) => ({ ...toScheduleRow(task, now.value), cron: task.cron }));
 });
 
 const STATUS_LABELS: Record<string, string> = {
@@ -229,9 +243,13 @@ async function loadSchedules(): Promise<void> {
 async function cancelOneSchedule(scheduleId: string): Promise<void> {
   // One cancel at a time: two clicks would race two reloads against one list.
   if (cancellingScheduleId.value !== null) return;
+  const current = schedulesEpoch;
   cancellingScheduleId.value = scheduleId;
   schedulesError.value = null;
   const outcome = await cancelSchedule(scheduleId);
+  // A session change resets the panel and bumps the epoch; this response
+  // belongs to the previous session and must not paint state into the new one.
+  if (current !== schedulesEpoch) return;
   cancellingScheduleId.value = null;
   if (outcome === "cancelled" || outcome === "not_found") {
     // not_found means the row is already gone (fired, or cancelled from
@@ -420,6 +438,11 @@ watch(
     schedulesLoading.value = false;
     cancellingScheduleId.value = null;
     schedulesEpoch += 1;
+    // The tab watcher does not fire for a session change, so a panel left on
+    // the Lịch tab would keep the previous session's answer ("Chưa có lịch
+    // nào.") until a manual refresh. Schedules are session-scoped, so reload
+    // even while the new session has no pin yet.
+    if (tab.value === "schedules") void loadSchedules();
     if (workspace.value !== null) void loadFiles("");
   },
   { immediate: true },
