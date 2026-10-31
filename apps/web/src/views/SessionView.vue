@@ -91,6 +91,16 @@ const liveRunId = computed(() => {
     ) {
       return null;
     }
+    // If there is active agent activity in a subsequent turn after a completed turn
+    // (e.g. from background task notification or scheduled task), keep the run active.
+    if (
+      event.type === "message.started" ||
+      event.type === "message.delta" ||
+      event.type === "tool.started" ||
+      event.type === "approval.requested"
+    ) {
+      return event.runId;
+    }
   }
   return null;
 });

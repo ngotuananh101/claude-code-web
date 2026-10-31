@@ -552,6 +552,117 @@ describe("deriveChatTurns — live events", () => {
     expect(steps[0]).toMatchObject({ kind: "approval" });
     expect((steps[0] as { event: BrowserReplayEvent }).event.type).toBe("approval.requested");
   });
+
+  test("subsequent agent activity after run.finished creates a continuation AgentTurn", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-bg-1", prompt: "chay task ngam nhe" }),
+        liveEvent("tool.started", { toolCallId: "call-1", toolName: "Bash" }, "run-bg-1"),
+        liveEvent(
+          "tool.completed",
+          { toolCallId: "call-1", outputSummary: "Started bg task" },
+          "run-bg-1",
+        ),
+        liveEvent("message.delta", { text: "Da khoi chay task ngam 10s" }, "run-bg-1"),
+        liveEvent("run.finished", { durationMs: 2000 }, "run-bg-1"),
+        // Task notification and subsequent agent turn
+        liveEvent(
+          "run.status",
+          { subtype: "task_notification", task_id: "task-123", summary: "Task completed" },
+          "run-bg-1",
+        ),
+        liveEvent("tool.started", { toolCallId: "call-2", toolName: "Read" }, "run-bg-1"),
+        liveEvent(
+          "tool.completed",
+          { toolCallId: "call-2", outputSummary: "Task log results" },
+          "run-bg-1",
+        ),
+        liveEvent("message.delta", { text: "🔔 Ket qua task ngam da xong!" }, "run-bg-1"),
+        liveEvent("run.finished", { durationMs: 1500 }, "run-bg-1"),
+      ],
+    );
+
+    expect(turns).toHaveLength(3);
+    // Turn 0: User prompt
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      text: "chay task ngam nhe",
+    });
+    // Turn 1: Initial response
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      status: "done",
+      text: "Da khoi chay task ngam 10s",
+    });
+    const turn1Steps = (turns[1] as { steps: unknown[] }).steps;
+    expect(turn1Steps).toHaveLength(1);
+    expect(turn1Steps[0]).toMatchObject({ kind: "tool", toolName: "Bash", state: "done" });
+
+    // Turn 2: Subsequent response reporting background task result
+    expect(turns[2]).toMatchObject({
+      kind: "agent",
+      status: "done",
+      text: "🔔 Ket qua task ngam da xong!",
+    });
+    const turn2Steps = (turns[2] as { steps: unknown[] }).steps;
+    expect(turn2Steps).toHaveLength(1);
+    expect(turn2Steps[0]).toMatchObject({ kind: "tool", toolName: "Read", state: "done" });
+  });
+
+  test("historical messages: flushes current agent turn and starts new turn on <task-notification>", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "chay background nhe" }, "u-1"),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [
+              toolUseBlock("tool-1", "Bash", { command: "run.sh &" }),
+              { type: "text", text: "Dang chay ngam..." },
+            ],
+          },
+          "a-1",
+        ),
+        userMsg({ type: "tool_result", tool_use_id: "tool-1", content: "bg started" }, "u-2"),
+        // Task notification injected as automated message
+        userMsg(
+          {
+            content:
+              "<task-notification>\n<task-id>task-123</task-id>\n<summary>Completed</summary>\n</task-notification>",
+          },
+          "u-notif",
+        ),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [
+              toolUseBlock("tool-2", "Read", { file_path: "/tmp/log.txt" }),
+              { type: "text", text: "🔔 Ket qua task ngam: Thanh cong!" },
+            ],
+          },
+          "a-2",
+        ),
+        userMsg({ type: "tool_result", tool_use_id: "tool-2", content: "log content" }, "u-3"),
+      ],
+      [],
+    );
+
+    expect(turns).toHaveLength(3);
+    expect(turns[0]).toMatchObject({
+      kind: "user",
+      text: "chay background nhe",
+    });
+    expect(turns[1]).toMatchObject({
+      kind: "agent",
+      text: "Dang chay ngam...",
+    });
+    expect(turns[2]).toMatchObject({
+      kind: "agent",
+      text: "🔔 Ket qua task ngam: Thanh cong!",
+    });
+  });
 });
 
 describe("deriveChatTurns — merging historical and live", () => {

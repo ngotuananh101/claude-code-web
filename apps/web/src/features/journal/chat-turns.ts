@@ -663,7 +663,17 @@ export function deriveChatTurns(
         if (prose === "") continue;
       }
 
-      const text = cleanUserPrompt(userPromptText(message));
+      const rawPrompt = userPromptText(message);
+      const isTaskNotification =
+        rawPrompt.includes("<task-notification") || rawPrompt.includes("<task-id>");
+
+      if (isTaskNotification && currentAgentTurn !== null) {
+        finalizeAgentTurn(currentAgentTurn, pendingTools);
+        historicalTurns.push(currentAgentTurn);
+        currentAgentTurn = null;
+      }
+
+      const text = cleanUserPrompt(rawPrompt);
       if (text === "") continue;
 
       // Real user prose: flush any in-flight agent turn first.
@@ -840,7 +850,7 @@ export function deriveChatTurns(
               ? "error"
               : "interrupted";
         liveAgentTurn.isStreaming = false;
-        const durationMs = payload["durationMs"];
+        const durationMs = payload["durationMs"] ?? payload["duration_ms"];
         if (typeof durationMs === "number") {
           liveAgentTurn.durationText = formatDuration(durationMs);
         }
@@ -851,7 +861,32 @@ export function deriveChatTurns(
       continue;
     }
 
-    if (liveAgentTurn === null) continue;
+    if (liveAgentTurn === null) {
+      const isSubsequentTurnActivity =
+        event.type === "message.started" ||
+        event.type === "message.delta" ||
+        event.type === "message.completed" ||
+        event.type === "tool.started" ||
+        event.type === "approval.requested" ||
+        (event.type === "run.status" &&
+          (payload["subtype"] === "task_notification" || payload["subtype"] === "task_updated"));
+
+      if (isSubsequentTurnActivity) {
+        liveAgentTurn = {
+          kind: "agent",
+          key: `live-${event.runId}-turn-${turns.length}`,
+          status: "running",
+          runId: event.runId,
+          startedAt: event.occurredAt,
+          steps: [],
+          text: "",
+          isStreaming: true,
+          rawPayload: event.payload,
+        };
+      } else {
+        continue;
+      }
+    }
 
     if (event.type === "message.started") {
       continue;
