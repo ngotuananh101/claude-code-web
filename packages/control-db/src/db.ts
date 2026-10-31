@@ -283,6 +283,39 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_attachments_session
       ON session_attachments (session_id);
   `);
+
+  // §11.5 / §5.3: schedules the runner mirrored from `schedule.created`. The
+  // control server owns the clock from here on — the tick reads due rows by
+  // `(state, next_fire_at)`, and the partial unique index keeps a redelivered
+  // projection from inserting the same CLI task twice.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+      schedule_id       TEXT PRIMARY KEY,
+      session_id        TEXT NOT NULL,
+      owner_id          TEXT NOT NULL,
+      workspace_id      TEXT NOT NULL,
+      runner_id         TEXT NOT NULL,
+      origin_attempt_id TEXT NOT NULL,
+      cli_task_id       TEXT,
+      cron              TEXT NOT NULL,
+      timezone          TEXT NOT NULL,
+      recurring         INTEGER NOT NULL,
+      prompt            TEXT NOT NULL,
+      next_fire_at      INTEGER NOT NULL,
+      state             TEXT NOT NULL DEFAULT 'active',
+      created_at        INTEGER NOT NULL,
+      last_fired_at     INTEGER
+    );
+  `);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_tasks_origin_cli
+      ON scheduled_tasks (origin_attempt_id, cli_task_id)
+      WHERE cli_task_id IS NOT NULL;
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS scheduled_tasks_due
+      ON scheduled_tasks (state, next_fire_at);
+  `);
 }
 
 /**

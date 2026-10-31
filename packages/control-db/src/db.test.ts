@@ -41,6 +41,29 @@ describe("migrate", () => {
   });
 });
 
+describe("scheduled_tasks migration (§5.3)", () => {
+  test("scheduled_tasks and its indexes exist after two migrations", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    migrate(db); // idempotent: the server calls migrate() on every boot
+
+    const tables = db
+      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_tasks'")
+      .all();
+    expect(tables).toHaveLength(1);
+
+    const indexes = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('scheduled_tasks_origin_cli', 'scheduled_tasks_due')",
+      )
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((row) => row.name).sort()).toEqual([
+      "scheduled_tasks_due",
+      "scheduled_tasks_origin_cli",
+    ]);
+  });
+});
+
 describe("workspaces.branches migration (M4)", () => {
   test("a database created before the column gains it on migrate", () => {
     const db = new Database(":memory:");

@@ -221,6 +221,17 @@ describe("scheduler", () => {
     expect(db.query("SELECT COUNT(*) AS n FROM command_outbox").get()).toEqual({ n: 0 });
   });
 
+  test("activeRunFor answers the attempt id the double-fire guard needs", async () => {
+    const { scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+
+    expect(scheduler.activeRunFor("session-1")).toEqual({
+      runId: "run-1",
+      runnerId: "runner-a",
+      attemptId: "attempt-1",
+    });
+  });
+
   test("releasing a run frees the session and the capacity", async () => {
     const { scheduler } = setup();
     await scheduler.dispatch(request, capacity());

@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@cc-web/protocol": "workspace:*"
+    "@cc-web/protocol": "workspace:*",
+    "cron-parser": "^5.10.2"
   }
 }

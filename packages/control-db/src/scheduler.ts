@@ -104,7 +104,12 @@ export type DispatchDecision =
         | "duplicate_run";
     };
 
-type ActiveRow = { run_id: string; session_id: string; runner_id: string };
+type ActiveRow = {
+  run_id: string;
+  session_id: string;
+  runner_id: string;
+  attempt_id: string;
+};
 
 /** Told after a successful dispatch, so delivery happens as part of the call. */
 export type DispatchListener = (runnerId: string, commandId: string) => void;
@@ -258,11 +263,15 @@ export class Scheduler {
     return { ok: true, commandId };
   }
 
-  activeRunFor(sessionId: string): { runId: string; runnerId: string } | undefined {
+  activeRunFor(
+    sessionId: string,
+  ): { runId: string; runnerId: string; attemptId: string } | undefined {
     const row = this.#db
-      .query("SELECT run_id, runner_id FROM active_runs WHERE session_id = ?")
+      .query("SELECT run_id, runner_id, attempt_id FROM active_runs WHERE session_id = ?")
       .get(sessionId) as ActiveRow | null;
-    return row ? { runId: row.run_id, runnerId: row.runner_id } : undefined;
+    return row
+      ? { runId: row.run_id, runnerId: row.runner_id, attemptId: row.attempt_id }
+      : undefined;
   }
 
   capacityFor(runnerId: string, base: RunnerCapacity): RunnerCapacity {
