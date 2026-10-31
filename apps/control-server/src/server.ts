@@ -244,7 +244,7 @@ export function createServer(options: ServerOptions): ServerHandle {
     // ACK carry only the contiguous watermark the journal can vouch for. A resend
     // of what already committed answers `duplicate` and allocates nothing, which
     // is what makes a lost ACK heal itself instead of doubling the journal.
-    onEvents: (_runnerId, events) => {
+    onEvents: (runnerId, events) => {
       const stored: Array<{ event: (typeof events)[number]; sessionSequence: number }> = [];
       for (const event of events) {
         const result = ingestEvent(options.db, event);
@@ -259,7 +259,10 @@ export function createServer(options: ServerOptions): ServerHandle {
           // §11.5: the schedule mirror follows the same rule — duplicate
           // deliveries are safe (the projection is INSERT OR IGNORE keyed by
           // attempt + tool call), so every non-conflict event is projected.
-          projectScheduleEvent(options.db, event);
+          // The authenticated runner id is passed through because a schedule
+          // row becomes work on the pin's runner: only that runner may
+          // create one for the session (§11.5 trust boundary).
+          projectScheduleEvent(options.db, event, runnerId);
         }
       }
 

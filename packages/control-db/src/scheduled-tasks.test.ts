@@ -77,7 +77,7 @@ describe("computeNextFire", () => {
 describe("projectScheduleEvent", () => {
   test("a valid schedule.created creates one row from the session pin", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
+    projectScheduleEvent(db, created, "runner-a");
 
     expect(rows(db)).toHaveLength(1);
     expect(rows(db)[0]).toMatchObject({
@@ -99,30 +99,50 @@ describe("projectScheduleEvent", () => {
 
   test("projecting the same event twice creates one row", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
-    projectScheduleEvent(db, created);
+    projectScheduleEvent(db, created, "runner-a");
+    projectScheduleEvent(db, created, "runner-a");
     expect(rows(db)).toHaveLength(1);
   });
 
   test("a session with no pin creates no row", () => {
     const db = setup();
-    projectScheduleEvent(db, { ...created, sessionId: "session-unknown" });
+    projectScheduleEvent(db, { ...created, sessionId: "session-unknown" }, "runner-a");
     expect(rows(db)).toHaveLength(0);
+  });
+
+  test("an event from a runner that does not own the session pin creates no row", () => {
+    // The journal accepts events from any authenticated runner, but a schedule
+    // row turns into work on the pin's runner. A runner token for one tenant
+    // must not be able to schedule prompts into another tenant's session.
+    const db = setup();
+    projectScheduleEvent(db, created, "runner-b");
+    expect(rows(db)).toHaveLength(0);
+
+    projectScheduleEvent(db, created, "runner-a");
+    expect(rows(db)).toHaveLength(1);
   });
 
   test("an invalid payload creates no row and does not throw", () => {
     const db = setup();
-    projectScheduleEvent(db, {
-      ...created,
-      payload: { cron: "x".repeat(201) },
-    });
+    projectScheduleEvent(
+      db,
+      {
+        ...created,
+        payload: { cron: "x".repeat(201) },
+      },
+      "runner-a",
+    );
     expect(rows(db)).toHaveLength(0);
   });
 
   test("a missing nextFireAt is computed from the cron", () => {
     const db = setup();
     const { nextFireAt, ...payload } = created.payload;
-    projectScheduleEvent(db, { ...created, payload: { ...payload, cron: "*/5 * * * *" } });
+    projectScheduleEvent(
+      db,
+      { ...created, payload: { ...payload, cron: "*/5 * * * *" } },
+      "runner-a",
+    );
     const row = rows(db)[0]!;
     expect(Number(row["next_fire_at"])).toBeGreaterThan(Date.now());
   });
@@ -130,37 +150,49 @@ describe("projectScheduleEvent", () => {
   test("an unparseable cron with no nextFireAt creates no row", () => {
     const db = setup();
     const { nextFireAt, ...payload } = created.payload;
-    projectScheduleEvent(db, { ...created, payload: { ...payload, cron: "99 99 99 99 *" } });
+    projectScheduleEvent(
+      db,
+      { ...created, payload: { ...payload, cron: "99 99 99 99 *" } },
+      "runner-a",
+    );
     expect(rows(db)).toHaveLength(0);
   });
 
   test("schedule.cancelled closes the row created by the same attempt", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
-    projectScheduleEvent(db, {
-      type: "schedule.cancelled",
-      sessionId: "session-1",
-      attemptId: "attempt-1",
-      payload: { toolCallId: "toolu_2", cliTaskId: "af5c4b05" },
-    });
+    projectScheduleEvent(db, created, "runner-a");
+    projectScheduleEvent(
+      db,
+      {
+        type: "schedule.cancelled",
+        sessionId: "session-1",
+        attemptId: "attempt-1",
+        payload: { toolCallId: "toolu_2", cliTaskId: "af5c4b05" },
+      },
+      "runner-a",
+    );
     expect(rows(db)[0]!["state"]).toBe("cancelled");
   });
 
   test("a cancellation for an unknown cli task is a no-op", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
-    projectScheduleEvent(db, {
-      type: "schedule.cancelled",
-      sessionId: "session-1",
-      attemptId: "attempt-1",
-      payload: { toolCallId: "toolu_2", cliTaskId: "never-seen" },
-    });
+    projectScheduleEvent(db, created, "runner-a");
+    projectScheduleEvent(
+      db,
+      {
+        type: "schedule.cancelled",
+        sessionId: "session-1",
+        attemptId: "attempt-1",
+        payload: { toolCallId: "toolu_2", cliTaskId: "never-seen" },
+      },
+      "runner-a",
+    );
     expect(rows(db)[0]!["state"]).toBe("active");
   });
 
   test("other event types are ignored", () => {
     const db = setup();
-    projectScheduleEvent(db, { ...created, type: "run.started" });
+    projectScheduleEvent(db, { ...created, type: "run.started" }, "runner-a");
     expect(rows(db)).toHaveLength(0);
   });
 });
@@ -168,12 +200,16 @@ describe("projectScheduleEvent", () => {
 describe("schedule queries", () => {
   test("dueSchedules returns active rows at or before the given time, oldest first", () => {
     const db = setup();
-    projectScheduleEvent(db, created); // next_fire_at 1793444280000
-    projectScheduleEvent(db, {
-      ...created,
-      attemptId: "attempt-2",
-      payload: { ...created.payload, toolCallId: "toolu_2", nextFireAt: 1793444000000 },
-    });
+    projectScheduleEvent(db, created, "runner-a"); // next_fire_at 1793444280000
+    projectScheduleEvent(
+      db,
+      {
+        ...created,
+        attemptId: "attempt-2",
+        payload: { ...created.payload, toolCallId: "toolu_2", nextFireAt: 1793444000000 },
+      },
+      "runner-a",
+    );
     expect(dueSchedules(db, 1793444279999).map((row) => row.scheduleId)).toEqual([
       "sched_attempt-2_toolu_2",
     ]);
@@ -185,7 +221,7 @@ describe("schedule queries", () => {
 
   test("advanceSchedule sets state, next fire and last fired", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
+    projectScheduleEvent(db, created, "runner-a");
     advanceSchedule(db, "sched_attempt-1_toolu_1", {
       state: "active",
       nextFireAt: 1793444340000,
@@ -202,7 +238,7 @@ describe("schedule queries", () => {
 
   test("cancelScheduleForOwner is owner-scoped and only cancels active rows", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
+    projectScheduleEvent(db, created, "runner-a");
     expect(cancelScheduleForOwner(db, "sched_attempt-1_toolu_1", "someone-else")).toBe(false);
     expect(cancelScheduleForOwner(db, "sched_attempt-1_toolu_1", "user-1")).toBe(true);
     expect(rows(db)[0]!["state"]).toBe("cancelled");
@@ -211,19 +247,23 @@ describe("schedule queries", () => {
 
   test("listActiveSchedules answers camelCase tasks for one session only", () => {
     const db = setup();
-    projectScheduleEvent(db, created);
+    projectScheduleEvent(db, created, "runner-a");
     ensureSessionPin(db, {
       sessionId: "session-2",
       ownerId: "user-1",
       workspaceId: "workspace-1",
       runnerId: "runner-a",
     });
-    projectScheduleEvent(db, {
-      ...created,
-      sessionId: "session-2",
-      attemptId: "attempt-9",
-      payload: { ...created.payload, toolCallId: "toolu_9" },
-    });
+    projectScheduleEvent(
+      db,
+      {
+        ...created,
+        sessionId: "session-2",
+        attemptId: "attempt-9",
+        payload: { ...created.payload, toolCallId: "toolu_9" },
+      },
+      "runner-a",
+    );
     cancelScheduleForOwner(db, "sched_attempt-9_toolu_9", "user-1");
 
     expect(listActiveSchedules(db, "session-1")).toEqual([

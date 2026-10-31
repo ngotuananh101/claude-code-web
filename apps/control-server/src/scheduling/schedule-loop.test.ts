@@ -47,21 +47,25 @@ type ProjectOverrides = {
 };
 
 function project(db: Database, overrides: ProjectOverrides = {}): void {
-  projectScheduleEvent(db, {
-    type: "schedule.created",
-    sessionId: "session-1",
-    attemptId: overrides.attemptId ?? "attempt-1",
-    payload: {
-      toolCallId: overrides.toolCallId ?? "toolu_1",
-      cliTaskId: "af5c4b05",
-      cron: "58 17 31 10 *",
-      recurring: false,
-      prompt: "Kiểm tra dung lượng ổ đĩa",
-      nextFireAt: NEXT_FIRE,
-      timezone: "Asia/Ho_Chi_Minh",
-      ...overrides.payload,
+  projectScheduleEvent(
+    db,
+    {
+      type: "schedule.created",
+      sessionId: "session-1",
+      attemptId: overrides.attemptId ?? "attempt-1",
+      payload: {
+        toolCallId: overrides.toolCallId ?? "toolu_1",
+        cliTaskId: "af5c4b05",
+        cron: "58 17 31 10 *",
+        recurring: false,
+        prompt: "Kiểm tra dung lượng ổ đĩa",
+        nextFireAt: NEXT_FIRE,
+        timezone: "Asia/Ho_Chi_Minh",
+        ...overrides.payload,
+      },
     },
-  });
+    "runner-a",
+  );
 }
 
 function commands(db: Database) {

@@ -72,11 +72,33 @@ export function computeNextFire(
   }
 }
 
-export function projectScheduleEvent(db: Database, event: ScheduleEventInput): void {
+/**
+ * Project a `schedule.*` event sent by `runnerId` — the id the gateway
+ * authenticated, never the one the event claims.
+ *
+ * The journal accepts events from any authenticated runner (§12.3), but a
+ * schedule row is different from a journal entry: it materialises *work on the
+ * pin's runner*, in the pin's workspace, with the owner's credentials. So only
+ * the runner that owns the session pin may create or close a schedule for that
+ * session — without this check, a valid runner token for one tenant could
+ * schedule prompts into another tenant's workspace.
+ */
+export function projectScheduleEvent(
+  db: Database,
+  event: ScheduleEventInput,
+  runnerId: string,
+): void {
   // The journal redelivers events, and projection runs inside the ingest
   // path: a throw here would drop the rest of the frame. Bad data becomes a
   // warning and a skipped row, never a wedged server.
   try {
+    const pin = sessionPin(db, event.sessionId);
+    if (pin !== undefined && pin.runnerId !== runnerId) {
+      console.warn(
+        `scheduled-tasks: runner ${runnerId} does not own session ${event.sessionId}; dropping ${event.type}`,
+      );
+      return;
+    }
     if (event.type === "schedule.created") {
       projectCreated(db, event);
     } else if (event.type === "schedule.cancelled") {

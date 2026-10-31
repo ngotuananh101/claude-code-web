@@ -66,20 +66,24 @@ type SeedOverrides = {
 function seedSchedule(db: Database, overrides: SeedOverrides = {}): string {
   const attemptId = overrides.attemptId ?? "attempt-1";
   const toolCallId = overrides.toolCallId ?? "toolu_1";
-  projectScheduleEvent(db, {
-    type: "schedule.created",
-    sessionId: overrides.sessionId ?? "session-1",
-    attemptId,
-    payload: {
-      toolCallId,
-      cliTaskId: "af5c4b05",
-      cron: "58 17 31 10 *",
-      recurring: false,
-      prompt: "Kiểm tra dung lượng ổ đĩa",
-      nextFireAt: 1793444280000,
-      timezone: "Asia/Ho_Chi_Minh",
+  projectScheduleEvent(
+    db,
+    {
+      type: "schedule.created",
+      sessionId: overrides.sessionId ?? "session-1",
+      attemptId,
+      payload: {
+        toolCallId,
+        cliTaskId: "af5c4b05",
+        cron: "58 17 31 10 *",
+        recurring: false,
+        prompt: "Kiểm tra dung lượng ổ đĩa",
+        nextFireAt: 1793444280000,
+        timezone: "Asia/Ho_Chi_Minh",
+      },
     },
-  });
+    "runner-a",
+  );
   return `sched_${attemptId}_${toolCallId}`;
 }
 

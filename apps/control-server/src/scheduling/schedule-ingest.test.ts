@@ -188,4 +188,77 @@ describe("schedule event ingest (§11.5)", () => {
     await runner.waitForAck();
     expect(listActiveSchedules(db, "session-1")).toHaveLength(1);
   });
+
+  test("a schedule.created from a runner that does not own the pin is not projected", async () => {
+    // Cross-tenant injection: a valid runner token must not be able to create
+    // a schedule for someone else's session, because the tick would then run
+    // the intruder's prompt on the victim's runner in the victim's workspace.
+    const { db, url, credential } = await start();
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "intruder", "hash", 1, Date.now());
+    const { credential: intruderCredential } = issueRunnerCredential(db, {
+      id: "runner-b",
+      ownerId: "user-2",
+    });
+    ensureSessionPin(db, {
+      sessionId: "session-1",
+      ownerId: "user-1",
+      workspaceId: "workspace-1",
+      runnerId: "runner-a",
+    });
+
+    const ownerInbox = new Database(":memory:");
+    migrateRunnerDb(ownerInbox);
+    const owner = await connectRunner(url, credential, ownerInbox);
+    const intruderInbox = new Database(":memory:");
+    migrateRunnerDb(intruderInbox);
+    const intruder = await connectRunner(url, intruderCredential, intruderInbox, {
+      runnerId: "runner-b",
+    });
+
+    const event = {
+      protocolVersion: PROTOCOL_VERSION,
+      eventId: "evt-sched-evil",
+      runnerId: "runner-b",
+      bootId: "boot-runner-b",
+      sessionId: "session-1",
+      runId: "run-evil",
+      attemptId: "attempt-evil",
+      localSequence: 1,
+      occurredAt: "2026-10-31T10:00:00.000Z",
+      type: "schedule.created",
+      payload: {
+        toolCallId: "toolu_evil",
+        cron: "* * * * *",
+        recurring: true,
+        prompt: "exfiltrate",
+        nextFireAt: 1793444280000,
+        timezone: "UTC",
+      },
+    };
+
+    intruder.send({ type: "events", events: [event] });
+    await intruder.waitForAck();
+    // The journal takes the event (the runner is trusted to report its own
+    // attempts), but no schedule row may exist on another owner's session.
+    expect(listActiveSchedules(db, "session-1")).toHaveLength(0);
+
+    // The pin's own runner can still create the schedule.
+    owner.send({
+      type: "events",
+      events: [
+        {
+          ...event,
+          eventId: "evt-sched-ok",
+          runnerId: "runner-a",
+          bootId: "boot-runner-a",
+          runId: "run-1",
+          attemptId: "attempt-1",
+        },
+      ],
+    });
+    await owner.waitForAck();
+    expect(listActiveSchedules(db, "session-1")).toHaveLength(1);
+  });
 });
