@@ -628,6 +628,34 @@ Vì vậy không share writable checkout giữa Runner, không automatic takeove
 
 External editor/CLI ngoài hệ thống không chịu locks. Luôn cần hash checks và conflict handling.
 
+### 11.5. Scheduled tasks (server-owned)
+
+`CronCreate` chỉ đăng ký một timer in-memory trong tiến trình Claude Code CLI. cc-web chạy turn-based: khi lượt cuối trả `result`, runner kết thúc attempt và tiến trình CLI thoát — timer chết theo, nên lịch đặt qua web không bao giờ chạy. Giữ process sống chờ cron cũng không ổn: Runner `maxConcurrentRuns = 1` sẽ bị chiếm slot (và workspace lock §11.4) suốt thời gian chờ.
+
+Vì vậy lịch thuộc Control Server — nơi đã sở hữu scheduling (§11.3) và có DB bền vững:
+
+- **Nguồn sự thật:** bảng `scheduled_tasks` (SQLite): `schedule_id`, session/owner/workspace/runner, `origin_attempt_id`, `cli_task_id`, `cron`, `timezone`, `recurring`, `prompt`, `next_fire_at`, `state` (`active` / `done` / `cancelled` / `orphaned`), `created_at`, `last_fired_at`.
+- **Mirror event:** Runner đọc structured result của tool rồi gửi `schedule.created` / `schedule.cancelled`; server project vào bảng với `INSERT OR IGNORE` trên `sched_<attemptId>_<toolCallId>`, nên replay hay frame trùng là idempotent. Lịch chỉ được tạo trong hội thoại; web không có UI tạo.
+- **Tick:** `setInterval` 15 giây trong server (khoảng tick injectable cho test); một vòng chạy tuần tự và không chồng lấn. Mỗi row `active` có `next_fire_at <= now` được dispatch như một run bình thường qua `Scheduler.dispatch` — cùng capacity 1/Runner, cùng pin và workspace của session gốc.
+- **Fire:** `runId` cố định theo slot (`run_sched_<schedule_id>_<fire_at>`); `run.started` mang `scheduleId` + `scheduleCron` để web render lượt đó là tác vụ theo lịch. `advance` luôn chạy **sau** `dispatch`: one-shot → `done`; recurring → `next_fire_at` là slot kế tiếp sau slot vừa fire (không catch-up slot lỡ).
+
+**Chính sách lỗi:**
+
+| Tình huống | Hành vi |
+|---|---|
+| Runner offline/not-ready, session bận, hoặc hết capacity | Row giữ nguyên due, tick sau thử lại; one-shot chạy muộn thay vì mất |
+| Pin mất (session bị xoá) | `state = 'orphaned'` — tombstone, không retry vô hạn |
+| Cron không parse được (dữ liệu cũ/hỏng) | `state = 'cancelled'` + log |
+| Server crash giữa dispatch và advance | `runKnown(runId)` soi `active_runs`, `command_outbox`, `run_events`: slot đã có run thì chỉ advance, không fire lại |
+| Origin attempt còn active tại giờ hẹn | Nhường timer in-process của chính nó; guard duy nhất là `activeRunFor(session).attemptId === origin_attempt_id` |
+
+**Giới hạn đã biết:**
+
+- `CronList`/`CronDelete` trong process mới không thấy lịch server-side: lịch sống ở server, không ở session CLI. MVP bù bằng tab "Lịch" trong InspectPanel (list + huỷ, owner-scoped); hướng sau là inject danh sách lịch vào ngữ cảnh run hoặc thay tool.
+- `durable: false` của CLI vẫn đúng với process: tính bền vững là của cc-web, không phải của CLI.
+- `schedule.*` là event type mới; server từ chối cả frame khi gặp type lạ, nên **server và runner phải nâng cấp cùng nhau**.
+- `cron-parser` (5 trường + preset `@daily`, timezone IANA) là dependency mới của `packages/control-db`.
+
 ## 12. Event journal, streaming và replay
 
 ### 12.1. Runner event
@@ -1318,6 +1346,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | ADR-013 | One Runner owner/workspace | Tránh shared-filesystem split-brain |
 | ADR-014 | Host-native Runner ưu tiên | Tái sử dụng user config và toolchain ít sai khác |
 | ADR-015 | Runner là connector với token mint từ web (2026-10-24); phần owner auth (better-auth) đã đảo ngược 2026-10-25 — quay lại ADR-0001 | Token hiển thị một lần, DB chỉ giữ hash; systemd unit không chứa secret |
+| ADR-016 | Scheduled tasks thuộc Control Server (2026-10-31) | Lịch sống qua restart, chạy đúng giờ mà không giữ process; CronList/CronDelete của CLI chỉ thấy trong process tạo lịch |
 
 ### 24.2. Cần chốt khi bắt đầu implementation
 
