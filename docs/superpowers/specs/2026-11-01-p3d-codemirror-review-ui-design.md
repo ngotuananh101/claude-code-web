@@ -90,10 +90,11 @@ when a language arrives.
 
 ### 5.2 Diff → documents
 
-`parseUnifiedDiff(text)` (pure) reconstructs both full documents from a
-single-file unified diff: lines outside hunks belong to both sides, `-` lines
-to the original only, `+` lines to the modified only, `\ No newline at end of
-file` adjusts the preceding side's final newline. It returns `null` for:
+`parseUnifiedDiff(text)` (pure) turns a single-file unified diff into its
+hunks: `-` lines belong to the original only, `+` lines to the modified only,
+context lines to both, `\ No newline at end of file` adjusts the preceding
+side's final newline, and each hunk keeps its old/new start and counts. It
+returns `null` for:
 empty text, binary notices, more than one `diff --git` header, hunk headers
 that do not parse, or hunk counts that disagree with the body. A `null` parse
 or `diff.truncated === true` falls back to today's tinted `<pre>`
@@ -101,11 +102,17 @@ or `diff.truncated === true` falls back to today's tinted `<pre>`
 a partial document.
 
 The working side of the merge view is **`readFile`'s content**, not the
-reconstructed `modified` text: `readFile` is authoritative and carries the
-hash a save must present. The reconstructed `original` is the HEAD side.
-When `readFile` fails (deleted file) the view renders read-only from the
-reconstructed pair (original vs empty), with Save disabled and Revert
-available only when the snapshot says the file is revertable.
+diff's `modified` text: `readFile` is authoritative and carries the hash a
+save must present. A default-context `git diff` carries only its hunks, so the
+parser's own `original` is a fragment; `spliceOriginal(parsed, modified)`
+(pure) rebuilds the full HEAD side by checking each hunk's new-side range
+against the read document and swapping it for the hunk's old-side lines. If
+that check fails (the diff and the read no longer agree, e.g. a race between
+the two RPCs) the view falls back to the plain-text diff. When `readFile`
+fails (deleted file) the view renders read-only from the reconstructed pair
+(original vs empty), with Save disabled and Revert available only when the
+snapshot says the file is revertable. A binary or truncated read never offers
+a merge view.
 
 ### 5.3 Review semantics (§16.4 mapping)
 
@@ -126,10 +133,11 @@ through the Runner's own baseline/conflict check.
 `file.read` means for an open editor:
 
 - no draft → adopt;
-- draft not dirty against the current viewer → adopt (viewer fields refresh,
-  draft stays equal to the new content);
-- dirty and `incoming.hash === current.hash` → adopt the viewer fields, keep
-  the draft (still dirty, no conflict);
+- draft not dirty against the current viewer → **adopt**: viewer fields
+  refresh and the draft becomes the new content;
+- dirty and `incoming.hash === current.hash` → **adopt, keep draft**: the
+  viewer fields (hash, size) refresh, the unsaved draft stays (still dirty,
+  no conflict);
 - dirty and a different hash → **conflict**: keep viewer + draft, remember the
   incoming read.
 
@@ -160,10 +168,15 @@ New directory `apps/web/src/components/review/`:
   built-in accept/reject controls.
 - **`SplitDiff.vue`** — same props/emits, uses `MergeView` with `a = original`
   (read-only) and `b = modified` (editable per `editable`),
-  `revertControls: "b-to-a"`, `gutter: true`, `collapseUnchanged`. Both diff
+  `revertControls: "a-to-b"`, `gutter: true`, `collapseUnchanged`. The control
+  copies the original chunk into the editable document — the one Save writes;
+  `"b-to-a"` would only edit the read-only original and leave the saved
+  document untouched. Both diff
   components highlight the modified side's language through the same cached
   dynamic import and `Compartment` pattern as `CodeEditor.vue`, driven by the
-  `path` prop.
+  `path` prop. All three editor components set `EditorState.lineSeparator`
+  from the incoming text (`lineSeparatorFor`), so a CRLF document round-trips
+  through editing and Save byte for byte.
 - **`ReviewToolbar.vue`** — props `{ reviewed, canSave, canRevert, saving,
   dirty, revertHint?: string }`, emits `toggle-reviewed`, `save`, `revert`.
   shadcn-vue `Button`s with lucide icons; disabled reasons live in `title`
@@ -214,7 +227,13 @@ Pure modules are unit-tested with `bun test`:
 - `parseUnifiedDiff`: single hunk, multiple hunks, new file (empty original),
   deleted file (empty modified), no-newline marker on either side, context
   between hunks, empty/binary/multi-file/malformed → `null`.
-- `resolveIncoming`: the four cases of §5.4.
+- `spliceOriginal`: a partial-context diff spliced into the read document,
+  hunks separated by unchanged lines, a hunk with no added lines, CRLF
+  content, a missing trailing newline on the original side, a read document
+  that no longer matches → `null`.
+- `resolveIncoming`: the four cases of §5.4 (adopt / adopt-keep-draft /
+  conflict).
+- `lineSeparatorFor`: LF → `null`, CRLF and mixed text → `"\r\n"`.
 - `defaultDiffMode`: 420 → unified, 720 → split, 1024 → split.
 - `languages.ts`: extension mapping (case-insensitive, `.d.ts`, unknown →
   plain), one loader per id.
