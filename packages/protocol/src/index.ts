@@ -346,6 +346,7 @@ export {
 export {
   parseScheduleCancelledPayload,
   parseScheduleCreatedPayload,
+  SCHEDULE_PROMPT_MAX,
   type ScheduleCancelledPayload,
   type ScheduleCreatedPayload,
   type ScheduledTask,

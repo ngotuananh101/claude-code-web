@@ -15,7 +15,11 @@
  * input, which is also what a CLI that answered in plain text leaves us.
  */
 
-import type { ScheduleCancelledPayload, ScheduleCreatedPayload } from "@cc-web/protocol";
+import {
+  SCHEDULE_PROMPT_MAX,
+  type ScheduleCancelledPayload,
+  type ScheduleCreatedPayload,
+} from "@cc-web/protocol";
 
 export type ScheduleEvent =
   | { type: "schedule.created"; payload: ScheduleCreatedPayload }
@@ -33,6 +37,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+const TRUNCATION_MARKER = "…[truncated by cc-web]";
+
+/**
+ * Fit a prompt into the wire contract's cap. The server drops an over-limit
+ * payload, which would lose the schedule silently after the CLI already
+ * answered "Scheduled"; keeping the head of the prompt with a visible marker
+ * preserves both the schedule and the user's ability to see what changed.
+ */
+function clampPrompt(prompt: string): string {
+  if (prompt.length <= SCHEDULE_PROMPT_MAX) return prompt;
+  return `${prompt.slice(0, SCHEDULE_PROMPT_MAX - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
 }
 
 function contentOf(message: Record<string, unknown>): unknown[] | undefined {
@@ -72,7 +89,7 @@ function cronCreated(
       ...(cliTaskId === undefined ? {} : { cliTaskId }),
       cron,
       recurring,
-      prompt,
+      prompt: clampPrompt(prompt),
       ...(nextFireAt === undefined ? {} : { nextFireAt }),
       timezone,
     },

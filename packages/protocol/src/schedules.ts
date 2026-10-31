@@ -13,6 +13,13 @@
 export type ScheduleState = "active" | "done" | "cancelled" | "orphaned";
 
 /**
+ * The wire cap for a schedule's prompt. A producer must clamp to this: the
+ * parser refuses an over-limit payload, and the projection then drops the
+ * whole schedule without telling anyone.
+ */
+export const SCHEDULE_PROMPT_MAX = 4000;
+
+/**
  * `schedule.created`: a schedule the agent asked the CLI to create.
  *
  * `cron` prefers the CLI's structured `humanSchedule` over the tool input;
@@ -68,7 +75,7 @@ export function parseScheduleCreatedPayload(value: unknown): ScheduleCreatedPayl
 
   const toolCallId = boundedString(record["toolCallId"], 200);
   const cron = boundedString(record["cron"], 200);
-  const prompt = boundedString(record["prompt"], 4000);
+  const prompt = boundedString(record["prompt"], SCHEDULE_PROMPT_MAX);
   const timezone = boundedString(record["timezone"], 100);
   const recurring = record["recurring"];
   if (

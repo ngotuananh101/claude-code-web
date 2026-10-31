@@ -113,6 +113,29 @@ describe("createScheduleObserver", () => {
     expect(events[0]?.payload).toMatchObject({ cron: "* * * * *", recurring: true });
   });
 
+  test("an over-limit prompt is truncated with a marker instead of losing the schedule", () => {
+    // The wire contract caps `prompt` at 4000 characters, and the server drops
+    // a payload that violates it. Without clamping here a long prompt costs
+    // the whole schedule, silently — the CLI already told the user "Scheduled".
+    const observe = createScheduleObserver({ timezone: "UTC" });
+    const prompt = `START ${"x".repeat(4200)} END`;
+    observe(
+      assistant({
+        type: "tool_use",
+        id: "toolu_5",
+        name: "CronCreate",
+        input: { cron: "58 17 31 10 *", recurring: false, prompt },
+      }),
+    );
+    const events = observe(
+      result(undefined, { type: "tool_result", tool_use_id: "toolu_5", content: "ok" }),
+    );
+    const payload = events[0]?.payload as { prompt?: string };
+    expect(payload.prompt?.length).toBeLessThanOrEqual(4000);
+    expect(payload.prompt?.startsWith("START xxx")).toBe(true);
+    expect(payload.prompt?.endsWith("…[truncated by cc-web]")).toBe(true);
+  });
+
   test("an error result mirrors nothing", () => {
     const observe = createScheduleObserver({ timezone: "UTC" });
     observe(assistant(cronCreateUse));
