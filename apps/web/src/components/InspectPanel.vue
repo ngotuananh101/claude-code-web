@@ -15,9 +15,14 @@ import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
-import { defaultDiffMode, isReviewed, reviewKey } from "../features/review/review-state";
+import {
+  defaultDiffMode,
+  isReviewed,
+  resolveIncoming,
+  reviewKey,
+} from "../features/review/review-state";
 import type { ParsedUnifiedDiff } from "../features/review/unified-diff";
-import { parseUnifiedDiff } from "../features/review/unified-diff";
+import { parseUnifiedDiff, spliceOriginal } from "../features/review/unified-diff";
 import { toScheduleRow } from "../features/schedules/schedule-rows";
 import {
   compositeId,
@@ -112,6 +117,7 @@ const diffLoading = ref(false);
 
 // Changes — review merge-view state (P3-D)
 const diffParsed = ref<ParsedUnifiedDiff | null>(null);
+const diffOriginal = ref<string>(""); // HEAD side: read document with hunks spliced
 const diffRead = ref<FileReadResult | null>(null); // authoritative working side
 const diffModified = ref<string>(""); // merged document the reviewer settles on
 const diffModeOverride = ref<"unified" | "split" | null>(null);
@@ -143,7 +149,10 @@ onMounted(() => {
 });
 
 // Attach/detach the ResizeObserver on the diff container only when the
-// merge-view branch renders (diffParsed !== null). Guard null refs.
+// merge-view branch renders (diffParsed !== null). Guard null refs. The
+// watcher must run after the DOM patch ("post"): at "pre" time the container
+// for a freshly opened diff has not been mounted yet, so the observer would
+// never attach and the width-derived split default would never apply.
 watch(
   () => diffParsed.value,
   (parsed) => {
@@ -154,7 +163,7 @@ watch(
       diffResizeObserver.disconnect();
     }
   },
-  { immediate: true },
+  { immediate: true, flush: "post" },
 );
 
 onBeforeUnmount(() => {
@@ -286,13 +295,15 @@ const STATUS_LABELS: Record<string, string> = {
   typechange: "đổi loại",
 };
 
-async function loadFiles(dir: string): Promise<void> {
+async function loadFiles(dir: string, options: { keepViewer?: boolean } = {}): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
   const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
-  viewer.value = null;
+  // Navigating to a directory closes the open file; a listing refresh behind
+  // an open file keeps it (and its draft) in place.
+  if (options.keepViewer !== true) viewer.value = null;
   const outcome = await listFiles(id, dir);
   if (current !== epoch) return;
   filesLoading.value = false;
@@ -413,11 +424,19 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
     const resolution = resolveIncoming({
       currentHash: viewer.value.hash,
       incomingHash: outcome.value.hash,
-      draftDirty: isDirty(viewer.value.content ?? "", draft.value),
+      draftDirty: isDraftDirty(),
     });
     if (resolution === "conflict") {
       // Keep viewer + draft, keep the operator's work; surface the new bytes.
       conflictIncoming.value = outcome.value;
+      conflictNote.value = null;
+      return;
+    }
+    if (resolution === "adopt-keep-draft") {
+      // Same bytes the draft was based on: refresh the viewer fields (hash,
+      // size) but keep the unsaved draft.
+      viewer.value = outcome.value;
+      conflictIncoming.value = null;
       conflictNote.value = null;
       return;
     }
@@ -458,32 +477,49 @@ async function openDiff(path: string): Promise<void> {
   diff.value = diffOutcome.value;
   diffPath.value = path;
 
-  // Parse the unified diff into full documents. A null result means the diff
-  // is truncated, binary, multi-file, or malformed — fall back to classifyDiffLines.
-  diffParsed.value = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
+  // A truncated diff never becomes a merge view.
+  let parsed = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
 
   // Authoritative working side: the file read as it stands on the runner.
-  diffRead.value = readOutcome.ok ? readOutcome.value : null;
+  const read = readOutcome.ok ? readOutcome.value : null;
+  diffRead.value = read;
 
-  // The merge document starts from the read content when it is text and
-  // untruncated; otherwise the parsed modified side (read-only).
-  if (
-    diffRead.value !== null &&
-    !diffRead.value.binary &&
-    !diffRead.value.truncated &&
-    diffRead.value.content !== null
-  ) {
-    diffModified.value = diffRead.value.content;
-  } else if (diffParsed.value !== null) {
-    diffModified.value = diffParsed.value.modified;
-  } else {
-    diffModified.value = "";
+  let original = "";
+  let modified = "";
+  if (parsed !== null) {
+    if (read !== null && !read.binary && !read.truncated && read.content !== null) {
+      // A default-context `git diff` carries only its hunks, so the parser's
+      // own original is a fragment. Splice the hunks into the full read of the
+      // file to rebuild the HEAD side; if they no longer match (the file
+      // changed between the two RPCs) fall back to the plain-text diff rather
+      // than show a merge view over mismatched documents.
+      const spliced = spliceOriginal(parsed, read.content);
+      if (spliced === null) {
+        parsed = null;
+      } else {
+        original = spliced;
+        modified = read.content;
+      }
+    } else if (read === null) {
+      // Deleted file (or a failed read): the diff carries the whole old
+      // document, the working side is empty, and the view is read-only.
+      original = parsed.original;
+      modified = parsed.modified;
+    } else {
+      // Binary or truncated read: there is no authoritative full document to
+      // edit or diff against.
+      parsed = null;
+    }
   }
 
-  // Review state resets for the newly opened diff.
+  diffParsed.value = parsed;
+  diffOriginal.value = original;
+  diffModified.value = parsed === null ? "" : modified;
+
+  // Review state resets for the newly opened diff. Reviewed keys stay: the set
+  // is session-scoped (path + hash), not diff-open-scoped.
   reviewConfirmRevert.value = false;
   diffSaveError.value = null;
-  reviewed.value = new Set();
 
   // Lazily fetch snapshot status so we can know the revertable entry for this
   // path. Failure leaves reviewSnapshotEntry null and Revert disabled.
@@ -561,14 +597,16 @@ async function saveDiff(): Promise<void> {
 async function revertDiff(): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
-  if (diffPath.value === null) return;
+  // Capture the path before the refreshes below clear it.
+  const path = diffPath.value;
+  if (path === null) return;
   const entry = reviewSnapshotEntry.value;
   if (entry === null) return;
 
   const current = ++epoch;
   reviewConfirmRevert.value = false;
 
-  const outcome = await revertFile(id, diffPath.value, entry.currentHash);
+  const outcome = await revertFile(id, path, entry.currentHash);
   if (current !== epoch) return;
 
   if (!outcome.ok) {
@@ -576,11 +614,13 @@ async function revertDiff(): Promise<void> {
     return;
   }
 
-  // Refresh the snapshot status and the git changes, then re-open the diff
-  // against the post-revert baseline.
-  void loadSnapshot();
-  if (source.value === "git") void loadChanges();
-  void openDiff(diffPath.value);
+  // Refresh the snapshot status and the git changes sequentially (each bumps
+  // the epoch; firing them concurrently would make one loader drop its own
+  // response and leave its spinner stuck), then re-open the diff against the
+  // post-revert baseline.
+  await loadSnapshot();
+  if (source.value === "git") await loadChanges();
+  await openDiff(path);
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -619,6 +659,9 @@ async function saveFile(): Promise<void> {
     // overwrite their draft instead of losing it to a silent overwrite.
     if (outcome.code === "FILE_CONFLICT") {
       const fresh = await readFile(id, viewer.value.path);
+      // A session/workspace change while the fresh bytes were in flight means
+      // they belong to the previous panel: drop them.
+      if (current !== epoch) return;
       if (fresh.ok) {
         conflictIncoming.value = fresh.value;
         conflictNote.value = outcome.message;
@@ -670,18 +713,24 @@ async function overwriteConflict(): Promise<void> {
   if (id === null) return;
   if (viewer.value === null || draft.value === null) return;
   const path = viewer.value.path;
+  // Capture the epoch without bumping it: every continuation below belongs to
+  // the panel state this call started from.
+  const current = epoch;
 
   const latest = await readFile(id, path);
+  if (current !== epoch) return;
   if (!latest.ok) {
     saveError.value = latest.message;
     return;
   }
   const outcome = await writeFile(id, path, draft.value, latest.value.hash);
+  if (current !== epoch) return;
   if (!outcome.ok) {
     // A second hash mismatch keeps the banner: refetch the latest bytes again
     // so the adopt/overwrite buttons work against fresh state.
     if (outcome.code === "FILE_CONFLICT") {
       const fresh = await readFile(id, path);
+      if (current !== epoch) return;
       if (fresh.ok) conflictIncoming.value = fresh.value;
       conflictNote.value = outcome.message;
     } else {
@@ -709,8 +758,10 @@ async function revertOneFile(entry: { path: string; currentHash: string | null }
     snapshotError.value = outcome.message;
     return;
   }
-  void loadSnapshot();
-  if (source.value === "git") void loadChanges();
+  // Sequential reloads: each bumps the epoch, so firing both at once leaves
+  // one loader's spinner stuck on a dropped response.
+  await loadSnapshot();
+  if (source.value === "git") await loadChanges();
 }
 
 async function doRevertWorkspace(): Promise<void> {
@@ -730,13 +781,16 @@ async function doRevertWorkspace(): Promise<void> {
     snapshotError.value = outcome.message;
     return;
   }
-  void loadSnapshot();
-  if (source.value === "git") void loadChanges();
+  await loadSnapshot();
+  if (source.value === "git") await loadChanges();
 }
 
-function reloadFile(name: string): void {
-  void loadFiles(directory.value);
-  void openEntry(name, "file");
+async function reloadFile(name: string): Promise<void> {
+  // Re-read first, with the open viewer still in place: a dirty draft must be
+  // resolved against the fresh read (adopt / keep draft / conflict) instead of
+  // being silently replaced. Only then refresh the listing behind it.
+  await openEntry(name, "file");
+  await loadFiles(directory.value, { keepViewer: true });
 }
 
 function goUp(): void {
@@ -772,6 +826,7 @@ watch(
     diffError.value = null;
     diffLoading.value = false;
     diffParsed.value = null;
+    diffOriginal.value = "";
     diffRead.value = null;
     diffModified.value = "";
     diffModeOverride.value = null;
@@ -1071,7 +1126,7 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
-                  @click="diffModeOverride.value = 'unified'"
+                  @click="diffModeOverride = 'unified'"
                 >
                   Một cột
                 </button>
@@ -1083,7 +1138,7 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
-                  @click="diffModeOverride.value = 'split'"
+                  @click="diffModeOverride = 'split'"
                 >
                   Hai cột
                 </button>
@@ -1119,7 +1174,7 @@ watch(tab, (next) => {
             >
               <component
                 :is="diffMode === 'split' ? SplitDiff : UnifiedDiff"
-                :original="diffParsed.original"
+                :original="diffOriginal"
                 :modified="diffModified"
                 :editable="diffEditable"
                 :path="diffPath ?? undefined"

@@ -4,6 +4,7 @@ import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { languageForPath, loadLanguage } from "@/features/review/languages.ts";
+import { lineSeparatorFor } from "@/features/review/review-state.ts";
 import { reviewBaseExtensions } from "@/features/review/theme.ts";
 
 const props = defineProps<{
@@ -20,9 +21,15 @@ const host = ref<HTMLElement | null>(null);
 const view = shallowRef<EditorView | null>(null);
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
+const lineSeparatorCompartment = new Compartment();
+let activeLineSeparator = lineSeparatorFor(props.modelValue);
 
 function readOnlyExtensions(readOnly: boolean): Extension[] {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+}
+
+function lineSeparatorExtensions(separator: "\r\n" | null): Extension[] {
+  return separator === null ? [] : [EditorState.lineSeparator.of(separator)];
 }
 
 async function applyLanguage(path: string | undefined): Promise<void> {
@@ -58,6 +65,7 @@ onMounted(() => {
       keymap.of(defaultKeymap),
       ...reviewBaseExtensions,
       languageCompartment.of([]),
+      lineSeparatorCompartment.of(lineSeparatorExtensions(activeLineSeparator)),
       readOnlyCompartment.of(readOnlyExtensions(!!props.readOnly)),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) {
@@ -74,7 +82,17 @@ watch(
   () => props.modelValue,
   (value) => {
     const current = view.value;
-    if (current !== null && value !== current.state.doc.toString()) {
+    if (current === null) return;
+    // A document with CRLF endings must keep them: swapping the separator
+    // before the replacement makes the inserted text round-trip unchanged.
+    const separator = lineSeparatorFor(value);
+    if (separator !== activeLineSeparator) {
+      activeLineSeparator = separator;
+      current.dispatch({
+        effects: lineSeparatorCompartment.reconfigure(lineSeparatorExtensions(separator)),
+      });
+    }
+    if (value !== current.state.doc.toString()) {
       current.dispatch({
         changes: { from: 0, to: current.state.doc.length, insert: value },
       });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseUnifiedDiff } from "./unified-diff.ts";
+import { parseUnifiedDiff, spliceOriginal } from "./unified-diff.ts";
 
 const twoHunks = [
   "diff --git a/a.ts b/a.ts",
@@ -19,7 +19,10 @@ const twoHunks = [
   "",
 ].join("\n");
 
-test("reconstructs both full documents across multiple hunks", () => {
+test("reconstructs the hunk documents across multiple hunks", () => {
+  // A partial-context `git diff` carries only the hunks: lines between them are
+  // not in the diff at all. Reconstructing full documents needs the read of the
+  // file on disk — see spliceOriginal below.
   const parsed = parseUnifiedDiff(twoHunks);
   expect(parsed).not.toBeNull();
   expect(parsed!.original).toBe("const a = 1;\nconst b = 2;\nconst d = 5;\nold line\ntail\n");
@@ -41,7 +44,8 @@ test("a new file has an empty original side", () => {
       "",
     ].join("\n"),
   );
-  expect(parsed).toEqual({ original: "", modified: "one\ntwo\n" });
+  expect(parsed!.original).toBe("");
+  expect(parsed!.modified).toBe("one\ntwo\n");
 });
 
 test("a deleted file has an empty modified side", () => {
@@ -57,7 +61,8 @@ test("a deleted file has an empty modified side", () => {
       "",
     ].join("\n"),
   );
-  expect(parsed).toEqual({ original: "one\ntwo\n", modified: "" });
+  expect(parsed!.original).toBe("one\ntwo\n");
+  expect(parsed!.modified).toBe("");
 });
 
 test("the no-newline marker adjusts only the side it follows", () => {
@@ -73,7 +78,8 @@ test("the no-newline marker adjusts only the side it follows", () => {
       "",
     ].join("\n"),
   );
-  expect(parsed).toEqual({ original: "old", modified: "new\n" });
+  expect(parsed!.original).toBe("old");
+  expect(parsed!.modified).toBe("new\n");
 });
 
 describe("context lines", () => {
@@ -91,7 +97,8 @@ describe("context lines", () => {
         "",
       ].join("\n"),
     );
-    expect(parsed).toEqual({ original: "keep\nold\ntail\n", modified: "keep\nnew\ntail\n" });
+    expect(parsed!.original).toBe("keep\nold\ntail\n");
+    expect(parsed!.modified).toBe("keep\nnew\ntail\n");
   });
 });
 
@@ -140,4 +147,128 @@ test("over-delivery past exhausted counts returns null", () => {
     ].join("\n"),
   );
   expect(parsed).toBeNull();
+});
+
+const partialContextDiff = [
+  "diff --git a/a.ts b/a.ts",
+  "index 1111111..2222222 100644",
+  "--- a/a.ts",
+  "+++ b/a.ts",
+  "@@ -3,7 +3,7 @@",
+  " a3",
+  " a4",
+  " a5",
+  "-a6",
+  "+M6",
+  " a7",
+  " a8",
+  " a9",
+  "",
+].join("\n");
+
+const originalA =
+  ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n") + "\n";
+const modifiedA =
+  ["a1", "a2", "a3", "a4", "a5", "M6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n") + "\n";
+
+describe("spliceOriginal", () => {
+  test("rebuilds the full original from the read document and the hunk ranges", () => {
+    // A default-context `git diff` starts at line 3 here, so the parser's own
+    // original is only the hunk fragment; the read document supplies the rest.
+    const parsed = parseUnifiedDiff(partialContextDiff);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.original).toBe("a3\na4\na5\na6\na7\na8\na9\n");
+    expect(spliceOriginal(parsed!, modifiedA)).toBe(originalA);
+  });
+
+  test("keeps unchanged lines between hunks", () => {
+    const diff = [
+      "diff --git a/b.ts b/b.ts",
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ -1,4 +1,4 @@",
+      " b1",
+      "-b2",
+      "+B2",
+      " b3",
+      " b4",
+      "@@ -14,4 +14,4 @@",
+      " b14",
+      "-b15",
+      "+B15",
+      " b16",
+      " b17",
+      "",
+    ].join("\n");
+    const originalLines = Array.from({ length: 20 }, (_, i) => `b${i + 1}`);
+    const modifiedLines = [...originalLines];
+    modifiedLines[1] = "B2";
+    modifiedLines[14] = "B15";
+    const original = `${originalLines.join("\n")}\n`;
+    const modified = `${modifiedLines.join("\n")}\n`;
+    const parsed = parseUnifiedDiff(diff);
+    expect(parsed).not.toBeNull();
+    expect(spliceOriginal(parsed!, modified)).toBe(original);
+  });
+
+  test("refuses a document that no longer matches the diff", () => {
+    const parsed = parseUnifiedDiff(partialContextDiff);
+    expect(spliceOriginal(parsed!, modifiedA.replace("a7\n", "aX\n"))).toBeNull();
+  });
+
+  test("refuses a document too short for the hunk range", () => {
+    const parsed = parseUnifiedDiff(partialContextDiff);
+    expect(spliceOriginal(parsed!, "a1\na2\n")).toBeNull();
+  });
+
+  test("handles a hunk with no added lines", () => {
+    const diff = [
+      "diff --git a/c.ts b/c.ts",
+      "--- a/c.ts",
+      "+++ b/c.ts",
+      "@@ -2,4 +2,2 @@",
+      " c2",
+      "-c3",
+      "-c4",
+      " c5",
+      "",
+    ].join("\n");
+    const parsed = parseUnifiedDiff(diff);
+    expect(spliceOriginal(parsed!, "c1\nc2\nc5\nc6\n")).toBe("c1\nc2\nc3\nc4\nc5\nc6\n");
+  });
+
+  test("preserves CRLF line endings through parse and splice", () => {
+    const diff = [
+      "diff --git a/d.txt b/d.txt",
+      "--- a/d.txt",
+      "+++ b/d.txt",
+      "@@ -1,3 +1,3 @@",
+      " d1\r",
+      "-d2\r",
+      "+D2\r",
+      " d3\r",
+      "",
+    ].join("\n");
+    const parsed = parseUnifiedDiff(diff);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.original).toBe("d1\r\nd2\r\nd3\r\n");
+    expect(spliceOriginal(parsed!, "d1\r\nD2\r\nd3\r\n")).toBe("d1\r\nd2\r\nd3\r\n");
+  });
+
+  test("honors a missing trailing newline on the original side", () => {
+    const diff = [
+      "diff --git a/e.ts b/e.ts",
+      "--- a/e.ts",
+      "+++ b/e.ts",
+      "@@ -1,2 +1,2 @@",
+      " e1",
+      "-e2",
+      "\\ No newline at end of file",
+      "+E2",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n");
+    const parsed = parseUnifiedDiff(diff);
+    expect(spliceOriginal(parsed!, "e1\nE2")).toBe("e1\ne2");
+  });
 });

@@ -5,6 +5,7 @@ import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { languageForPath, loadLanguage } from "@/features/review/languages.ts";
+import { lineSeparatorFor } from "@/features/review/review-state.ts";
 import { reviewBaseExtensions } from "@/features/review/theme.ts";
 
 const props = defineProps<{
@@ -21,9 +22,15 @@ const host = ref<HTMLElement | null>(null);
 const view = shallowRef<MergeView | null>(null);
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
+const lineSeparatorCompartment = new Compartment();
+let activeLineSeparator = lineSeparatorFor(props.modified);
 
 function readOnlyExtensions(readOnly: boolean): Extension[] {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+}
+
+function lineSeparatorExtensions(separator: "\r\n" | null): Extension[] {
+  return separator === null ? [] : [EditorState.lineSeparator.of(separator)];
 }
 
 async function applyLanguage(path: string | undefined): Promise<void> {
@@ -58,6 +65,7 @@ function buildView(): MergeView | null {
       extensions: [
         lineNumbers(),
         ...reviewBaseExtensions,
+        ...lineSeparatorExtensions(lineSeparatorFor(props.original)),
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
       ],
@@ -69,6 +77,7 @@ function buildView(): MergeView | null {
         keymap.of(defaultKeymap),
         ...reviewBaseExtensions,
         languageCompartment.of([]),
+        lineSeparatorCompartment.of(lineSeparatorExtensions(activeLineSeparator)),
         readOnlyCompartment.of(readOnlyExtensions(!props.editable)),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
@@ -78,7 +87,10 @@ function buildView(): MergeView | null {
       ],
     },
     parent: host.value,
-    revertControls: "b-to-a",
+    // "a-to-b" copies the original chunk into the editable document (b) — the
+    // document Save writes. "b-to-a" would edit the read-only original instead
+    // and leave the saved content untouched.
+    revertControls: "a-to-b",
     gutter: true,
     collapseUnchanged: { margin: 3, minSize: 4 },
     orientation: "a-b",
@@ -96,7 +108,16 @@ watch(
   () => props.modified,
   (value) => {
     const current = view.value;
-    if (current !== null && value !== current.b.state.doc.toString()) {
+    if (current === null) return;
+    // Keep CRLF documents CRLF across external replacements.
+    const separator = lineSeparatorFor(value);
+    if (separator !== activeLineSeparator) {
+      activeLineSeparator = separator;
+      current.b.dispatch({
+        effects: lineSeparatorCompartment.reconfigure(lineSeparatorExtensions(separator)),
+      });
+    }
+    if (value !== current.b.state.doc.toString()) {
       current.b.dispatch({
         changes: {
           from: 0,
@@ -112,6 +133,8 @@ watch(
   () => props.original,
   () => {
     view.value?.destroy();
+    // The rebuilt document follows the modified side's line endings.
+    activeLineSeparator = lineSeparatorFor(props.modified);
     view.value = buildView();
     if (view.value !== null) {
       void applyLanguage(props.path);

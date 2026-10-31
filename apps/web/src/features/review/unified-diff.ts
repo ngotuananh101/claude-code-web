@@ -8,7 +8,26 @@
  * without a DOM.
  */
 
-export type ParsedUnifiedDiff = { original: string; modified: string };
+export type ParsedHunk = {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  /** Context and deleted lines, in document order. */
+  oldLines: string[];
+  /** Context and added lines, in document order. */
+  newLines: string[];
+};
+
+export type ParsedUnifiedDiff = {
+  /** The hunk content of the original side — a fragment for partial-context diffs. */
+  original: string;
+  /** The hunk content of the modified side — a fragment for partial-context diffs. */
+  modified: string;
+  hunks: ParsedHunk[];
+  /** The original side's last line lacks a trailing newline. */
+  originalNoNewline: boolean;
+};
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
@@ -75,6 +94,7 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
 
   const original: string[] = [];
   const modified: string[] = [];
+  const hunks: ParsedHunk[] = [];
   let originalNoNewline = false;
   let modifiedNoNewline = false;
   // Tracks which side the last content-bearing line ("-"/""/"+") was pushed to,
@@ -90,8 +110,14 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
     const m = HUNK_RE.exec(lines[i]!);
     if (!m) break; // not a hunk header → done (stray lines rejected below)
 
-    let oldCount = parseCount(m[2]);
-    let newCount = parseCount(m[4]);
+    const oldStart = Number(m[1]);
+    const oldTotal = parseCount(m[2]);
+    const newStart = Number(m[3]);
+    const newTotal = parseCount(m[4]);
+    let oldCount = oldTotal;
+    let newCount = newTotal;
+    const hunkOld: string[] = [];
+    const hunkNew: string[] = [];
     i++;
 
     while (i < lines.length) {
@@ -118,15 +144,19 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
       if (prefix === " ") {
         original.push(content);
         modified.push(content);
+        hunkOld.push(content);
+        hunkNew.push(content);
         oldCount--;
         newCount--;
         lastPushedSide = "both";
       } else if (prefix === "-") {
         original.push(content);
+        hunkOld.push(content);
         oldCount--;
         lastPushedSide = "original";
       } else if (prefix === "+") {
         modified.push(content);
+        hunkNew.push(content);
         newCount--;
         lastPushedSide = "modified";
       } else if (prefix === "\\") {
@@ -155,6 +185,15 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
     // If the body stopped early — a side claimed more lines than delivered —
     // the diff is incomplete → null.
     if (oldCount > 0 || newCount > 0) return null;
+
+    hunks.push({
+      oldStart,
+      oldCount: oldTotal,
+      newStart,
+      newCount: newTotal,
+      oldLines: hunkOld,
+      newLines: hunkNew,
+    });
   }
 
   // Reject stray leftover lines (e.g. a second file header / hunk header that
@@ -173,5 +212,54 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
   return {
     original: joinSide(original, originalNoNewline),
     modified: joinSide(modified, modifiedNoNewline),
+    hunks,
+    originalNoNewline,
   };
+}
+
+/**
+ * Rebuild the full original document from the authoritative read of the file
+ * under review and a parsed diff.
+ *
+ * A default-context `git diff` carries only its hunks, so the parser's own
+ * `original` is a fragment. The read document is the full modified side; each
+ * hunk's new-side range is checked against it and swapped for the hunk's
+ * old-side lines. Returns `null` when the diff no longer matches the read
+ * document (stale diff, a race between the two RPCs, or differing line
+ * endings) so callers can fall back to the plain-text diff instead of showing
+ * a merge view over mismatched text.
+ */
+export function spliceOriginal(parsed: ParsedUnifiedDiff, modified: string): string | null {
+  if (parsed.hunks.length === 0) return null;
+
+  const endsWithNewline = modified.endsWith("\n");
+  const body = endsWithNewline ? modified.slice(0, -1) : modified;
+  const modLines = modified === "" ? [] : body.split("\n");
+
+  const out: string[] = [];
+  let cursor = 0;
+  for (const hunk of parsed.hunks) {
+    // An empty new-side range (a pure deletion) sits *after* `newStart` lines;
+    // a non-empty one starts at line `newStart` (1-based).
+    const start = hunk.newCount === 0 ? hunk.newStart : hunk.newStart - 1;
+    if (start < cursor || start + hunk.newCount > modLines.length) return null;
+    for (let k = 0; k < hunk.newCount; k++) {
+      if (modLines[start + k] !== hunk.newLines[k]) return null;
+    }
+    out.push(...modLines.slice(cursor, start), ...hunk.oldLines);
+    cursor = start + hunk.newCount;
+  }
+  out.push(...modLines.slice(cursor));
+
+  if (out.length === 0) return "";
+
+  // The original's trailing newline follows the diff's end-of-file marker when
+  // the last hunk reaches the end; otherwise the ending is unchanged from the
+  // read document.
+  const last = parsed.hunks[parsed.hunks.length - 1]!;
+  const lastStart = last.newCount === 0 ? last.newStart : last.newStart - 1;
+  const touchesEof = lastStart + last.newCount === modLines.length;
+  const endsOriginal = parsed.originalNoNewline ? false : touchesEof ? true : endsWithNewline;
+  const joined = out.join("\n");
+  return endsOriginal ? `${joined}\n` : joined;
 }

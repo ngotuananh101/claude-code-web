@@ -5,6 +5,7 @@ import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { languageForPath, loadLanguage } from "@/features/review/languages.ts";
+import { lineSeparatorFor } from "@/features/review/review-state.ts";
 import { reviewBaseExtensions } from "@/features/review/theme.ts";
 
 const props = defineProps<{
@@ -21,9 +22,15 @@ const host = ref<HTMLElement | null>(null);
 const view = shallowRef<EditorView | null>(null);
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
+const lineSeparatorCompartment = new Compartment();
+let activeLineSeparator = lineSeparatorFor(props.modified);
 
 function readOnlyExtensions(readOnly: boolean): Extension[] {
   return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+}
+
+function lineSeparatorExtensions(separator: "\r\n" | null): Extension[] {
+  return separator === null ? [] : [EditorState.lineSeparator.of(separator)];
 }
 
 async function applyLanguage(path: string | undefined): Promise<void> {
@@ -65,6 +72,7 @@ function buildView(): EditorView | null {
         collapseUnchanged: { margin: 3, minSize: 4 },
         syntaxHighlightDeletions: false,
       }),
+      lineSeparatorCompartment.of(lineSeparatorExtensions(activeLineSeparator)),
       readOnlyCompartment.of(readOnlyExtensions(!props.editable)),
       languageCompartment.of([]),
       EditorView.updateListener.of((u) => {
@@ -86,6 +94,9 @@ watch(
   () => props.original,
   () => {
     view.value?.destroy();
+    // The rebuilt document follows the modified side's line endings; the
+    // original is handled by the merge view itself.
+    activeLineSeparator = lineSeparatorFor(props.modified);
     view.value = buildView();
     if (view.value !== null) {
       void applyLanguage(props.path);
@@ -97,7 +108,16 @@ watch(
   () => props.modified,
   (value) => {
     const current = view.value;
-    if (current !== null && value !== current.state.doc.toString()) {
+    if (current === null) return;
+    // Keep CRLF documents CRLF across external replacements.
+    const separator = lineSeparatorFor(value);
+    if (separator !== activeLineSeparator) {
+      activeLineSeparator = separator;
+      current.dispatch({
+        effects: lineSeparatorCompartment.reconfigure(lineSeparatorExtensions(separator)),
+      });
+    }
+    if (value !== current.state.doc.toString()) {
       current.dispatch({
         changes: { from: 0, to: current.state.doc.length, insert: value },
       });
