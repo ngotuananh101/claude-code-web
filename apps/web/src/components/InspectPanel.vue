@@ -1071,7 +1071,6 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
-                  :disabled="diffModeOverride.value !== null"
                   @click="diffModeOverride.value = 'unified'"
                 >
                   Một cột
@@ -1084,7 +1083,6 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
-                  :disabled="diffModeOverride.value !== null"
                   @click="diffModeOverride.value = 'split'"
                 >
                   Hai cột
