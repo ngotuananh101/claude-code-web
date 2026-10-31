@@ -259,7 +259,14 @@ export function deleteProfile(db: Database, id: string, ownerId: string): boolea
   return result.changes > 0;
 }
 
-/** Map a raw row into the browser-facing masked detail. */
+/**
+ * Map a raw row into the browser-facing detail.
+ *
+ * No key mask is derived here: the column holds a sealed envelope, and masking
+ * ciphertext would show `v1.***xyz` as if it were the key. The route layer owns
+ * the mask because only it has the SecretBox to open the plaintext first; a
+ * seal that cannot be opened leaves `apiKeyMasked` absent by construction.
+ */
 function toDetail(row: ProfileRow): ProfileDetail {
   const detail: ProfileDetail = {
     profileId: row.id,
@@ -270,10 +277,6 @@ function toDetail(row: ProfileRow): ProfileDetail {
     hasKey: hasKey(row.api_key_encrypted),
     settings: parseJsonColumn(row.settings_json),
   };
-  const masked = maskApiKey(row.api_key_encrypted);
-  if (masked !== undefined) {
-    detail.apiKeyMasked = masked;
-  }
   const mapping = parseJsonColumn(row.model_mapping) as ModelMapping;
   if (Object.keys(mapping).length > 0) {
     detail.modelMapping = mapping;

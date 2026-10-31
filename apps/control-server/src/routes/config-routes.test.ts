@@ -402,6 +402,45 @@ describe("config-routes (/api/config/profiles)", () => {
     expect(JSON.stringify(detail)).not.toMatch(/^v1\./);
   });
 
+  test("GET omits apiKeyMasked when the stored seal cannot be opened", async () => {
+    const db = makeDb();
+    const secretBox = makeSecretBox();
+
+    const req = new Request("http://localhost/api/config/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "9Router",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN",
+        apiKey: "sk-secret-key",
+        modelMapping: {},
+        settingsJson: "{}",
+      }),
+    });
+    const res = await handleCreateProfile(req, { db, secretBox }, authorized);
+    const created = (await res.json()) as { id: string };
+
+    // Simulate a rotated server secret: the column holds a well-formed envelope
+    // sealed by a DIFFERENT key. open() fails, and the response must not fall
+    // back to masking the ciphertext (that would read as "v1.***xyz").
+    const foreign = createSecretBox(new Uint8Array(32).fill(43)).seal("sk-rotated");
+    db.query("UPDATE config_profiles SET api_key_encrypted = ? WHERE id = ?").run(
+      foreign,
+      created.id,
+    );
+
+    const getReq = new Request(`http://localhost/api/config/profiles/${created.id}`);
+    const getRes = await handleGetProfile(getReq, { db, secretBox }, authorized);
+    expect(getRes.status).toBe(200);
+    const detail = (await getRes.json()) as { hasKey: boolean; apiKeyMasked?: string };
+    expect(detail.hasKey).toBe(true);
+    expect(detail.apiKeyMasked).toBeUndefined();
+    // Neither the plaintext nor the sealed envelope may appear anywhere.
+    expect(JSON.stringify(detail)).not.toContain("sk-rotated");
+    expect(JSON.stringify(detail)).not.toContain("v1.");
+  });
+
   test("PUT with empty-string apiKey clears the stored key", async () => {
     const db = makeDb();
     const secretBox = makeSecretBox();
