@@ -164,7 +164,16 @@ onMounted(() => {
 /** Load the owner's saved profiles for the profile selector (§4.5.3). */
 async function refreshProfiles(): Promise<void> {
   const result = await listProfiles();
-  if (result.ok) profiles.value = result.profiles;
+  if (!result.ok) return;
+  profiles.value = result.profiles;
+  // A profile deleted elsewhere must not stay selected: the next send would
+  // 400 with `unknown_profile` and read as a generic failure.
+  if (
+    profileId.value !== null &&
+    !result.profiles.some((profile) => profile.profileId === profileId.value)
+  ) {
+    profileId.value = null;
+  }
 }
 
 /**
@@ -516,6 +525,14 @@ async function send(): Promise<void> {
       toast.error("Đăng nhập đã hết hạn — hãy đăng nhập lại.");
       return;
     }
+    if (result.reason === "unknown_profile") {
+      // The selected profile was deleted elsewhere: retrying unchanged cannot
+      // work, so drop the stale selection and say why.
+      toast.error("Profile đã bị xoá — hãy chọn lại profile trước khi gửi.");
+      profileId.value = null;
+      void refreshProfiles();
+      return;
+    }
     toast.error("Không gửi được prompt — thử lại.");
   } finally {
     sending.value = false;
@@ -770,6 +787,7 @@ async function stop(): Promise<void> {
           :profiles="profiles"
           :runner-id="pickerRunnerId"
           :advertised="advertisedModels"
+          @update:open="(open) => open && void refreshProfiles()"
         />
         <Button
           v-if="activeRunId"

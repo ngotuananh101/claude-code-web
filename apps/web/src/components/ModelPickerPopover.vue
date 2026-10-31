@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { EffortLevel, ProfileSummary, RunnerModel } from "@cc-web/protocol";
 import { Check, ChevronDown, ChevronRight, Cpu, Sparkles, Zap } from "@lucide/vue";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { resolveModelLabel } from "@/features/composer/composer-logic.ts";
@@ -54,9 +54,12 @@ const emit = defineEmits<{
   "update:effort": [value: EffortLevel | null];
   "update:ultracode": [value: boolean];
   "update:profileId": [value: string | null];
+  /** Mirrors the popover's open state so the owner can refresh profiles. */
+  "update:open": [value: boolean];
 }>();
 
 const open = ref(props.defaultOpen ?? false);
+watch(open, (value) => emit("update:open", value));
 /** Compact rows by default (name only); the chevron unfolds descriptions. */
 const showDescriptions = ref(false);
 
@@ -92,6 +95,18 @@ const showProfileSelector = computed(() => props.profiles.length > 0);
 
 function selectProfile(value: string | null): void {
   emit("update:profileId", value);
+}
+
+/**
+ * The label for one model row: the upstream name from the active profile's
+ * mapping when the role is remapped, else the runner's own display name.
+ */
+function labelFor(entry: (typeof models.value)[number]): string {
+  const mapped = profileMapping.value[entry.value as keyof typeof profileMapping.value];
+  if (typeof mapped !== "string" || mapped.trim() === "") {
+    return formatModelDisplayName(entry);
+  }
+  return resolveModelLabel({ model: entry.value, profile: activeProfile.value });
 }
 const activeIndex = computed(() =>
   props.effort === null ? -1 : levels.value.indexOf(props.effort),
@@ -287,7 +302,7 @@ function percent(index: number): string {
               class="block truncate text-[13px]"
               :class="entry.value === model ? 'font-medium text-foreground' : 'text-foreground/90'"
             >
-              {{ profileMapping[entry.value as keyof typeof profileMapping] ? resolveModelLabel({ model: entry.value, profile: { modelMapping: profileMapping as Record<string, string> } }) : formatModelDisplayName(entry) }}
+              {{ labelFor(entry) }}
             </span>
             <span
               v-if="showDescriptions && formatModelDescription(entry) !== ''"

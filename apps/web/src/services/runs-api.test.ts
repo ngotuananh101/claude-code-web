@@ -130,6 +130,23 @@ describe("startRun", () => {
     expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "unauthorized" });
   });
 
+  test("a 400 unknown_profile names the stale profile instead of a generic error", async () => {
+    // Deleting a profile between picking it and sending leaves the composer
+    // holding an id the server no longer knows; "try again" would be a lie.
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("unknown_profile", { status: 400 })) as typeof fetch;
+    expect(await startRun("s", { prompt: "p", profileId: "prof_gone" })).toEqual({
+      ok: false,
+      reason: "unknown_profile",
+    });
+  });
+
+  test("other 400s stay a plain error", async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("validation_failed", { status: 400 })) as typeof fetch;
+    expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "error" });
+  });
+
   test("anything else is a plain error, and so is a network failure", async () => {
     capture(500, "boom");
     expect(await startRun("s", { prompt: "p" })).toEqual({ ok: false, reason: "error" });

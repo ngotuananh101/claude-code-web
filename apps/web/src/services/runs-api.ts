@@ -14,7 +14,13 @@ export type StartRunResult =
   | { ok: true; runId: string; attemptId: string; sessionId: string }
   | {
       ok: false;
-      reason: "unauthorized" | "session_busy" | "session_pinned" | "runner_unavailable" | "error";
+      reason:
+        | "unauthorized"
+        | "session_busy"
+        | "session_pinned"
+        | "runner_unavailable"
+        | "unknown_profile"
+        | "error";
     };
 
 /**
@@ -83,6 +89,12 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     return { ok: false, reason: pinned ? "session_pinned" : "session_busy" };
   }
   if (response.status === 503) return { ok: false, reason: "runner_unavailable" };
+  if (response.status === 400) {
+    // A selected profile can be deleted between picking it and sending. The
+    // route answers `unknown_profile`; any other 400 is ordinary validation.
+    const body = (await response.text()).trim();
+    return { ok: false, reason: body === "unknown_profile" ? "unknown_profile" : "error" };
+  }
   if (!response.ok) return { ok: false, reason: "error" };
 
   const body = (await response.json()) as {
