@@ -260,6 +260,7 @@ describe("buildRunRequest — resumeSessionId handling", () => {
     model: "default",
     effort: null,
     ultracode: false,
+    profileId: null,
     workspaceId: "ws-proj",
     projectRunnerId: "runner-a",
     runnerId: "runner-a",
