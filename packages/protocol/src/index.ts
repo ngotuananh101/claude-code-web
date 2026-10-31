@@ -107,7 +107,9 @@ export type EventType =
   | "workspace.changed"
   | "usage.updated"
   | "spool.warning"
-  | "session.updated";
+  | "session.updated"
+  | "schedule.created"
+  | "schedule.cancelled";
 
 /**
  * The `EventType` union as a runtime list. The wire carries event types as
@@ -138,6 +140,8 @@ export const EVENT_TYPES = [
   "usage.updated",
   "spool.warning",
   "session.updated",
+  "schedule.created",
+  "schedule.cancelled",
 ] as const satisfies readonly EventType[];
 
 type EventTypesCoverEventType = EventType extends (typeof EVENT_TYPES)[number] ? true : false;
@@ -339,3 +343,11 @@ export {
   RunRegistry,
   toServerRunState,
 } from "./run-registry.ts";
+export {
+  parseScheduleCancelledPayload,
+  parseScheduleCreatedPayload,
+  type ScheduleCancelledPayload,
+  type ScheduleCreatedPayload,
+  type ScheduledTask,
+  type ScheduleState,
+} from "./schedules.ts";

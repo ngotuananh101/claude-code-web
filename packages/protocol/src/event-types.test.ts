@@ -19,6 +19,13 @@ describe("event types", () => {
     expect(EVENT_TYPES).toContain("spool.warning" as EventType);
   });
 
+  test("schedule.created and schedule.cancelled are known event types", () => {
+    // The runner mirrors CronCreate/CronDelete tool results as these events, so
+    // a server that refused them would refuse the whole frame they arrive in.
+    expect(EVENT_TYPES).toContain("schedule.created" as EventType);
+    expect(EVENT_TYPES).toContain("schedule.cancelled" as EventType);
+  });
+
   test("the list has no duplicates and stays a set of distinct names", () => {
     expect(new Set(EVENT_TYPES).size).toBe(EVENT_TYPES.length);
   });
