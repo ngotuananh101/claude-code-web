@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AttachmentInfo, SessionMessage } from "@cc-web/protocol";
+import { Loader2 } from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
@@ -265,8 +266,9 @@ async function refreshNow(): Promise<void> {
           :historical-messages="historicalMessages"
           :pending-run="activePendingRun"
         />
-        <div v-else class="z-10 flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Đang chờ journal…
+        <div v-else class="z-10 flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 class="size-4 animate-spin text-muted-foreground" />
+          <span>Đang tải nhật ký phiên…</span>
         </div>
 
         <div class="z-10 px-4 pt-2 pb-4.5 md:px-6">

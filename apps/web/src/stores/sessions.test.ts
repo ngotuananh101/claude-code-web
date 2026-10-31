@@ -33,6 +33,32 @@ function deliver(frame: Record<string, unknown>): void {
   for (const listener of frameListeners) listener(frame);
 }
 
+function replayBatch(
+  sessionSequenceStart: number,
+  count: number,
+  live = false,
+): Record<string, unknown> {
+  const events = Array.from({ length: count }, (_, i) => {
+    const seq = sessionSequenceStart + i;
+    return {
+      sessionSequence: seq,
+      eventId: `evt-${seq}`,
+      runId: "run-1",
+      attemptId: "attempt-1",
+      occurredAt: "2026-10-24T00:00:00.000Z",
+      type: "run.started",
+      payload: { commandId: "cmd-1" },
+    };
+  });
+  return {
+    type: "session.events",
+    sessionId: "s-1",
+    live,
+    through: sessionSequenceStart + count - 1,
+    events,
+  };
+}
+
 function replayFrame(sessionSequence: number): Record<string, unknown> {
   return {
     type: "session.events",
@@ -80,6 +106,48 @@ describe("the sessions store's reactive mirror", () => {
     expect(sessions.stream?.events).not.toBe(first);
     expect(sessions.stream?.events?.length).toBe(2);
     expect(sessions.stream?.through).toBe(2);
+  });
+
+  test("buffers intermediate replay batches until the replay completes", () => {
+    // Fresh session subscription starts with no journal until initial replay arrives
+    openSession("s-2");
+    expect(sessions.stream).toBeNull();
+
+    // Intermediate batch (200 events, live: false)
+    deliver(replayBatch(1, 200, false));
+    expect(sessions.stream).toBeNull();
+
+    // Another intermediate batch
+    deliver(replayBatch(201, 200, false));
+    expect(sessions.stream).toBeNull();
+
+    // Final short batch (< 200 events) completes the replay
+    deliver(replayBatch(401, 10, false));
+    expect(sessions.stream).not.toBeNull();
+    expect(sessions.stream?.events.length).toBe(410);
+    expect(sessions.stream?.through).toBe(410);
+  });
+
+  test("a live push flushes immediately", () => {
+    openSession("s-3");
+    deliver(replayBatch(1, 200, false));
+    expect(sessions.stream).toBeNull();
+
+    // Live frame with live: true
+    deliver(replayBatch(201, 1, true));
+    expect(sessions.stream).not.toBeNull();
+    expect(sessions.stream?.events.length).toBe(201);
+  });
+
+  test("flushes intermediate replay on debounce timeout if stream stalls", async () => {
+    openSession("s-4");
+    deliver(replayBatch(1, 200, false));
+    expect(sessions.stream).toBeNull();
+
+    // Wait 120ms
+    await new Promise((r) => setTimeout(r, 120));
+    expect(sessions.stream).not.toBeNull();
+    expect(sessions.stream?.events.length).toBe(200);
   });
 });
 

@@ -57,6 +57,7 @@ export const sessions = reactive<SessionsStore>({
 
 let machine: ReturnType<typeof createSessionStream> | null = null;
 let unsubscribeFrames: (() => void) | null = null;
+let replayFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Reads the owner's session list. False means the cookie is no good. */
 export async function loadSessions(): Promise<boolean> {
@@ -86,25 +87,56 @@ export async function loadAccount(): Promise<void> {
  * mid-stream costs only the events past `through`.
  */
 export function openSession(sessionId: string): void {
+  if (replayFlushTimer !== null) {
+    clearTimeout(replayFlushTimer);
+    replayFlushTimer = null;
+  }
   unsubscribeFrames?.();
   sessions.activeId = sessionId;
   machine = createSessionStream({
     sessionId,
     send: (frame: SubscribeFrame) => socket.send(frame),
   });
-  sessions.stream = machine.state();
+  sessions.stream = null;
 
   unsubscribeFrames = socket.onFrame((frame) => {
     if (frame.type !== "session.events" && frame.type !== "session.resync_required") return;
     machine?.apply(frame as Parameters<typeof machine.apply>[0]);
-    mirror();
+
+    // Bounded replay frames (§12.6) arrive in batches of up to 200 events with live:false.
+    // When a long session is opened, streaming intermediate batches mounts Turn 0 and
+    // renders past history incrementally from the top down, only to truncate to 20 turns
+    // once the tail finishes. Defer mirroring until replay completes (events.length < 200
+    // or live:true), with a short debounce timer fallback if the stream stalls.
+    const isEvents = frame.type === "session.events";
+    const events = isEvents && Array.isArray(frame["events"]) ? frame["events"] : [];
+    const isIntermediateReplay = isEvents && frame["live"] !== true && events.length >= 200;
+
+    if (isIntermediateReplay) {
+      if (replayFlushTimer === null) {
+        replayFlushTimer = setTimeout(() => {
+          replayFlushTimer = null;
+          mirror();
+        }, 100);
+      }
+    } else {
+      if (replayFlushTimer !== null) {
+        clearTimeout(replayFlushTimer);
+        replayFlushTimer = null;
+      }
+      mirror();
+    }
   });
 
-  socket.send({ type: "subscribe", sessionId, afterSessionSequence: sessions.stream.through });
+  socket.send({ type: "subscribe", sessionId, afterSessionSequence: machine.state().through });
 }
 
 /** Detaches from the active session without touching the socket. */
 export function closeSession(): void {
+  if (replayFlushTimer !== null) {
+    clearTimeout(replayFlushTimer);
+    replayFlushTimer = null;
+  }
   unsubscribeFrames?.();
   unsubscribeFrames = null;
   machine = null;

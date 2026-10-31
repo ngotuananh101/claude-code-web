@@ -179,21 +179,25 @@ function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
   const viewport = getViewport();
   if (!viewport) return;
 
+  isProgrammaticScrolling = true;
+  userScrolledUp.value = false;
+  if (scrollTimeout) clearTimeout(scrollTimeout);
+
   if (behavior === "smooth") {
-    isProgrammaticScrolling = true;
-    userScrolledUp.value = false;
     viewport.scrollTo({
       top: viewport.scrollHeight,
       behavior: "smooth",
     });
-    if (scrollTimeout) clearTimeout(scrollTimeout);
     scrollTimeout = setTimeout(() => {
       isProgrammaticScrolling = false;
       checkScrollPosition();
     }, 400);
   } else {
     viewport.scrollTop = viewport.scrollHeight;
-    userScrolledUp.value = false;
+    scrollTimeout = setTimeout(() => {
+      isProgrammaticScrolling = false;
+      checkScrollPosition();
+    }, 50);
   }
 }
 
@@ -201,17 +205,14 @@ onMounted(() => {
   nextTick(() => {
     const viewport = getViewport();
     if (viewport) {
-      viewport.scrollTop = viewport.scrollHeight;
       viewport.addEventListener("scroll", onScroll, { passive: true });
+      scrollToBottom("auto");
     }
 
     if (typeof ResizeObserver !== "undefined" && contentRef.value) {
       resizeObserver = new ResizeObserver(() => {
         if (!userScrolledUp.value) {
-          const vp = getViewport();
-          if (vp) {
-            vp.scrollTop = vp.scrollHeight;
-          }
+          scrollToBottom("auto");
         }
       });
       resizeObserver.observe(contentRef.value);
