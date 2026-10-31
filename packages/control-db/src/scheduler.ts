@@ -90,6 +90,16 @@ export type DispatchRequest = {
    * Absent means no attachments — the key is omitted, never sent as an empty list.
    */
   attachments?: RunnerAttachmentItem[];
+  /**
+   * The scheduled task this run fires (§11.5). Set by the scheduling tick only
+   * — a user-started run never carries it. Rides the run.start payload so the
+   * runner's `run.started` event can tag the turn the web renders as scheduled;
+   * absent means an ordinary run and the key is omitted.
+   */
+  scheduleId?: string;
+  /** The schedule's cron expression, for the chat label (§11.5). Rides the
+   * payload next to `scheduleId`, same rule: omitted when absent. */
+  scheduleCron?: string;
 };
 
 export type DispatchDecision =
@@ -180,6 +190,8 @@ export class Scheduler {
           ? {}
           : { resumeSessionId: request.resumeSessionId }),
         ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
+        ...(request.scheduleId === undefined ? {} : { scheduleId: request.scheduleId }),
+        ...(request.scheduleCron === undefined ? {} : { scheduleCron: request.scheduleCron }),
       },
     });
 

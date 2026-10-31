@@ -221,6 +221,24 @@ describe("scheduler", () => {
     expect(db.query("SELECT COUNT(*) AS n FROM command_outbox").get()).toEqual({ n: 0 });
   });
 
+  test("schedule ids ride the run.start payload", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(
+      { ...request, runId: "run_sched_1", scheduleId: "sched_1", scheduleCron: "58 17 31 10 *" },
+      capacity(),
+    );
+
+    const row = db
+      .query("SELECT payload FROM command_outbox WHERE run_id = ?")
+      .get("run_sched_1") as {
+      payload: string;
+    };
+    expect(JSON.parse(row.payload)).toMatchObject({
+      scheduleId: "sched_1",
+      scheduleCron: "58 17 31 10 *",
+    });
+  });
+
   test("activeRunFor answers the attempt id the double-fire guard needs", async () => {
     const { scheduler } = setup();
     await scheduler.dispatch(request, capacity());

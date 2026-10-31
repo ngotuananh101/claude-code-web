@@ -2200,3 +2200,62 @@ describe("the schedule mirror (§11.5)", () => {
     expect(types.indexOf("schedule.created")).toBeLessThan(types.lastIndexOf("run.finished"));
   });
 });
+
+describe("scheduled runs (§11.5)", () => {
+  test("run.started carries the schedule ids from the run.start payload", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run_sched_1",
+      workspacePath: "/home/runner/project",
+    });
+    const sdk: SdkStream = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "success", is_error: false };
+      },
+    });
+
+    await executeRun(
+      db,
+      {
+        ...COMMAND,
+        runId: "run_sched_1",
+        payload: {
+          prompt: "Kiểm tra dung lượng",
+          scheduleId: "sched_1",
+          scheduleCron: "58 17 31 10 *",
+        },
+      },
+      { workspacePath: "/home/runner/project", sdk },
+    );
+
+    const started = events(db).find((row) => row.type === "run.started");
+    expect(JSON.parse(started!.payload)).toMatchObject({
+      prompt: "Kiểm tra dung lượng",
+      scheduleId: "sched_1",
+      scheduleCron: "58 17 31 10 *",
+    });
+  });
+
+  test("an ordinary run carries no schedule keys on run.started", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    const sdk: SdkStream = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "success", is_error: false };
+      },
+    });
+
+    await executeRun(db, COMMAND, { workspacePath: "/home/runner/project", sdk });
+
+    const started = events(db).find((row) => row.type === "run.started");
+    expect(JSON.parse(started!.payload)).not.toHaveProperty("scheduleId");
+    expect(JSON.parse(started!.payload)).not.toHaveProperty("scheduleCron");
+  });
+});

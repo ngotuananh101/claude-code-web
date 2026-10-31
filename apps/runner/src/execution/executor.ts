@@ -215,6 +215,17 @@ export async function executeRun(
     typeof record?.["branch"] === "string" && record["branch"] !== ""
       ? record["branch"]
       : undefined;
+  // §11.5: the scheduling tick tags its run.start with the schedule it fires.
+  // Same rule as model/branch — only a non-empty string exists, so an ordinary
+  // run's `run.started` never grows schedule keys.
+  const scheduleId =
+    typeof record?.["scheduleId"] === "string" && record["scheduleId"] !== ""
+      ? record["scheduleId"]
+      : undefined;
+  const scheduleCron =
+    typeof record?.["scheduleCron"] === "string" && record["scheduleCron"] !== ""
+      ? record["scheduleCron"]
+      : undefined;
 
   // Attachment items from the run.start payload (§attachments). Parsed defensively:
   // the payload is unknown until the protocol parser validates each item.
@@ -391,6 +402,8 @@ export async function executeRun(
       ...(attachmentInfos !== undefined && attachmentInfos.length > 0
         ? { attachments: attachmentInfos }
         : {}),
+      ...(scheduleId === undefined ? {} : { scheduleId }),
+      ...(scheduleCron === undefined ? {} : { scheduleCron }),
     });
 
     // §12.6: the attempt's own append, offered once the run is observable and
