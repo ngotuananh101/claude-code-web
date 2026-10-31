@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { AlertCircle, Braces, Clock, Copy, Loader2 } from "@lucide/vue";
+import { AlertCircle, Braces, Clock, Copy } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
+import { peekApprovalUi } from "@/features/approvals/store.ts";
+import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
 import type { AgentTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
+import AgentLiveStatus from "./AgentLiveStatus.vue";
 import AgentProcessAccordion from "./AgentProcessAccordion.vue";
 
 const props = defineProps<{
@@ -28,6 +31,45 @@ const headerDuration = computed(() =>
   props.turn.steps?.some((step) => step.kind !== "approval") ? undefined : props.turn.durationText,
 );
 
+/**
+ * While a turn is running, any in-flight tool step is highlighted by AgentLiveStatus
+ * at the tail. The accordion holds the completed/settled steps so the user
+ * can inspect past execution without duplicate spinners.
+ */
+const completedSteps = computed(() => {
+  if (props.turn.status !== "running") return props.turn.steps ?? [];
+  return (props.turn.steps ?? []).filter(
+    (step) => step.kind !== "tool" || step.state !== "running",
+  );
+});
+
+/** Number of pending approvals that require operator decision. */
+const pendingApprovalCount = computed(() => {
+  return (props.turn.steps ?? []).filter((step) => {
+    if (step.kind !== "approval") return false;
+    const payload = (step.event.payload ?? {}) as Record<string, unknown>;
+    const approvalId = typeof payload["approvalId"] === "string" ? payload["approvalId"] : "";
+    return approvalNeedsDecision({
+      terminal: props.terminalFor?.(step.event),
+      expiresAt: typeof payload["expiresAt"] === "number" ? payload["expiresAt"] : undefined,
+      closed: approvalId !== "" && peekApprovalUi(approvalId)?.closed === true,
+    });
+  }).length;
+});
+
+/**
+ * Shows the live CLI status while the turn is running:
+ * - Always when prose text has not arrived yet (thinking, running tools, waiting for model).
+ * - When a tool step is currently executing even if preliminary text was streamed.
+ */
+const shouldShowLiveStatus = computed(() => {
+  if (props.turn.status !== "running") return false;
+  const hasRunningTool = (props.turn.steps ?? []).some(
+    (s) => s.kind === "tool" && s.state === "running",
+  );
+  return props.turn.text.trim() === "" || hasRunningTool;
+});
+
 /** Copy the assistant response prose to the clipboard. */
 async function copyResponse(): Promise<void> {
   if (!props.turn.text) return;
@@ -50,14 +92,8 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
   <div class="group flex flex-col gap-2.5 w-full min-w-0 max-w-full text-foreground">
     <!-- Turn Header -->
     <div class="flex items-center gap-2 text-sm min-w-0">
-      <!-- Status display -->
-      <div v-if="turn.status === 'running'" class="flex items-center gap-1.5 shrink-0">
-        <Loader2 :size="14" class="animate-spin" />
-        <span>Đang xử lý…</span>
-      </div>
-
       <div
-        v-else-if="turn.status === 'error'"
+        v-if="turn.status === 'error'"
         class="flex items-center gap-1.5 text-destructive shrink-0"
       >
         <AlertCircle :size="14" />
@@ -70,22 +106,30 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         <span v-if="headerDuration" class="text-muted-foreground">{{ headerDuration }}</span>
       </div>
 
-      <div v-else class="flex items-center gap-1.5 shrink-0">
+      <div v-else class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
         <Clock :size="14" />
-        <span>{{ headerDuration ? `Đã xử lý trong ${headerDuration}` : "Agent" }}</span>
+        <span>{{ turn.status === 'done' && headerDuration ? `Đã xử lý trong ${headerDuration}` : "Agent" }}</span>
       </div>
 
       <!-- Horizontal divider line filling remaining width -->
       <span class="h-px flex-1 bg-border/60" aria-hidden="true" />
     </div>
 
-    <!-- Process accordion: thinking and tool steps collapse into one summary row -->
+    <!-- Process accordion: thinking and settled tool steps collapse into one summary row -->
     <AgentProcessAccordion
-      v-if="turn.steps && turn.steps.length > 0"
-      :steps="turn.steps"
+      v-if="completedSteps.length > 0"
+      :steps="completedSteps"
       :status="turn.status"
       :duration-text="turn.durationText"
       :terminal-for="terminalFor"
+    />
+
+    <!-- Unified CLI-style live status while turn is running -->
+    <AgentLiveStatus
+      v-if="shouldShowLiveStatus"
+      :turn="turn"
+      :steps="turn.steps ?? []"
+      :pending-approval-count="pendingApprovalCount"
     />
 
     <!-- Assistant Response Prose -->
@@ -95,27 +139,6 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       class="min-w-0 max-w-full break-words"
       v-html="renderMarkdown(turn.text)"
     />
-
-    <div
-      v-else-if="turn.isStreaming"
-      class="flex items-center gap-1 text-sm text-muted-foreground"
-    >
-      <div class="flex items-end gap-0.5">
-        <span
-          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
-          style="animation-delay: 0ms"
-        ></span>
-        <span
-          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
-          style="animation-delay: 150ms"
-        ></span>
-        <span
-          class="block h-1.5 w-1.5 min-w-[0.375rem] rounded-full bg-muted-foreground/60 animate-bounce"
-          style="animation-delay: 300ms"
-        ></span>
-      </div>
-      <span>Đang soạn câu trả lời…</span>
-    </div>
 
     <!-- Actions row (Copy response, Raw JSON toggle) - icon only, visible on hover -->
     <div

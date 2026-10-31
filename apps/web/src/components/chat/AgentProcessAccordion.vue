@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { AlertCircle, Check, ChevronDown, ChevronRight, CircleStop, Loader2 } from "@lucide/vue";
+import { AlertCircle, Check, ChevronDown, ChevronRight, CircleStop } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import { peekApprovalUi } from "@/features/approvals/store.ts";
 import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
@@ -74,9 +74,13 @@ watch(
   },
 );
 
-const summaryLabel = computed(() =>
-  processSummaryLabel(props.status, summary.value, pendingApprovals.value.length),
-);
+const summaryLabel = computed(() => {
+  if (props.status === "running") {
+    if (pendingApprovals.value.length > 0) return "Đang chờ phê duyệt…";
+    return `Đã thực hiện ${executionSteps.value.length} bước`;
+  }
+  return processSummaryLabel(props.status, summary.value, pendingApprovals.value.length);
+});
 </script>
 
 <template>
@@ -95,8 +99,7 @@ const summaryLabel = computed(() =>
             : 'text-muted-foreground hover:text-foreground'
       "
     >
-      <Loader2 v-if="status === 'running'" :size="13" class="shrink-0 animate-spin" />
-      <AlertCircle v-else-if="summary.hasError" :size="13" class="shrink-0" />
+      <AlertCircle v-if="summary.hasError" :size="13" class="shrink-0" />
       <CircleStop v-else-if="status === 'interrupted'" :size="13" class="shrink-0" />
       <Check v-else :size="13" class="shrink-0" />
       <span class="min-w-0 truncate">{{ summaryLabel }}</span>

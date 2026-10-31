@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
-import type { AgentStep, AgentTurn } from "./chat-turns.ts";
+import type { AgentStep, AgentTurn, ToolStep } from "./chat-turns.ts";
 import {
   cleanUserPrompt,
   deriveChatTurns,
   extractDiffStats,
   formatDuration,
+  formatElapsedSeconds,
   processBodyVisible,
   processSummaryLabel,
+  resolveActiveStatus,
   summarizeProcessState,
   toolStepLabel,
 } from "./chat-turns.ts";
@@ -1211,5 +1213,135 @@ describe("processSummaryLabel", () => {
     expect(
       processSummaryLabel("interrupted", { count: 1, activeStepLabel: undefined, hasError: false }),
     ).toBe("Đã dừng sau 1 bước thực hiện");
+  });
+});
+
+describe("formatElapsedSeconds", () => {
+  test("formats seconds under a minute", () => {
+    expect(formatElapsedSeconds(0)).toBe("0s");
+    expect(formatElapsedSeconds(5)).toBe("5s");
+    expect(formatElapsedSeconds(59)).toBe("59s");
+  });
+
+  test("formats minutes and seconds", () => {
+    expect(formatElapsedSeconds(60)).toBe("1m 0s");
+    expect(formatElapsedSeconds(75)).toBe("1m 15s");
+    expect(formatElapsedSeconds(125)).toBe("2m 5s");
+  });
+});
+
+describe("resolveActiveStatus", () => {
+  test("returns waiting for approval when pendingApprovalCount > 0", () => {
+    const status = resolveActiveStatus([], false, false, 1);
+    expect(status).toEqual({ label: "Đang chờ phê duyệt…" });
+  });
+
+  test("returns running tool details for file operations", () => {
+    const readStep: ToolStep = {
+      kind: "tool",
+      key: "k1",
+      toolCallId: "t1",
+      toolName: "Read",
+      state: "running",
+      filePath: "src/main.ts",
+    };
+    expect(resolveActiveStatus([readStep], false)).toEqual({
+      label: "Đang đọc file…",
+      subDetail: "src/main.ts",
+    });
+
+    const editStep: ToolStep = {
+      kind: "tool",
+      key: "k2",
+      toolCallId: "t2",
+      toolName: "Edit",
+      state: "running",
+      filePath: "src/app.vue",
+    };
+    expect(resolveActiveStatus([editStep], false)).toEqual({
+      label: "Đang sửa file…",
+      subDetail: "src/app.vue",
+    });
+
+    const writeStep: ToolStep = {
+      kind: "tool",
+      key: "k3",
+      toolCallId: "t3",
+      toolName: "Write",
+      state: "running",
+      filePath: "src/new.ts",
+    };
+    expect(resolveActiveStatus([writeStep], false)).toEqual({
+      label: "Đang ghi file…",
+      subDetail: "src/new.ts",
+    });
+  });
+
+  test("returns command detail for running Bash tool", () => {
+    const bashStep: ToolStep = {
+      kind: "tool",
+      key: "k4",
+      toolCallId: "t4",
+      toolName: "Bash",
+      state: "running",
+      command: "bun test",
+    };
+    expect(resolveActiveStatus([bashStep], false)).toEqual({
+      label: "Đang chạy lệnh…",
+      subDetail: "bun test",
+    });
+  });
+
+  test("returns search detail for Grep / Glob tool", () => {
+    const grepStep: ToolStep = {
+      kind: "tool",
+      key: "k5",
+      toolCallId: "t5",
+      toolName: "Grep",
+      state: "running",
+      inputSummary: "pattern: 'export function'",
+    };
+    expect(resolveActiveStatus([grepStep], false)).toEqual({
+      label: "Đang tìm kiếm…",
+      subDetail: "pattern: 'export function'",
+    });
+  });
+
+  test("returns generic tool name for other tools", () => {
+    const webStep: ToolStep = {
+      kind: "tool",
+      key: "k6",
+      toolCallId: "t6",
+      toolName: "WebFetch",
+      state: "running",
+      inputSummary: "https://example.com",
+    };
+    expect(resolveActiveStatus([webStep], false)).toEqual({
+      label: "Đang chạy: WebFetch…",
+      subDetail: "https://example.com",
+    });
+  });
+
+  test("returns thinking when last execution step is thinking", () => {
+    expect(
+      resolveActiveStatus([{ kind: "thinking", key: "th1", text: "Reasoning..." }], false),
+    ).toEqual({
+      label: "Đang suy nghĩ…",
+    });
+  });
+
+  test("returns responding when text has started arriving", () => {
+    expect(resolveActiveStatus([], true, true)).toEqual({
+      label: "Đang trả lời…",
+    });
+  });
+
+  test("defaults to processing when no steps or text yet", () => {
+    expect(resolveActiveStatus([], false, true)).toEqual({
+      label: "Đang xử lý…",
+    });
+    expect(resolveActiveStatus([], false, false)).toEqual({
+      label: "Đang xử lý…",
+    });
   });
 });

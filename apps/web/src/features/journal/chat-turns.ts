@@ -64,6 +64,7 @@ export type AgentTurn = {
   runId?: string;
   status: "running" | "done" | "error" | "interrupted";
   durationText?: string;
+  startedAt?: string;
   steps: AgentStep[];
   text: string;
   isStreaming?: boolean;
@@ -250,6 +251,81 @@ export function processSummaryLabel(
  */
 export function processBodyVisible(isOpen: boolean, executionStepCount: number): boolean {
   return isOpen || executionStepCount === 0;
+}
+
+/**
+ * Format elapsed seconds into compact notation, e.g. "4s" or "1m 15s".
+ */
+export function formatElapsedSeconds(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s < 60) return `${s}s`;
+  const minutes = Math.floor(s / 60);
+  const remainingSeconds = s % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+export type ActiveStatusInfo = {
+  label: string;
+  subDetail?: string;
+};
+
+/**
+ * Resolves the single, unified active status for a running turn (Claude Code CLI style).
+ * Prioritizes:
+ * 1. Pending approvals waiting on the operator
+ * 2. Currently executing tool step with command/path details
+ * 3. In-flight thinking step
+ * 4. Responding / streaming prose
+ * 5. General processing
+ */
+export function resolveActiveStatus(
+  steps: readonly AgentStep[],
+  hasText: boolean,
+  _isStreaming = false,
+  pendingApprovalCount = 0,
+): ActiveStatusInfo {
+  if (pendingApprovalCount > 0) {
+    return { label: "Đang chờ phê duyệt…" };
+  }
+
+  const executionSteps = steps.filter((step) => step.kind !== "approval");
+  const runningTool = executionSteps.findLast(
+    (step): step is ToolStep => step.kind === "tool" && step.state === "running",
+  );
+
+  if (runningTool !== undefined) {
+    const detail =
+      runningTool.filePath ?? runningTool.command ?? runningTool.inputSummary ?? undefined;
+    switch (runningTool.toolName) {
+      case "Edit":
+        return { label: "Đang sửa file…", ...(detail ? { subDetail: detail } : {}) };
+      case "Write":
+        return { label: "Đang ghi file…", ...(detail ? { subDetail: detail } : {}) };
+      case "Read":
+        return { label: "Đang đọc file…", ...(detail ? { subDetail: detail } : {}) };
+      case "Bash":
+        return { label: "Đang chạy lệnh…", ...(detail ? { subDetail: detail } : {}) };
+      case "Grep":
+      case "Glob":
+        return { label: "Đang tìm kiếm…", ...(detail ? { subDetail: detail } : {}) };
+      default:
+        return {
+          label: `Đang chạy: ${runningTool.toolName}…`,
+          ...(detail ? { subDetail: detail } : {}),
+        };
+    }
+  }
+
+  const lastStep = executionSteps[executionSteps.length - 1];
+  if (lastStep?.kind === "thinking") {
+    return { label: "Đang suy nghĩ…" };
+  }
+
+  if (hasText) {
+    return { label: "Đang trả lời…" };
+  }
+
+  return { label: "Đang xử lý…" };
 }
 
 const RUN_TERMINALS: ReadonlySet<string> = new Set([
@@ -746,6 +822,7 @@ export function deriveChatTurns(
         key: `live-${event.runId}`,
         status: "running",
         runId: event.runId,
+        startedAt: event.occurredAt,
         steps: [],
         text: "",
         isStreaming: true,
