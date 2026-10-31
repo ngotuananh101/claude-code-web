@@ -7,17 +7,14 @@ import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { languageForPath, loadLanguage } from "@/features/review/languages.ts";
 import { reviewBaseExtensions } from "@/features/review/theme.ts";
 
-const props = withDefaults(
-  defineProps<{
-    original: string;
-    modelModified?: string;
-    editable: boolean;
-    path?: string;
-  }>(),
-  { modelModified: "", editable: false },
-);
+const props = defineProps<{
+  original: string;
+  modified: string;
+  editable: boolean;
+  path?: string;
+}>();
 const emit = defineEmits<{
-  "update:modelModified": [value: string];
+  "update:modified": [value: string];
 }>();
 
 const host = ref<HTMLElement | null>(null);
@@ -66,7 +63,7 @@ function buildView(): MergeView | null {
       ],
     },
     b: {
-      doc: props.modelModified,
+      doc: props.modified,
       extensions: [
         lineNumbers(),
         keymap.of(defaultKeymap),
@@ -75,7 +72,7 @@ function buildView(): MergeView | null {
         readOnlyCompartment.of(readOnlyExtensions(!props.editable)),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
-            emit("update:modelModified", u.state.doc.toString());
+            emit("update:modified", u.state.doc.toString());
           }
         }),
       ],
@@ -96,7 +93,7 @@ onMounted(() => {
 });
 
 watch(
-  () => props.modelModified,
+  () => props.modified,
   (value) => {
     const current = view.value;
     if (current !== null && value !== current.b.state.doc.toString()) {
