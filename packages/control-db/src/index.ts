@@ -75,6 +75,7 @@ export {
   dueSchedules,
   listActiveSchedules,
   projectScheduleEvent,
+  reopenRejectedSchedule,
   runKnown,
   type ScheduleEventInput,
   type ScheduleRecord,

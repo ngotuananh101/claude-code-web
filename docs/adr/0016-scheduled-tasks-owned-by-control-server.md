@@ -60,5 +60,13 @@ active schedules are injected into the run context, which is future work.
 but the server refuses a frame carrying an unknown type, so server and runner
 must be upgraded together.
 
+A runner can still refuse a dispatched `run.start` (a busy workspace, a
+revoked runner). A rejected command is not a fire: `runKnown` ignores
+`rejected` outbox rows, the dispatcher's rejection callback frees the slot,
+and the server reopens the one-shot row — only when the run id is exactly the
+row's current slot and the journal never saw the run start — so the next tick
+dispatches it again. A recurring row's refused slot stays missed, consistent
+with the no-catch-up rule.
+
 The design adds `cron-parser` as a dependency of `packages/control-db` for
 next-fire computation.

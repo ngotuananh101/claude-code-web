@@ -253,9 +253,13 @@ export function listActiveSchedules(db: Database, sessionId: string): ScheduledT
 
 /**
  * Whether a run id already exists anywhere a dispatch would land: the live
- * slot, the outbox (queued), or the journal (started/finished). The tick
- * consults it with the deterministic run id so a server restart between
- * "dispatch" and "advance" cannot fire the same slot twice.
+ * slot, the outbox, or the journal (started/finished). The tick consults it
+ * with the deterministic run id so a server restart between "dispatch" and
+ * "advance" cannot fire the same slot twice.
+ *
+ * A `rejected` outbox row does not count: the runner refused the command, so
+ * the run never started. Counting it would advance the slot as fired and lose
+ * the fire — the rejection path reopens the row instead (§11.5).
  */
 export function runKnown(db: Database, runId: string): boolean {
   const row = db
@@ -263,13 +267,57 @@ export function runKnown(db: Database, runId: string): boolean {
       `SELECT EXISTS (
          SELECT 1 FROM active_runs WHERE run_id = ?
          UNION ALL
-         SELECT 1 FROM command_outbox WHERE run_id = ?
+         SELECT 1 FROM command_outbox WHERE run_id = ? AND delivery_state <> 'rejected'
          UNION ALL
          SELECT 1 FROM run_events WHERE run_id = ?
        ) AS known`,
     )
     .get(runId, runId, runId) as { known: number };
   return row.known === 1;
+}
+
+/** The `get` half of `CommandOutbox` — enough to read a command's payload. */
+type CommandLookup = { get(commandId: string): { payload: unknown } | undefined };
+
+/**
+ * Put a scheduled one-shot back into `active` after the runner refused its
+ * dispatched run (§11.5).
+ *
+ * The dispatch already advanced the row to `done`, but a rejection means the
+ * run never started, so the slot is unspent — without this, the only fire of
+ * a one-shot disappears silently. The command's payload names the schedule,
+ * and the run id must be exactly the row's current slot: a late rejection for
+ * an older fire, a cancelled row, or a run the journal saw start is not
+ * retried. Only one-shots reopen — a recurring row already moved past its
+ * slot, and the design's no-catch-up rule leaves a refused slot missed.
+ */
+export function reopenRejectedSchedule(
+  db: Database,
+  outbox: CommandLookup,
+  rejection: { commandId: string; runId: string },
+): boolean {
+  const payload = outbox.get(rejection.commandId)?.payload;
+  const scheduleId =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)["scheduleId"]
+      : undefined;
+  if (typeof scheduleId !== "string") return false;
+
+  const row = db
+    .query("SELECT state, next_fire_at FROM scheduled_tasks WHERE schedule_id = ?")
+    .get(scheduleId) as { state: string; next_fire_at: number } | null;
+  if (row === null || row.state !== "done") return false;
+  if (`run_sched_${scheduleId}_${row.next_fire_at}` !== rejection.runId) return false;
+
+  const journaled = db
+    .query("SELECT EXISTS (SELECT 1 FROM run_events WHERE run_id = ?) AS known")
+    .get(rejection.runId) as { known: number };
+  if (journaled.known === 1) return false;
+
+  const result = db
+    .query("UPDATE scheduled_tasks SET state = 'active' WHERE schedule_id = ? AND state = 'done'")
+    .run(scheduleId);
+  return result.changes > 0;
 }
 
 function toTask(row: Record<string, unknown>): ScheduledTask {

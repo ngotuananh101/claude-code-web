@@ -22,6 +22,7 @@ import {
   ingestEvent,
   projectScheduleEvent,
   readSessionEvents,
+  reopenRejectedSchedule,
   Scheduler,
   sessionEarliest,
   sessionOwner,
@@ -303,11 +304,17 @@ export function createServer(options: ServerOptions): ServerHandle {
   });
 
   if (options.outbox) {
+    const outbox = options.outbox;
     dispatcher = new Dispatcher({
-      outbox: options.outbox,
+      outbox,
       gateway: runnerGateway,
       onRejectedStart: (runId, commandId, reason) => {
         scheduler.release(runId);
+        // §11.5: a scheduled one-shot the runner refused never ran. Its slot
+        // is unspent, so put the row back for the next tick instead of losing
+        // the only fire silently. A mark that the run does not belong to a
+        // schedule, or that it already started, reopens nothing.
+        reopenRejectedSchedule(options.db, outbox, { commandId, runId });
         console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
       },
     });

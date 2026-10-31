@@ -1,10 +1,12 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import {
+  CommandOutbox,
   ensureSessionPin,
   migrate,
   projectScheduleEvent,
   type RunnerCapacity,
+  reopenRejectedSchedule,
   Scheduler,
 } from "@cc-web/control-db";
 import { runScheduleTick } from "./schedule-loop.ts";
@@ -398,5 +400,43 @@ describe("runScheduleTick", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.payload).toContain("sched_attempt-healthy_toolu-healthy");
     expect(row(db, "sched_attempt-healthy_toolu-healthy")["state"]).toBe("done");
+  });
+
+  test("a one-shot the runner rejects is retried instead of lost", async () => {
+    const { db, scheduler } = setup();
+    project(db);
+    const tick = () =>
+      runScheduleTick({
+        db,
+        scheduler,
+        runnerGateway: { stateOf: () => "ready" },
+        now: () => NEXT_FIRE,
+        log: () => {},
+      });
+
+    await tick();
+    const first = commands(db);
+    expect(first).toHaveLength(1);
+    expect(row(db)["state"]).toBe("done");
+
+    // The runner refuses the run (the workspace is busy). This is what the
+    // dispatcher does on a rejected receipt: retire the command, free the
+    // slot — and the server reopens the unspent one-shot.
+    const outbox = new CommandOutbox(db);
+    outbox.markRejected(first[0]!.command_id, "workspace_busy");
+    scheduler.release(first[0]!.run_id);
+    expect(
+      reopenRejectedSchedule(db, outbox, {
+        commandId: first[0]!.command_id,
+        runId: first[0]!.run_id,
+      }),
+    ).toBe(true);
+    expect(row(db)["state"]).toBe("active");
+
+    await tick();
+    const retried = commands(db);
+    expect(retried).toHaveLength(2);
+    expect(retried[1]!.run_id).toBe(first[0]!.run_id);
+    expect(row(db)["state"]).toBe("done");
   });
 });

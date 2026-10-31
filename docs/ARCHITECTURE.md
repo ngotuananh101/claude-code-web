@@ -635,9 +635,9 @@ External editor/CLI ngoài hệ thống không chịu locks. Luôn cần hash ch
 Vì vậy lịch thuộc Control Server — nơi đã sở hữu scheduling (§11.3) và có DB bền vững:
 
 - **Nguồn sự thật:** bảng `scheduled_tasks` (SQLite): `schedule_id`, session/owner/workspace/runner, `origin_attempt_id`, `cli_task_id`, `cron`, `timezone`, `recurring`, `prompt`, `next_fire_at`, `state` (`active` / `done` / `cancelled` / `orphaned`), `created_at`, `last_fired_at`.
-- **Mirror event:** Runner đọc structured result của tool rồi gửi `schedule.created` / `schedule.cancelled`; server project vào bảng với `INSERT OR IGNORE` trên `sched_<attemptId>_<toolCallId>`, nên replay hay frame trùng là idempotent. Lịch chỉ được tạo trong hội thoại; web không có UI tạo.
+- **Mirror event:** Runner mirror `CronCreate`/`CronDelete` từ raw SDK frame rồi gửi `schedule.created` / `schedule.cancelled`; `cron` lấy từ tool input (`humanSchedule` chỉ là fallback khi CLI trả lời text), vì server parse chính biểu thức đó. Server project vào bảng với `INSERT OR IGNORE` trên `sched_<attemptId>_<toolCallId>`, nên replay hay frame trùng là idempotent, và chỉ runner sở hữu pin của session mới được tạo/huỷ row. Lịch chỉ được tạo trong hội thoại; web không có UI tạo.
 - **Tick:** `setInterval` 15 giây trong server (khoảng tick injectable cho test); một vòng chạy tuần tự và không chồng lấn. Mỗi row `active` có `next_fire_at <= now` được dispatch như một run bình thường qua `Scheduler.dispatch` — cùng capacity 1/Runner, cùng pin và workspace của session gốc.
-- **Fire:** `runId` cố định theo slot (`run_sched_<schedule_id>_<fire_at>`); `run.started` mang `scheduleId` + `scheduleCron` để web render lượt đó là tác vụ theo lịch. `advance` luôn chạy **sau** `dispatch`: one-shot → `done`; recurring → `next_fire_at` là slot kế tiếp sau slot vừa fire (không catch-up slot lỡ).
+- **Fire:** `runId` cố định theo slot (`run_sched_<schedule_id>_<fire_at>`); `run.started` mang `scheduleId` + `scheduleCron` để web render lượt đó là tác vụ theo lịch. Dispatch thành công thì one-shot sang `done`, recurring sang slot kế tiếp sau slot vừa fire (không catch-up slot lỡ). Nếu runner **từ chối** run đã dispatch (`workspace_busy`, `unknown_workspace`, …), command bị retire và server mở lại one-shot về `active` với nguyên `next_fire_at` để tick sau chạy lại — lần fire duy nhất không mất im lặng; recurring coi slot đó là slot lỡ.
 
 **Chính sách lỗi:**
 
@@ -646,7 +646,8 @@ Vì vậy lịch thuộc Control Server — nơi đã sở hữu scheduling (§1
 | Runner offline/not-ready, session bận, hoặc hết capacity | Row giữ nguyên due, tick sau thử lại; one-shot chạy muộn thay vì mất |
 | Pin mất (session bị xoá) | `state = 'orphaned'` — tombstone, không retry vô hạn |
 | Cron không parse được (dữ liệu cũ/hỏng) | `state = 'cancelled'` + log |
-| Server crash giữa dispatch và advance | `runKnown(runId)` soi `active_runs`, `command_outbox`, `run_events`: slot đã có run thì chỉ advance, không fire lại |
+| Server crash giữa dispatch và advance | `runKnown(runId)` soi `active_runs`, `command_outbox` (bỏ row `rejected`), `run_events`: slot đã có run thì chỉ advance, không fire lại |
+| Runner từ chối run đã dispatch | Command bị retire và `active_runs` được giải phóng; one-shot được mở lại `active` (chỉ khi đúng slot hiện tại và run chưa vào journal), tick sau dispatch lại; recurring để slot đó trôi |
 | Origin attempt còn active tại giờ hẹn | Nhường timer in-process của chính nó; guard duy nhất là `activeRunFor(session).attemptId === origin_attempt_id` |
 
 **Giới hạn đã biết:**

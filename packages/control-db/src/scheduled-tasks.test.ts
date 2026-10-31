@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { CommandOutbox } from "./command-outbox.ts";
 import { migrate } from "./db.ts";
 import {
   advanceSchedule,
@@ -8,6 +9,7 @@ import {
   dueSchedules,
   listActiveSchedules,
   projectScheduleEvent,
+  reopenRejectedSchedule,
   runKnown,
 } from "./scheduled-tasks.ts";
 import { ensureSessionPin } from "./sessions.ts";
@@ -323,5 +325,127 @@ describe("schedule queries", () => {
       Date.now(),
     );
     expect(runKnown(db, "run_journaled")).toBe(true);
+  });
+
+  test("runKnown ignores a command the runner rejected", () => {
+    // A rejected run.start never ran. Counting it as known would advance the
+    // slot as if it fired, which is exactly the silent loss this guards.
+    const db = setup();
+    db.query(
+      "INSERT INTO command_outbox (command_id, runner_id, kind, payload, fingerprint, issued_at, run_id, delivery_state, rejection_reason, rejected_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "cmd-rejected",
+      "runner-a",
+      "run.start",
+      "{}",
+      "fp",
+      "2026-10-31T00:00:00Z",
+      "run_rejected",
+      "rejected",
+      "workspace_busy",
+      Date.now(),
+      Date.now(),
+    );
+    expect(runKnown(db, "run_rejected")).toBe(false);
+  });
+});
+
+describe("reopenRejectedSchedule", () => {
+  const scheduleId = "sched_attempt-1_toolu_1";
+  const slotRunId = "run_sched_sched_attempt-1_toolu_1_1793444280000";
+
+  function rejectedCommand(db: Database, runId = slotRunId) {
+    return new CommandOutbox(db).get(
+      (
+        db
+          .query(
+            `INSERT INTO command_outbox (
+           command_id, runner_id, kind, payload, fingerprint, issued_at,
+           run_id, delivery_state, rejection_reason, rejected_at, created_at
+         ) VALUES ('cmd-1', 'runner-a', 'run.start', ?, 'fp', '2026-10-31T00:00:00Z', ?,
+                   'rejected', 'workspace_busy', ?, ?)
+         RETURNING command_id`,
+          )
+          .get(JSON.stringify({ scheduleId }), runId, Date.now(), Date.now()) as {
+          command_id: string;
+        }
+      ).command_id,
+    )!;
+  }
+
+  test("an unspent one-shot slot goes back to active", () => {
+    const db = setup();
+    projectScheduleEvent(db, created, "runner-a");
+    advanceSchedule(db, scheduleId, { state: "done", lastFiredAt: 1793444280000 });
+    const command = rejectedCommand(db);
+
+    expect(
+      reopenRejectedSchedule(db, new CommandOutbox(db), {
+        commandId: command.commandId,
+        runId: slotRunId,
+      }),
+    ).toBe(true);
+    expect(rows(db)[0]).toMatchObject({ state: "active", next_fire_at: 1793444280000 });
+  });
+
+  test("a run id that is not the row's current slot is not reopened", () => {
+    const db = setup();
+    projectScheduleEvent(db, created, "runner-a");
+    advanceSchedule(db, scheduleId, { state: "done", lastFiredAt: 1793444280000 });
+    const command = rejectedCommand(db, "run_sched_sched_attempt-1_toolu_1_999");
+
+    expect(
+      reopenRejectedSchedule(db, new CommandOutbox(db), {
+        commandId: command.commandId,
+        runId: "run_sched_sched_attempt-1_toolu_1_999",
+      }),
+    ).toBe(false);
+    expect(rows(db)[0]!["state"]).toBe("done");
+  });
+
+  test("a run the journal saw start is not retried", () => {
+    const db = setup();
+    projectScheduleEvent(db, created, "runner-a");
+    advanceSchedule(db, scheduleId, { state: "done", lastFiredAt: 1793444280000 });
+    const command = rejectedCommand(db);
+    db.query(
+      "INSERT INTO run_events (event_id, runner_id, boot_id, session_id, run_id, attempt_id, local_sequence, session_sequence, type, payload, occurred_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "evt-1",
+      "runner-a",
+      "boot-1",
+      "session-1",
+      slotRunId,
+      "attempt-1",
+      1,
+      1,
+      "run.started",
+      "{}",
+      "2026-10-31T00:00:00Z",
+      Date.now(),
+    );
+
+    expect(
+      reopenRejectedSchedule(db, new CommandOutbox(db), {
+        commandId: command.commandId,
+        runId: slotRunId,
+      }),
+    ).toBe(false);
+    expect(rows(db)[0]!["state"]).toBe("done");
+  });
+
+  test("a cancelled row is not reopened", () => {
+    const db = setup();
+    projectScheduleEvent(db, created, "runner-a");
+    advanceSchedule(db, scheduleId, { state: "cancelled" });
+    const command = rejectedCommand(db);
+
+    expect(
+      reopenRejectedSchedule(db, new CommandOutbox(db), {
+        commandId: command.commandId,
+        runId: slotRunId,
+      }),
+    ).toBe(false);
+    expect(rows(db)[0]!["state"]).toBe("cancelled");
   });
 });
