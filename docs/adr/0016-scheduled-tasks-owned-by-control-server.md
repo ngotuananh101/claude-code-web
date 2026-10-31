@@ -29,12 +29,13 @@ would lose the timers anyway.
 ## Decision
 
 The Control Server owns scheduled tasks. The runner mirrors `schedule.created`
-and `schedule.cancelled` events from the CLI's structured tool result; the
-server projects them into the durable `scheduled_tasks` table (SQLite) and,
-every 15 seconds, dispatches each due row as an ordinary `run.start` through
-`Scheduler.dispatch` — same capacity, same session pin, same workspace lock as
-a user-started run. One-shot rows finish after the fire; recurring rows advance
-to the next slot after the one they fired, with no catch-up of missed slots.
+and `schedule.cancelled` events from the raw SDK frames of the `CronCreate` /
+`CronDelete` tool calls and their results; the server projects them into the
+durable `scheduled_tasks` table (SQLite) and, every 15 seconds, dispatches each
+due row as an ordinary `run.start` through `Scheduler.dispatch` — same
+capacity, same session pin, same workspace lock as a user-started run. One-shot
+rows finish after the fire; recurring rows advance to the next slot after the
+one they fired, with no catch-up of missed slots.
 
 Two guards keep one slot from firing twice. The server yields to the origin
 attempt's own in-process timer while that attempt is still active, so a

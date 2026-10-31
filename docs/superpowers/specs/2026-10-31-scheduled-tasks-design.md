@@ -367,3 +367,40 @@ Không còn câu hỏi chặn triển khai. Các điểm có thể đổi ý (gh
 
 - Có cần UI tạo/sửa lịch thủ công ngoài hội thoại không (hiện là non-goal)?
 - Có cần thông báo khi một lịch bị bỏ lỡ hẳn (runner offline quá lâu) không (hiện chỉ retry)?
+
+---
+
+## 12. Deviations from this spec (with reasons)
+
+Ghi trong cùng đợt triển khai 2026-10-31; ledger của plan đã bị xoá, nên các
+quyết định dưới đây sống ở đây.
+
+1. **`schedule_id` tất định thay cho uuid.** Spec §5.3 đặt
+   `schedule_id = sched_<uuid>`; bản triển khai dùng
+   `sched_<attemptId>_<toolCallId>`. Lý do: projection chạy at-least-once
+   (event có thể được giao lại) và `cliTaskId` có thể vắng khi CLI trả lời
+   text; chỉ id tất định mới làm `INSERT OR IGNORE` idempotent trong mọi
+   trường hợp. Partial unique index trên `(origin_attempt_id, cli_task_id)`
+   vẫn giữ nguyên để chặn trùng khi có `cliTaskId`.
+2. **Cancel có chủ sở hữu.** `cancelSchedule(db, id)` của spec trở thành
+   `cancelScheduleForOwner(db, id, ownerId)`: route HTTP là owner-scoped, và
+   một `schedule_id` đơn thuần không được phép huỷ bởi người dùng khác.
+3. **`cron` lấy từ tool input.** Spec §5.1/§5.2 ưu tiên `humanSchedule` của
+   structured result; bản triển khai ưu tiên biểu thức trong tool input và
+   chỉ fallback sang `humanSchedule` khi CLI trả lời dạng text. Lý do: server
+   parse chính chuỗi đó để tính mọi lần fire; `humanSchedule` là display text
+   ("Every minute") mà cron-parser không đọc được — probe cho thấy lịch
+   recurring bị cancel sau lần fire đầu (6c814c1).
+4. **Advance sau dispatch, mở lại khi bị từ chối.** §5.4 chốt advance sau
+   dispatch thành công. Thực tế runner còn có thể từ chối command đã queued
+   (`workspace_busy`, …); khi đó command bị retire, `runKnown` bỏ qua row
+   `rejected`, và one-shot được mở lại `active` với nguyên `next_fire_at`
+   (chỉ khi đúng slot hiện tại và run chưa vào journal). Recurring giữ
+   no-catch-up: slot bị từ chối coi như slot lỡ.
+5. **Tick phân trang bằng keyset.** Spec không chốt cách lấy row due; bản
+   triển khai dùng con trỏ `(next_fire_at, schedule_id)` thay vì `LIMIT` cố
+   định, vì row bị từ chối giữ nguyên `next_fire_at` sẽ chiếm hết trang và
+   làm đói mọi lịch phía sau.
+6. **Prompt quá giới hạn được cắt bớt, không bị bỏ.** Wire contract từ chối
+   prompt dài hơn 4000 ký tự. Runner cắt còn 4000 ký tự kèm marker
+   "…[truncated by cc-web]" thay vì để server drop cả lịch trong im lặng.

@@ -22,9 +22,11 @@ export const SCHEDULE_PROMPT_MAX = 4000;
 /**
  * `schedule.created`: a schedule the agent asked the CLI to create.
  *
- * `cron` prefers the CLI's structured `humanSchedule` over the tool input;
- * `cliTaskId` and `nextFireAt` come from the structured tool result and may be
- * absent when the CLI answered in plain text.
+ * `cron` is the expression from the tool input: the server recomputes every
+ * fire from it, and the structured `humanSchedule` is display text ("Every
+ * minute") that cron-parser cannot read — it is only a fallback for a CLI
+ * that answered in plain text. `cliTaskId` and `nextFireAt` come from the
+ * structured tool result and may be absent in the same fallback case.
  */
 export type ScheduleCreatedPayload = {
   toolCallId: string;
