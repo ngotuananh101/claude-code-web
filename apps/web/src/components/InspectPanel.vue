@@ -6,6 +6,7 @@ import type {
   GitChangesResult,
   GitDiffResult,
   ScheduledTask,
+  SnapshotEntry,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -14,7 +15,9 @@ import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
-import { resolveIncoming } from "../features/review/review-state";
+import { defaultDiffMode, isReviewed, reviewKey } from "../features/review/review-state";
+import type { ParsedUnifiedDiff } from "../features/review/unified-diff";
+import { parseUnifiedDiff } from "../features/review/unified-diff";
 import { toScheduleRow } from "../features/schedules/schedule-rows";
 import {
   compositeId,
@@ -107,6 +110,60 @@ const diffPath = ref<string | null>(null);
 const diffError = ref<string | null>(null);
 const diffLoading = ref(false);
 
+// Changes — review merge-view state (P3-D)
+const diffParsed = ref<ParsedUnifiedDiff | null>(null);
+const diffRead = ref<FileReadResult | null>(null); // authoritative working side
+const diffModified = ref<string>(""); // merged document the reviewer settles on
+const diffModeOverride = ref<"unified" | "split" | null>(null);
+const diffWidth = ref(0);
+const reviewed = ref<Set<string>>(new Set());
+const reviewConfirmRevert = ref(false);
+const reviewSnapshotEntry = ref<SnapshotEntry | null>(null);
+const diffSaving = ref(false);
+const diffSaveError = ref<string | null>(null);
+
+// Lazy-loaded merge-view components (P3-D)
+const UnifiedDiff = defineAsyncComponent(() => import("./review/UnifiedDiff.vue"));
+const SplitDiff = defineAsyncComponent(() => import("./review/SplitDiff.vue"));
+const ReviewToolbar = defineAsyncComponent(() => import("./review/ReviewToolbar.vue"));
+
+// Layout measurement for the diff mode auto-select (P3-D)
+const diffContainer = ref<HTMLElement | null>(null);
+let diffResizeObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  if (typeof ResizeObserver !== "undefined") {
+    diffResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        if (cr.width > 0) diffWidth.value = cr.width;
+      }
+    });
+  }
+});
+
+// Attach/detach the ResizeObserver on the diff container only when the
+// merge-view branch renders (diffParsed !== null). Guard null refs.
+watch(
+  () => diffParsed.value,
+  (parsed) => {
+    if (diffResizeObserver === null) return;
+    if (parsed !== null && diffContainer.value !== null) {
+      diffResizeObserver.observe(diffContainer.value);
+    } else {
+      diffResizeObserver.disconnect();
+    }
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (diffResizeObserver !== null) {
+    diffResizeObserver.disconnect();
+    diffResizeObserver = null;
+  }
+});
+
 // Changes — snapshot source (P3-B baseline)
 const source = ref<"git" | "snapshot">("snapshot");
 const snapshotStatus = ref<SnapshotStatusResult | null>(null);
@@ -174,6 +231,42 @@ const changeEntries = computed(() => {
 const diffLines = computed(() => {
   const text = diff.value?.diff;
   return typeof text === "string" ? classifyDiffLines(text) : [];
+});
+
+// Diff review merge-view computeds (P3-D)
+const diffEditable = computed(() => {
+  const read = diffRead.value;
+  return read !== null && !read.binary && !read.truncated && read.content !== null;
+});
+
+const diffDirty = computed(() => {
+  const read = diffRead.value;
+  return read !== null && read.content !== null && read.content !== diffModified.value;
+});
+
+const diffMode = computed(() => diffModeOverride.value ?? defaultDiffMode(diffWidth.value));
+
+const isDiffReviewed = computed(() => {
+  if (diffPath.value === null || diffRead.value === null) return false;
+  return isReviewed(reviewed.value, diffPath.value, diffRead.value.hash);
+});
+
+const diffReviewKey = computed(() => {
+  if (diffPath.value === null || diffRead.value === null) return null;
+  return reviewKey(diffPath.value, diffRead.value.hash);
+});
+
+const canRevertDiff = computed(() => {
+  const entry = reviewSnapshotEntry.value;
+  return entry !== null && entry.revertable === true;
+});
+
+const revertHintText = computed(() => {
+  const entry = reviewSnapshotEntry.value;
+  if (entry !== null && entry.currentHash !== null) {
+    return `Khôi phục tệp về bản chụp lúc bắt đầu chạy (hash ${entry.currentHash.slice(0, 8)}).`;
+  }
+  return "Khôi phục tệp về bản chụp lúc bắt đầu chạy.";
 });
 
 const scheduleRows = computed(() => {
@@ -349,17 +442,145 @@ async function openDiff(path: string): Promise<void> {
   const current = ++epoch;
   diffLoading.value = true;
   diffError.value = null;
-  const outcome = await fetchDiff(id, path);
+
+  // Concurrent: fetch the diff and the file read in parallel.
+  const [diffOutcome, readOutcome] = await Promise.all([fetchDiff(id, path), readFile(id, path)]);
+
   if (current !== epoch) return;
   diffLoading.value = false;
-  if (!outcome.ok) {
-    // The changes list stays; only the diff failed, and the operator can pick
-    // another file without losing the list they were reading.
-    diffError.value = outcome.message;
+
+  // Diff fetch failed — keep the changes list, operator can pick another file.
+  if (!diffOutcome.ok) {
+    diffError.value = diffOutcome.message;
     return;
   }
-  diff.value = outcome.value;
+
+  diff.value = diffOutcome.value;
   diffPath.value = path;
+
+  // Parse the unified diff into full documents. A null result means the diff
+  // is truncated, binary, multi-file, or malformed — fall back to classifyDiffLines.
+  diffParsed.value = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
+
+  // Authoritative working side: the file read as it stands on the runner.
+  diffRead.value = readOutcome.ok ? readOutcome.value : null;
+
+  // The merge document starts from the read content when it is text and
+  // untruncated; otherwise the parsed modified side (read-only).
+  if (
+    diffRead.value !== null &&
+    !diffRead.value.binary &&
+    !diffRead.value.truncated &&
+    diffRead.value.content !== null
+  ) {
+    diffModified.value = diffRead.value.content;
+  } else if (diffParsed.value !== null) {
+    diffModified.value = diffParsed.value.modified;
+  } else {
+    diffModified.value = "";
+  }
+
+  // Review state resets for the newly opened diff.
+  reviewConfirmRevert.value = false;
+  diffSaveError.value = null;
+  reviewed.value = new Set();
+
+  // Lazily fetch snapshot status so we can know the revertable entry for this
+  // path. Failure leaves reviewSnapshotEntry null and Revert disabled.
+  const snapshotOutcome = await fetchSnapshotStatus(id);
+  if (current !== epoch) return;
+  if (!snapshotOutcome.ok) {
+    reviewSnapshotEntry.value = null;
+    return;
+  }
+
+  const status = snapshotOutcome.value;
+  if (status.baseline === null) {
+    reviewSnapshotEntry.value = null;
+    return;
+  }
+
+  // Find the snapshot entry for this path.
+  const entry = status.entries.find((e) => e.path === path);
+  reviewSnapshotEntry.value = entry ?? null;
+}
+
+function toggleReviewed(): void {
+  const key = diffReviewKey.value;
+  if (key === null) return;
+  const next = new Set(reviewed.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  reviewed.value = next;
+}
+
+async function saveDiff(): Promise<void> {
+  // Guard: need all the pieces to perform a write.
+  if (diffRead.value === null || diffPath.value === null || workspace.value === null) return;
+
+  const current = ++epoch;
+  diffSaving.value = true;
+  diffSaveError.value = null;
+
+  const path = diffPath.value;
+  const content = diffModified.value;
+  const expectedHash = diffRead.value.hash;
+
+  const outcome = await writeFile(workspace.value, path, content, expectedHash);
+  if (current !== epoch) return;
+  diffSaving.value = false;
+
+  if (!outcome.ok) {
+    diffSaveError.value = outcome.message;
+    return;
+  }
+
+  // Success: mark reviewed under the new hash, then refresh the change list.
+  reviewed.value = new Set([...reviewed.value, reviewKey(path, outcome.value.hash)]);
+
+  await loadChanges();
+
+  // Re-open the diff ONLY if the refreshed change list still contains the path.
+  // If the saved content now matches HEAD, the change is gone and we clear the
+  // diff state instead of letting openDiff 404.
+  const stillPresent = changes.value?.entries.some((e) => e.path === path) ?? false;
+  if (stillPresent) {
+    void openDiff(path);
+  } else {
+    diff.value = null;
+    diffPath.value = null;
+    diffParsed.value = null;
+    diffRead.value = null;
+    diffModified.value = "";
+  }
+}
+
+async function revertDiff(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  if (diffPath.value === null) return;
+  const entry = reviewSnapshotEntry.value;
+  if (entry === null) return;
+
+  const current = ++epoch;
+  reviewConfirmRevert.value = false;
+
+  const outcome = await revertFile(id, diffPath.value, entry.currentHash);
+  if (current !== epoch) return;
+
+  if (!outcome.ok) {
+    diffSaveError.value = outcome.message;
+    return;
+  }
+
+  // Refresh the snapshot status and the git changes, then re-open the diff
+  // against the post-revert baseline.
+  void loadSnapshot();
+  if (source.value === "git") void loadChanges();
+  void openDiff(diffPath.value);
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -550,6 +771,17 @@ watch(
     diffPath.value = null;
     diffError.value = null;
     diffLoading.value = false;
+    diffParsed.value = null;
+    diffRead.value = null;
+    diffModified.value = "";
+    diffModeOverride.value = null;
+    diffWidth.value = 0;
+    reviewed.value = new Set();
+    reviewConfirmRevert.value = false;
+    reviewSnapshotEntry.value = null;
+    diffSaving.value = false;
+    diffSaveError.value = null;
+    if (diffResizeObserver !== null) diffResizeObserver.disconnect();
     snapshotStatus.value = null;
     snapshotError.value = null;
     snapshotLoading.value = false;
@@ -826,9 +1058,45 @@ watch(tab, (next) => {
 
           <template v-else-if="diff !== null">
             <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
-              <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="diffPath ?? ''">
-                {{ diffPath }}
-              </span>
+              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                <span class="min-w-0 truncate text-muted-foreground" :title="diffPath ?? ''">
+                  {{ diffPath }}
+                </span>
+                <!-- Mode toggle -->
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
+                  :class="
+                    diffMode === 'unified'
+                      ? 'bg-primary/10 text-primary'
+                      : 'hover:text-foreground'
+                  "
+                  :disabled="diffModeOverride.value !== null"
+                  @click="diffModeOverride.value = 'unified'"
+                >
+                  Một cột
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
+                  :class="
+                    diffMode === 'split'
+                      ? 'bg-primary/10 text-primary'
+                      : 'hover:text-foreground'
+                  "
+                  :disabled="diffModeOverride.value !== null"
+                  @click="diffModeOverride.value = 'split'"
+                >
+                  Hai cột
+                </button>
+                <!-- Reviewed badge -->
+                <span
+                  v-if="isDiffReviewed"
+                  class="shrink-0 text-emerald-600 dark:text-emerald-400"
+                >
+                  đã duyệt
+                </span>
+              </div>
               <button
                 type="button"
                 class="shrink-0 text-primary hover:underline"
@@ -837,13 +1105,36 @@ watch(tab, (next) => {
                 đóng
               </button>
             </div>
+
             <p
               v-if="diff.truncated"
               class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
             >
               Diff đã được rút gọn.
             </p>
-            <pre class="overflow-x-auto whitespace-pre rounded-md bg-background/60 p-2"><code>
+
+            <!-- Merge view when the diff parsed into full documents -->
+            <div
+              v-if="diffParsed !== null"
+              ref="diffContainer"
+              class="relative"
+            >
+              <component
+                :is="diffMode === 'split' ? SplitDiff : UnifiedDiff"
+                :original="diffParsed.original"
+                :modified="diffModified"
+                :editable="diffEditable"
+                :path="diffPath ?? undefined"
+                @update:modified="diffModified = $event"
+              />
+            </div>
+
+            <!-- Fallback: classifyDiffLines <pre> with a notice -->
+            <div v-else>
+              <p class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground">
+                Không dựng được chế độ so sánh cho tệp này — hiển thị diff dạng văn bản.
+              </p>
+              <pre class="overflow-x-auto whitespace-pre rounded-md bg-background/60 p-2"><code>
 <span
   v-for="(line, index) in diffLines"
   :key="index"
@@ -854,7 +1145,55 @@ watch(tab, (next) => {
   }"
 >{{ line.text }}
 </span></code></pre>
-            <p v-if="diffLines.length === 0" class="text-muted-foreground">Không có diff.</p>
+              <p v-if="diffLines.length === 0" class="text-muted-foreground">Không có diff.</p>
+            </div>
+
+            <!-- Review toolbar -->
+            <ReviewToolbar
+              v-if="diffParsed !== null"
+              :reviewed="isDiffReviewed"
+              :can-save="diffEditable && diffDirty"
+              :can-revert="canRevertDiff"
+              :saving="diffSaving"
+              :dirty="diffDirty"
+              :revert-hint="revertHintText"
+              @toggle-reviewed="toggleReviewed"
+              @save="saveDiff"
+              @revert="reviewConfirmRevert = true"
+            />
+
+            <!-- Save error -->
+            <p
+              v-if="diffSaveError !== null"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-destructive"
+            >
+              {{ diffSaveError }}
+            </p>
+
+            <!-- Inline revert confirm -->
+            <div
+              v-if="reviewConfirmRevert && diffParsed !== null"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-foreground"
+            >
+              <p class="mb-1">Khôi phục về bản chụp lúc bắt đầu chạy?</p>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="shrink-0 text-primary hover:underline"
+                  @click="reviewConfirmRevert = false"
+                >
+                  Huỷ
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md bg-destructive px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50"
+                  :disabled="diffSaving"
+                  @click="revertDiff"
+                >
+                  Xác nhận
+                </button>
+              </div>
+            </div>
           </template>
 
           <template v-else-if="changes !== null">
