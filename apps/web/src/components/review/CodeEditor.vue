@@ -10,6 +10,7 @@ const props = defineProps<{
   modelValue: string;
   path?: string;
   readOnly?: boolean;
+  minHeight?: string;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: string];
@@ -106,6 +107,8 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="host"
-    class="min-h-[12rem] overflow-auto rounded-md border border-border/60 bg-background/60"
+    :class="minHeight ? undefined : 'min-h-[12rem]'"
+    :style="minHeight ? { minHeight } : undefined"
+    class="overflow-auto rounded-md border border-border/60 bg-background/60"
   />
 </template>
