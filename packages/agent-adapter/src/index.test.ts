@@ -161,6 +161,88 @@ describe("mapping a run to SDK options", () => {
   });
 });
 
+describe("env and settings overlays (P3-C profiles)", () => {
+  test("injects env overlay while spreading process.env and passes settings overlay", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const fakeQuery = ((params: { options?: Record<string, unknown> }) => {
+      capturedOptions = params.options;
+      return (async function* () {})();
+    }) as unknown as QueryFn;
+
+    const stream = createSdkStream(
+      {
+        prompt: "test",
+        cwd: "/tmp",
+        env: { ANTHROPIC_BASE_URL: "http://192.168.2.3:20128", CUSTOM_VAR: "custom" },
+        settings: { effortLevel: "high" },
+      },
+      () => fakeQuery,
+    );
+
+    for await (const _ of stream) {
+    }
+
+    expect(capturedOptions?.["env"]).toBeDefined();
+    const env = capturedOptions?.["env"] as Record<string, string>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(env["CUSTOM_VAR"]).toBe("custom");
+    expect(env["PATH"]).toBeDefined(); // Process env was spread
+
+    expect(capturedOptions?.["settings"]).toMatchObject({ effortLevel: "high" });
+  });
+
+  test("merges settings with any existing settings rather than replacing", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const fakeQuery = ((params: { options?: Record<string, unknown> }) => {
+      capturedOptions = params.options;
+      return (async function* () {})();
+    }) as unknown as QueryFn;
+
+    const stream = createSdkStream(
+      {
+        prompt: "test",
+        cwd: "/tmp",
+        ultracode: true,
+        settings: { effortLevel: "high" },
+      },
+      () => fakeQuery,
+    );
+
+    for await (const _ of stream) {
+    }
+
+    // §5.2: ultracode rides settings, and the settings overlay merges into it
+    expect(capturedOptions?.["settings"]).toMatchObject({
+      ultracode: true,
+      effortLevel: "high",
+    });
+  });
+
+  test("preserves process.env keys that the overlay does not override", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const fakeQuery = ((params: { options?: Record<string, unknown> }) => {
+      capturedOptions = params.options;
+      return (async function* () {})();
+    }) as unknown as QueryFn;
+
+    const stream = createSdkStream(
+      {
+        prompt: "test",
+        cwd: "/tmp",
+        env: { OVERRIDE_ME: "overlay" },
+      },
+      () => fakeQuery,
+    );
+
+    for await (const _ of stream) {
+    }
+
+    const env = capturedOptions?.["env"] as Record<string, string>;
+    expect(env["OVERRIDE_ME"]).toBe("overlay");
+    expect(env["HOME"]).toBeDefined();
+  });
+});
+
 describe("the lazy import", () => {
   test("does not load the SDK until the stream is consumed", () => {
     // An eager import would make every runner test load the bundled binary

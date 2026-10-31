@@ -15,7 +15,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { AttachmentInfo, RunnerAttachmentItem } from "@cc-web/protocol";
+import type { AttachmentInfo, RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
 import {
   appendEvent,
   finishAttempt,
@@ -52,6 +52,10 @@ export type SdkOptions = {
     input: unknown,
     options: { signal: AbortSignal },
   ) => Promise<ApprovalOutcome>;
+  /** P3-C: profile env overlay forwarded to the agent-adapter (§4.4). */
+  env?: Record<string, string | undefined>;
+  /** P3-C: profile settings overlay forwarded to the agent-adapter (§4.4). */
+  settings?: Record<string, unknown>;
 };
 
 export type RunInput = {
@@ -226,6 +230,24 @@ export async function executeRun(
     typeof record?.["scheduleCron"] === "string" && record["scheduleCron"] !== ""
       ? record["scheduleCron"]
       : undefined;
+
+  // P3-C: profile extraction. The run.start payload may carry a `profile` object
+  // that tells this run which upstream endpoint, API key, and model remappings to
+  // use — applied strictly per session, never polluting the daemon's host env.
+  const rawProfile = record?.["profile"];
+  let profile: RunProfilePayload | undefined;
+  if (rawProfile !== undefined) {
+    // Imported lazily: parseRunProfilePayload validates the untrusted wire shape.
+    const { parseRunProfilePayload } = await import("@cc-web/protocol");
+    profile = parseRunProfilePayload(rawProfile);
+    if (profile === undefined) {
+      // A malformed profile is treated as "no profile" — the run proceeds with
+      // the host's native configuration rather than failing the entire attempt.
+      // This matches §3.2: "If a session does not select a profile, it defaults
+      // to the runner's native host configuration."
+      profile = undefined;
+    }
+  }
 
   // Attachment items from the run.start payload (§attachments). Parsed defensively:
   // the payload is unknown until the protocol parser validates each item.
@@ -472,6 +494,47 @@ export async function executeRun(
     // One normalizer per run: its closure is the stream's correlation state.
     const normalize = createStreamNormalizer();
 
+    // P3-C: construct the ephemeral env and settings overlays from the profile.
+    // These are passed through to the agent-adapter, which spreads process.env
+    // under input.env and merges input.settings into options.settings. This
+    // keeps credentials and mapping vars strictly per-session — the daemon's host
+    // env is never mutated (§5, §19.4).
+    let profileEnv: Record<string, string | undefined> | undefined;
+    let profileSettings: Record<string, unknown> | undefined;
+    if (profile !== undefined) {
+      const env: Record<string, string | undefined> = {
+        ANTHROPIC_BASE_URL: profile.endpoint,
+      };
+      if (profile.apiKey !== undefined) {
+        env[profile.authField] = profile.apiKey;
+      }
+      // §4.2: model role -> env var mapping, only for roles the profile defines.
+      const mapping = profile.modelMapping;
+      if (mapping !== undefined) {
+        if (mapping.sonnet !== undefined) env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = mapping.sonnet;
+        if (mapping.opus !== undefined) env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = mapping.opus;
+        if (mapping.haiku !== undefined) env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = mapping.haiku;
+        if (mapping.fable !== undefined) env["ANTHROPIC_DEFAULT_FABLE_MODEL"] = mapping.fable;
+        if (mapping.subagent !== undefined) env["CLAUDE_CODE_SUBAGENT_MODEL"] = mapping.subagent;
+      }
+      // §4.2: any extra env vars declared in profile.settings.env are merged in.
+      const settingsEnv = profile.settings?.["env"];
+      if (typeof settingsEnv === "object" && settingsEnv !== null && !Array.isArray(settingsEnv)) {
+        for (const [key, value] of Object.entries(settingsEnv)) {
+          if (typeof value === "string") {
+            env[key] = value;
+          }
+        }
+      }
+      profileEnv = env;
+
+      // §4.2: profile settings overlay (beyond env) passed to the adapter for merge.
+      const { env: _, ...restSettings } = profile.settings ?? {};
+      if (Object.keys(restSettings).length > 0) {
+        profileSettings = restSettings;
+      }
+    }
+
     // Building the stream is inside the guard for the same reason: loading the
     // SDK or resolving an option can fail before there is anything to iterate.
     const stream = options.sdk({
@@ -484,6 +547,9 @@ export async function executeRun(
       ...(effort === undefined ? {} : { effort }),
       ...(ultracode === undefined ? {} : { ultracode }),
       ...(canUseTool === undefined ? {} : { canUseTool }),
+      // P3-C: profile overlays, omitted entirely when no profile was selected.
+      ...(profileEnv === undefined ? {} : { env: profileEnv }),
+      ...(profileSettings === undefined ? {} : { settings: profileSettings }),
     });
 
     // §11.5: the schedule mirror correlates tool_use and tool_result frames, so

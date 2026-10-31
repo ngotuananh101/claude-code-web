@@ -35,6 +35,16 @@ export type SdkStreamInput = {
   /** The standing ultracode mode (§5.2); absent leaves the SDK's default. */
   ultracode?: boolean;
   /**
+   * Environment variables to inject into the SDK's child process (P3-C profiles).
+   * The adapter spreads `process.env` first so the host's environment is inherited.
+   */
+  env?: Record<string, string | undefined>;
+  /**
+   * Extra Claude Code settings to merge into the SDK's options (P3-C profiles).
+   * Merged with any existing `options.settings` (e.g. from `ultracode`).
+   */
+  settings?: Record<string, unknown>;
+  /**
    * The approval gate (§13). Present means the runner wants to be asked;
    * absent leaves the SDK's own permission flow untouched.
    */
@@ -96,6 +106,21 @@ export function createSdkStream(
   // setting one must never imply the other, which is exactly the SDK's rule.
   if (input.effort !== undefined) options["effort"] = input.effort;
   if (input.ultracode !== undefined) options["settings"] = { ultracode: input.ultracode };
+  // P3-C: profile env overlay — spread process.env so the child inherits the host
+  // environment, then layer the profile's overrides on top. The SDK replaces the
+  // subprocess env when `options.env` is set, so without spreading process.env the
+  // child would lose PATH, HOME, etc.
+  if (input.env !== undefined) {
+    options["env"] = { ...process.env, ...input.env };
+  }
+  // P3-C: profile settings overlay — merge into any existing settings (e.g. ultracode)
+  // rather than replacing, so both a session flag and profile settings travel together.
+  if (input.settings !== undefined) {
+    options["settings"] = {
+      ...(options["settings"] as Record<string, unknown> | undefined),
+      ...input.settings,
+    };
+  }
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
   // §20.3: unlike the options above there is no "inherit" to preserve — the
   // SDK's own resolution cannot find the CLI inside a compiled binary — so the

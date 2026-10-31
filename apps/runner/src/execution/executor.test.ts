@@ -2259,3 +2259,405 @@ describe("scheduled runs (§11.5)", () => {
     expect(JSON.parse(started!.payload)).not.toHaveProperty("scheduleCron");
   });
 });
+
+describe("P3-C profile injection", () => {
+  test("a payload with a profile populates SDK env with endpoint, auth key, and model mappings", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithProfile = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_123",
+          name: "9Router",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-test-key-123",
+          modelMapping: {
+            sonnet: "prime",
+            opus: "titan",
+            haiku: "nano",
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithProfile, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    expect(seen?.env).toBeDefined();
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBe("sk-test-key-123");
+    expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
+    expect(env["ANTHROPIC_DEFAULT_SONNET_MODEL"]).toBe("prime");
+    expect(env["ANTHROPIC_DEFAULT_OPUS_MODEL"]).toBe("titan");
+    expect(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]).toBe("nano");
+    expect(env["ANTHROPIC_DEFAULT_FABLE_MODEL"]).toBeUndefined();
+    expect(env["CLAUDE_CODE_SUBAGENT_MODEL"]).toBeUndefined();
+  });
+
+  test("a profile with ANTHROPIC_API_KEY auth field sets the correct env var", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithApiKeyToken = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_456",
+          name: "Official Anthropic",
+          endpoint: "https://api.anthropic.com",
+          authField: "ANTHROPIC_API_KEY",
+          apiKey: "sk-ant-api03-real",
+          modelMapping: {
+            sonnet: "claude-4-sonnet",
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithApiKeyToken, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("https://api.anthropic.com");
+    expect(env["ANTHROPIC_API_KEY"]).toBe("sk-ant-api03-real");
+    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBeUndefined();
+    expect(env["ANTHROPIC_DEFAULT_SONNET_MODEL"]).toBe("claude-4-sonnet");
+  });
+
+  test("a profile with all five model roles maps every env var", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithFullMapping = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_789",
+          name: "Full Map",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-key",
+          modelMapping: {
+            sonnet: "prime",
+            opus: "titan",
+            haiku: "nano",
+            fable: "fable-model",
+            subagent: "sub-agent",
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithFullMapping, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_DEFAULT_SONNET_MODEL"]).toBe("prime");
+    expect(env["ANTHROPIC_DEFAULT_OPUS_MODEL"]).toBe("titan");
+    expect(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]).toBe("nano");
+    expect(env["ANTHROPIC_DEFAULT_FABLE_MODEL"]).toBe("fable-model");
+    expect(env["CLAUDE_CODE_SUBAGENT_MODEL"]).toBe("sub-agent");
+  });
+
+  test("a profile with no apiKey does not set an auth env var", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandNoKey = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_nok",
+          name: "No Key Profile",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+        },
+      },
+    };
+
+    await executeRun(db, commandNoKey, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBeUndefined();
+    expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
+  });
+
+  test("a profile with settings.env merges extra env vars", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithSettingsEnv = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_env",
+          name: "Env Extra",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-test",
+          modelMapping: { sonnet: "prime" },
+          settings: {
+            env: {
+              CUSTOM_PROVIDER_HEADER: "x-custom",
+              ANTHROPIC_MAX_TOKENS: "4096",
+            },
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithSettingsEnv, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBe("sk-test");
+    expect(env["ANTHROPIC_DEFAULT_SONNET_MODEL"]).toBe("prime");
+    expect(env["CUSTOM_PROVIDER_HEADER"]).toBe("x-custom");
+    expect(env["ANTHROPIC_MAX_TOKENS"]).toBe("4096");
+  });
+
+  test("a profile with non-env settings passes them as the settings overlay", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithSettings = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_set",
+          name: "Settings Profile",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-test",
+          settings: {
+            effortLevel: "high",
+            maxTokens: 8192,
+            permissions: {
+              read: true,
+            },
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithSettings, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    expect(seen?.settings).toMatchObject({
+      effortLevel: "high",
+      maxTokens: 8192,
+      permissions: { read: true },
+    });
+    // env should still be set with endpoint and auth
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBe("sk-test");
+  });
+
+  test("a payload without a profile passes no env or settings overlays", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    await executeRun(db, COMMAND, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    expect(seen?.env).toBeUndefined();
+    expect(seen?.settings).toBeUndefined();
+  });
+
+  test("a malformed profile falls back to native host configuration", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandBadProfile = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: 123, // not a string
+          name: "bad",
+          endpoint: "not-a-url",
+          authField: "INVALID",
+        },
+      },
+    };
+
+    await executeRun(db, commandBadProfile, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    // Malformed profile → treated as absent → host config preserved.
+    expect(seen?.env).toBeUndefined();
+    expect(seen?.settings).toBeUndefined();
+  });
+
+  test("profile env is passed through to the SDK seam for the child query", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    const commandWithProfile = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_seam",
+          name: "Seam Test",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-seam",
+        },
+      },
+    };
+
+    await executeRun(db, commandWithProfile, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    // The run still completes normally — the profile injection does not break the lifecycle.
+    const terminal = events(db).find((e) => e.type === "run.finished" || e.type === "run.failed");
+    expect(terminal?.type).toBe("run.finished");
+  });
+});
