@@ -51,6 +51,13 @@ import {
   readCookie,
 } from "./routes/auth-routes.ts";
 import { handleBrowse, handleRegisterWorkspace } from "./routes/browse-routes.ts";
+import {
+  handleCreateProfile,
+  handleDeleteProfile,
+  handleGetProfile,
+  handleListProfiles,
+  handleUpdateProfile,
+} from "./routes/config-routes.ts";
 import { handleInspect } from "./routes/inspect-routes.ts";
 import { handleMe } from "./routes/me-routes.ts";
 import {
@@ -532,6 +539,53 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/me" && request.method === "GET") {
         return handleMe(request, options, allowed, browserGateway);
+      }
+
+      // Profiles management (§17.1, §18.1, P3-C). Owner-scoped CRUD over
+      // /api/config/profiles[/:id]. Auth seam: Origin allowlist, then session
+      // cookie — identical to every browser route. The handlers trust the
+      // resolved owner rather than re-authenticating.
+      const profileIdMatch = url.pathname.match(/^\/api\/config\/profiles\/([^/]+)$/);
+      if (url.pathname === "/api/config/profiles") {
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowed.has(origin)) {
+          return new Response("forbidden", { status: 403 });
+        }
+        const authorized = await browserGateway.authorize({
+          origin: origin ?? undefined,
+          cookie: request.headers.get("cookie") ?? undefined,
+        });
+        if (!authorized.ok) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (request.method === "GET") {
+          return handleListProfiles(request, { db: options.db }, authorized);
+        }
+        if (request.method === "POST") {
+          return handleCreateProfile(request, { db: options.db }, authorized);
+        }
+      }
+      if (profileIdMatch) {
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowed.has(origin)) {
+          return new Response("forbidden", { status: 403 });
+        }
+        const authorized = await browserGateway.authorize({
+          origin: origin ?? undefined,
+          cookie: request.headers.get("cookie") ?? undefined,
+        });
+        if (!authorized.ok) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (request.method === "GET") {
+          return handleGetProfile(request, { db: options.db }, authorized);
+        }
+        if (request.method === "PUT") {
+          return handleUpdateProfile(request, { db: options.db }, authorized);
+        }
+        if (request.method === "DELETE") {
+          return handleDeleteProfile(request, { db: options.db }, authorized);
+        }
       }
 
       const runsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs$/);
