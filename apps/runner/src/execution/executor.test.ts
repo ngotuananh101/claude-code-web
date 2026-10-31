@@ -2138,3 +2138,65 @@ describe("attachments (§attachments)", () => {
     expect(startedPayload.attachments).toBeUndefined();
   });
 });
+
+describe("the schedule mirror (§11.5)", () => {
+  test("CronCreate is mirrored as schedule.created in the attempt's own sequence", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    const sdk: SdkStream = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_1",
+                name: "CronCreate",
+                input: { cron: "58 17 31 10 *", recurring: false, prompt: "Kiểm tra dung lượng" },
+              },
+            ],
+          },
+        };
+        yield {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "Scheduled" }],
+          },
+          tool_use_result: {
+            id: "af5c4b05",
+            humanSchedule: "58 17 31 10 *",
+            recurring: false,
+            nextFireAt: 1793444280000,
+          },
+        };
+        yield { type: "result", subtype: "success", is_error: false };
+      },
+    });
+
+    await executeRun(db, COMMAND, { workspacePath: "/home/runner/project", sdk });
+
+    const rows = events(db);
+    const mirrored = rows.find((row) => row.type === "schedule.created");
+    expect(mirrored).toBeDefined();
+    expect(JSON.parse(mirrored!.payload)).toMatchObject({
+      toolCallId: "toolu_1",
+      cliTaskId: "af5c4b05",
+      cron: "58 17 31 10 *",
+      recurring: false,
+      prompt: "Kiểm tra dung lượng",
+      nextFireAt: 1793444280000,
+    });
+    // The mirror sits between run.started and the terminal event.
+    const types = rows.map((row) => row.type);
+    expect(types.indexOf("schedule.created")).toBeGreaterThan(types.indexOf("run.started"));
+    expect(types.indexOf("schedule.created")).toBeLessThan(types.lastIndexOf("run.finished"));
+  });
+});

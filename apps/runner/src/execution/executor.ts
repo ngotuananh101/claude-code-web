@@ -28,6 +28,7 @@ import type { ApprovalOutcome, ApprovalRouter } from "./approvals.ts";
 import { downloadRunnerAttachments, injectAttachmentsContext } from "./attachments.ts";
 import { boundEventPayload } from "./payload-bound.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
+import { createScheduleObserver } from "./schedule-events.ts";
 import { createStreamNormalizer } from "./stream-normalizer.ts";
 import { isToolResultFrame, toolCompletionsOf } from "./tool-results.ts";
 
@@ -472,10 +473,16 @@ export async function executeRun(
       ...(canUseTool === undefined ? {} : { canUseTool }),
     });
 
+    // §11.5: the schedule mirror correlates tool_use and tool_result frames, so
+    // it sees every raw frame before the branches below consume or skip it.
+    const schedules = createScheduleObserver();
+
     for await (const message of stream) {
       if (typeof message !== "object" || message === null) continue;
       const sdkMessage = message as Record<string, unknown>;
       const type = String(sdkMessage["type"]);
+
+      for (const event of schedules(sdkMessage)) append(event.type, event.payload);
 
       // §10.4: the SDK session id comes from the init frame and belongs to the
       // attempt, not to the command envelope.
