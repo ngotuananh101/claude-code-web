@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Folder,
+  Key,
   LayoutDashboard,
   LogOut,
   MoreHorizontal,
@@ -316,6 +317,18 @@ async function handleDeleteConfirm(): Promise<void> {
       >
         <Server :size="15" />
         Runners
+      </RouterLink>
+      <RouterLink
+        to="/profiles"
+        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        :class="
+          route.name === 'profiles'
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+        "
+      >
+        <Key :size="15" />
+        Profiles
       </RouterLink>
     </nav>
 
