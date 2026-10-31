@@ -2503,6 +2503,56 @@ describe("P3-C profile injection", () => {
     expect(env["ANTHROPIC_MAX_TOKENS"]).toBe("4096");
   });
 
+  test("a profile with non-string settings.env values skips them", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithNonStringEnv = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_env",
+          name: "Env Mixed",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-test",
+          modelMapping: { sonnet: "prime" },
+          settings: {
+            env: {
+              STRING_VAR: "ok",
+              NUMBER_VAR: 42,
+              BOOL_VAR: true,
+            },
+          },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithNonStringEnv, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["STRING_VAR"]).toBe("ok");
+    expect("NUMBER_VAR" in env).toBe(false);
+    expect("BOOL_VAR" in env).toBe(false);
+  });
+
   test("a profile with non-env settings passes them as the settings overlay", async () => {
     const { db } = setup();
     beginAttempt(db, {
