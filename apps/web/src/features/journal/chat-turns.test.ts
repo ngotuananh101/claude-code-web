@@ -444,6 +444,33 @@ describe("deriveChatTurns — historical messages", () => {
 });
 
 describe("deriveChatTurns — live events", () => {
+  test("a run started by a schedule is marked as a scheduled task", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", {
+          prompt: "Kiểm tra dung lượng",
+          scheduleId: "sched_1",
+          scheduleCron: "58 17 31 10 *",
+        }),
+      ],
+    );
+    const user = turns.find((turn) => turn.kind === "user");
+    expect(user).toMatchObject({
+      text: "Kiểm tra dung lượng",
+      source: "schedule",
+      scheduleCron: "58 17 31 10 *",
+    });
+  });
+
+  test("a normal run carries no schedule source", () => {
+    resetSeq();
+    const turns = deriveChatTurns([], [liveEvent("run.started", { prompt: "hello" })]);
+    const user = turns.find((turn) => turn.kind === "user");
+    expect(user?.kind === "user" ? user.source : undefined).toBeUndefined();
+  });
+
   test("run.started opens a running agent turn", () => {
     resetSeq();
     const turns = deriveChatTurns([], [liveEvent("run.started", { runId: "run-1" })]);

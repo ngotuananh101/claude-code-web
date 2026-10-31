@@ -26,6 +26,13 @@ export type UserTurn = {
   uuid?: string;
   text: string;
   attachments?: AttachmentInfo[];
+  /**
+   * §11.5: "schedule" when the turn was fired by a scheduled task rather than
+   * typed by the user — the bubble renders it as a system-style row.
+   */
+  source?: "schedule";
+  /** The schedule's cron expression, for the bubble's badge. */
+  scheduleCron?: string;
   rawPayload?: unknown;
 };
 
@@ -816,6 +823,11 @@ export function deriveChatTurns(
       }
 
       const attachments = extractAttachments(payload["attachments"]);
+      // §11.5: the tick tags its run.start with the schedule it fires. Both
+      // keys are omitted for an ordinary run, so absence is what keeps a
+      // user-typed prompt a normal bubble.
+      const scheduleId = asString(payload["scheduleId"]);
+      const scheduleCron = asString(payload["scheduleCron"]);
 
       if (promptText !== "") {
         turns.push({
@@ -823,6 +835,8 @@ export function deriveChatTurns(
           key: `live-user-${event.runId}`,
           text: promptText,
           ...(attachments === undefined ? {} : { attachments }),
+          ...(scheduleId === undefined || scheduleId === "" ? {} : { source: "schedule" as const }),
+          ...(scheduleCron === undefined || scheduleCron === "" ? {} : { scheduleCron }),
           rawPayload: event.payload,
         });
       }

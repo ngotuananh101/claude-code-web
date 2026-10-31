@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AttachmentInfo } from "@cc-web/protocol";
-import { Braces, Copy, FileText, X } from "@lucide/vue";
+import { Braces, Clock, Copy, FileText, X } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import type { UserTurn } from "@/features/journal/chat-turns";
@@ -91,8 +91,27 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       </template>
     </div>
 
-    <!-- Bubble -->
+    <!-- Bubble. A schedule-fired turn renders as a system-style row: nobody
+         typed this prompt, so it must not look like a user bubble (§11.5). -->
     <div
+      v-if="turn.source === 'schedule'"
+      class="flex max-w-[85%] items-start gap-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-2"
+    >
+      <Clock :size="14" class="mt-0.5 shrink-0 text-muted-foreground" />
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span>Tác vụ theo lịch</span>
+          <code
+            v-if="turn.scheduleCron"
+            class="rounded bg-muted px-1 py-0.5 font-mono text-[10px]"
+            >{{ turn.scheduleCron }}</code
+          >
+        </div>
+        <div v-html="renderMarkdown(turn.text)" :class="proseClasses" />
+      </div>
+    </div>
+    <div
+      v-else
       class="max-w-[85%] rounded-2xl border border-border bg-secondary/80 px-4 py-2.5 text-[13px] text-foreground shadow-xs"
     >
       <div v-html="renderMarkdown(turn.text)" :class="proseClasses" />
