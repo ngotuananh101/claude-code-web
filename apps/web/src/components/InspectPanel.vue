@@ -5,6 +5,7 @@ import type {
   FileReadResult,
   GitChangesResult,
   GitDiffResult,
+  ScheduledTask,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
 import { computed, ref, watch } from "vue";
@@ -13,6 +14,7 @@ import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
+import { toScheduleRow } from "../features/schedules/schedule-rows";
 import {
   compositeId,
   fetchChanges,
@@ -25,6 +27,7 @@ import {
   revertWorkspace,
   writeFile,
 } from "../services/inspect-api";
+import { cancelSchedule, listSchedules } from "../services/schedules-api";
 import { sessions } from "../stores/sessions.ts";
 
 /**
@@ -42,11 +45,12 @@ import { sessions } from "../stores/sessions.ts";
 
 const props = defineProps<{ sessionId: string }>();
 
-type Tab = "files" | "changes" | "diagnostics";
+type Tab = "files" | "changes" | "diagnostics" | "schedules";
 const TAB_LABELS: Record<Tab, string> = {
   files: "Tệp tin",
   changes: "Thay đổi",
   diagnostics: "Chẩn đoán",
+  schedules: "Lịch",
 };
 
 const tab = ref<Tab>("files");
@@ -96,6 +100,16 @@ const diagnostics = ref<DiagnosticsResult | null>(null);
 const diagnosticsError = ref<string | null>(null);
 const diagnosticsLoading = ref(false);
 
+// Schedules (§11.5): the control server owns these; the panel only lists the
+// ones still active and cancels on request. A schedule fetch carries its own
+// epoch so it can never drop an in-flight file or diff response — the tabs'
+// loads are independent, and only the session change cancels both.
+const schedules = ref<ScheduledTask[] | null>(null);
+const schedulesError = ref<string | null>(null);
+const schedulesLoading = ref(false);
+const cancellingScheduleId = ref<string | null>(null);
+let schedulesEpoch = 0;
+
 /**
  * Every load bumps this; a response whose epoch is stale is dropped instead of
  * written into a panel that has since moved to another directory, tab or
@@ -121,6 +135,13 @@ const changeEntries = computed(() => {
 const diffLines = computed(() => {
   const text = diff.value?.diff;
   return typeof text === "string" ? classifyDiffLines(text) : [];
+});
+
+const scheduleRows = computed(() => {
+  const tasks = schedules.value;
+  if (tasks === null) return [];
+  const now = Date.now();
+  return tasks.map((task) => ({ ...toScheduleRow(task, now), cron: task.cron }));
 });
 
 const STATUS_LABELS: Record<string, string> = {
@@ -188,6 +209,40 @@ async function loadDiagnostics(): Promise<void> {
     return;
   }
   diagnostics.value = outcome.value;
+}
+
+async function loadSchedules(): Promise<void> {
+  const current = ++schedulesEpoch;
+  schedulesLoading.value = true;
+  schedulesError.value = null;
+  const outcome = await listSchedules(props.sessionId);
+  if (current !== schedulesEpoch) return;
+  schedulesLoading.value = false;
+  if (!outcome.ok) {
+    schedulesError.value = outcome.message;
+    schedules.value = null;
+    return;
+  }
+  schedules.value = outcome.schedules;
+}
+
+async function cancelOneSchedule(scheduleId: string): Promise<void> {
+  // One cancel at a time: two clicks would race two reloads against one list.
+  if (cancellingScheduleId.value !== null) return;
+  cancellingScheduleId.value = scheduleId;
+  schedulesError.value = null;
+  const outcome = await cancelSchedule(scheduleId);
+  cancellingScheduleId.value = null;
+  if (outcome === "cancelled" || outcome === "not_found") {
+    // not_found means the row is already gone (fired, or cancelled from
+    // another tab): reloading drops it from the list either way.
+    await loadSchedules();
+    return;
+  }
+  schedulesError.value =
+    outcome === "unauthorized"
+      ? "Phiên đăng nhập đã hết hạn."
+      : "Không huỷ được lịch — thử lại sau.";
 }
 
 async function openEntry(name: string, kind: "file" | "directory" | "other"): Promise<void> {
@@ -360,6 +415,11 @@ watch(
     diagnostics.value = null;
     diagnosticsError.value = null;
     diagnosticsLoading.value = false;
+    schedules.value = null;
+    schedulesError.value = null;
+    schedulesLoading.value = false;
+    cancellingScheduleId.value = null;
+    schedulesEpoch += 1;
     if (workspace.value !== null) void loadFiles("");
   },
   { immediate: true },
@@ -373,6 +433,7 @@ watch(tab, (next) => {
     if (source.value === "snapshot" && snapshotStatus.value === null) void loadSnapshot();
   }
   if (next === "diagnostics" && diagnostics.value === null) void loadDiagnostics();
+  if (next === "schedules" && schedules.value === null) void loadSchedules();
 });
 </script>
 
@@ -847,7 +908,7 @@ watch(tab, (next) => {
       </template>
 
       <!-- Diagnostics -->
-      <template v-else>
+      <template v-else-if="tab === 'diagnostics'">
         <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
           <span>Cấu hình runner</span>
           <button type="button" class="text-primary hover:underline" @click="loadDiagnostics">
@@ -898,6 +959,49 @@ watch(tab, (next) => {
             {{ warning }}
           </li>
         </ul>
+      </template>
+
+      <!-- Schedules (§11.5): the control server owns what fires; the panel
+           only lists what is still active and lets the operator cancel it. -->
+      <template v-else>
+        <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
+          <span>Lịch chạy</span>
+          <button type="button" class="text-primary hover:underline" @click="loadSchedules">
+            làm mới
+          </button>
+        </div>
+
+        <p v-if="schedulesLoading" class="text-muted-foreground">Đang tải…</p>
+        <p v-else-if="schedulesError !== null" class="text-destructive">{{ schedulesError }}</p>
+
+        <template v-else>
+          <ul v-if="scheduleRows.length > 0" class="grid gap-1">
+            <li
+              v-for="row in scheduleRows"
+              :key="row.scheduleId"
+              class="rounded-md border border-border/60 bg-background/60 px-2 py-1.5"
+            >
+              <div class="break-words text-foreground">{{ row.promptPreview }}</div>
+              <div class="mt-1 flex flex-wrap items-center gap-1.5 text-muted-foreground">
+                <span>{{ row.cadence }}</span>
+                <span>·</span>
+                <span>{{ row.nextFireText }}</span>
+                <code class="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{{
+                  row.cron
+                }}</code>
+                <button
+                  type="button"
+                  class="ml-auto text-destructive hover:underline disabled:opacity-50"
+                  :disabled="cancellingScheduleId !== null"
+                  @click="cancelOneSchedule(row.scheduleId)"
+                >
+                  {{ cancellingScheduleId === row.scheduleId ? "đang huỷ…" : "Huỷ" }}
+                </button>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="text-muted-foreground">Chưa có lịch nào.</p>
+        </template>
       </template>
     </div>
   </aside>
