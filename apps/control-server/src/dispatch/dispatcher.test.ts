@@ -167,7 +167,7 @@ describe("dispatcher", () => {
     dispatcher.drain("runner-a");
 
     // No payloadSecure stored, so the envelope carries the plain payload.
-    expect(sent[0]?.command?.payload).toEqual({ prompt: "hello" });
+    expect((sent[0]?.command as { payload: unknown })?.payload).toEqual({ prompt: "hello" });
   });
 
   test("a connected runner is not sent work, because it has not reconciled", async () => {
