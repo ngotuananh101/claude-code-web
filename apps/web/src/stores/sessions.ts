@@ -113,12 +113,13 @@ export function openSession(sessionId: string): void {
     const isIntermediateReplay = isEvents && frame["live"] !== true && events.length >= 200;
 
     if (isIntermediateReplay) {
-      if (replayFlushTimer === null) {
-        replayFlushTimer = setTimeout(() => {
-          replayFlushTimer = null;
-          mirror();
-        }, 100);
+      if (replayFlushTimer !== null) {
+        clearTimeout(replayFlushTimer);
       }
+      replayFlushTimer = setTimeout(() => {
+        replayFlushTimer = null;
+        mirror();
+      }, 200);
     } else {
       if (replayFlushTimer !== null) {
         clearTimeout(replayFlushTimer);

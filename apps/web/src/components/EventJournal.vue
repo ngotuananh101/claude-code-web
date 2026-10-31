@@ -81,11 +81,15 @@ const hasEarlierTurns = computed(() => remainingEarlier.value > 0);
 const scrollAreaRef = ref<{ $el?: HTMLElement } | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
 
+/** Whether initial scroll positioning to the bottom has settled. */
+const isMountedAndScrolled = ref(false);
+
 /** Whether the operator has scrolled up to inspect earlier turns. */
 const userScrolledUp = ref(false);
 let isProgrammaticScrolling = false;
 let scrollTimeout: ReturnType<typeof setTimeout> | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let resizeRaf: number | null = null;
 
 function getViewport(): HTMLElement | null {
   if (!scrollAreaRef.value) return null;
@@ -206,13 +210,22 @@ onMounted(() => {
     const viewport = getViewport();
     if (viewport) {
       viewport.addEventListener("scroll", onScroll, { passive: true });
-      scrollToBottom("auto");
+      viewport.scrollTop = viewport.scrollHeight;
     }
+    requestAnimationFrame(() => {
+      const vp = getViewport();
+      if (vp) vp.scrollTop = vp.scrollHeight;
+      isMountedAndScrolled.value = true;
+    });
 
     if (typeof ResizeObserver !== "undefined" && contentRef.value) {
       resizeObserver = new ResizeObserver(() => {
         if (!userScrolledUp.value) {
-          scrollToBottom("auto");
+          if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
+          resizeRaf = requestAnimationFrame(() => {
+            resizeRaf = null;
+            scrollToBottom("auto");
+          });
         }
       });
       resizeObserver.observe(contentRef.value);
@@ -228,6 +241,10 @@ onBeforeUnmount(() => {
   if (scrollTimeout) {
     clearTimeout(scrollTimeout);
     scrollTimeout = null;
+  }
+  if (resizeRaf !== null) {
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = null;
   }
   resizeObserver?.disconnect();
   resizeObserver = null;
@@ -270,7 +287,10 @@ watch(
 </script>
 
 <template>
-  <div class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+  <div
+    class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-opacity duration-150"
+    :class="isMountedAndScrolled ? 'opacity-100' : 'opacity-0'"
+  >
     <ScrollArea ref="scrollAreaRef" class="min-h-0 min-w-0 flex-1">
       <div ref="contentRef" class="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-6 px-4 py-6 md:px-6">
         <p

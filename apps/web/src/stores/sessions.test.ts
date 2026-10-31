@@ -144,8 +144,8 @@ describe("the sessions store's reactive mirror", () => {
     deliver(replayBatch(1, 200, false));
     expect(sessions.stream).toBeNull();
 
-    // Wait 120ms
-    await new Promise((r) => setTimeout(r, 120));
+    // Wait 220ms
+    await new Promise((r) => setTimeout(r, 220));
     expect(sessions.stream).not.toBeNull();
     expect(sessions.stream?.events.length).toBe(200);
   });
