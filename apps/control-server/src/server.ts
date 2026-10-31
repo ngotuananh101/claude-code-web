@@ -20,6 +20,7 @@ import {
   attemptWatermark,
   type CommandOutbox,
   ingestEvent,
+  projectScheduleEvent,
   readSessionEvents,
   Scheduler,
   sessionEarliest,
@@ -74,6 +75,7 @@ import {
 import { handleUsageStats } from "./routes/stats-routes.ts";
 import { handleListWorkspaces } from "./routes/workspaces-routes.ts";
 import { PendingRpcRequests } from "./rpc/pending-requests.ts";
+import { startScheduleLoop } from "./scheduling/schedule-loop.ts";
 import {
   BrowserGateway,
   type BrowserSocketData,
@@ -121,6 +123,12 @@ export type ServerOptions = {
    * the server defaults to `./data/attachments` under its CWD.
    */
   attachmentsDir?: string;
+  /**
+   * Injectable tick interval for the scheduling loop (§11.5) — tests push it
+   * out of reach so a tick can never race their assertions. Production omits
+   * it and gets the loop's 15s default.
+   */
+  scheduleTickMs?: number;
 };
 
 export type ServerHandle = {
@@ -247,6 +255,10 @@ export function createServer(options: ServerOptions): ServerHandle {
         // heals a projection a crash skipped. A conflict projects nothing.
         if (result.status !== "conflict") {
           projectApprovalEvent(options.db, runs, event);
+          // §11.5: the schedule mirror follows the same rule — duplicate
+          // deliveries are safe (the projection is INSERT OR IGNORE keyed by
+          // attempt + tool call), so every non-conflict event is projected.
+          projectScheduleEvent(options.db, event);
         }
       }
 
@@ -307,6 +319,16 @@ export function createServer(options: ServerOptions): ServerHandle {
   // means `dispatch()` is a complete operation: decide, persist, deliver.
   const scheduler = new Scheduler(options.db, {
     onDispatched: (runnerId) => dispatcher?.drain(runnerId),
+  });
+
+  // §11.5: the server owns the clock. The loop dispatches due schedules as
+  // ordinary runs through the same scheduler — capacity, pins and the outbox
+  // all behave exactly as they do for a user-started run.
+  const scheduleLoop = startScheduleLoop({
+    db: options.db,
+    scheduler,
+    runnerGateway,
+    ...(options.scheduleTickMs === undefined ? {} : { intervalMs: options.scheduleTickMs }),
   });
 
   const allowed = new Set(options.allowedOrigins);
@@ -771,7 +793,10 @@ export function createServer(options: ServerOptions): ServerHandle {
     browserGateway,
     dispatcher,
     scheduler,
-    stop: () => server.stop(true),
+    stop: () => {
+      scheduleLoop.stop();
+      server.stop(true);
+    },
   };
 }
 
