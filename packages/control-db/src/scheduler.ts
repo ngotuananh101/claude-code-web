@@ -221,7 +221,7 @@ export class Scheduler {
 
     const hasProfile = request.profile !== undefined;
     const persistedPayload = hasProfile
-      ? { ...cleartextPayload, profile: redactProfileApiKey(request.profile!) }
+      ? { ...cleartextPayload, profile: redactProfileSecrets(request.profile!) }
       : cleartextPayload;
 
     await this.#outbox.enqueue({
@@ -344,10 +344,29 @@ export class Scheduler {
 
 /**
  * Build a redacted copy of a profile payload for on-disk persistence: the
- * cleartext `apiKey` is replaced with `[REDACTED]` so `command_outbox.payload`
- * never holds the secret. The live WebSocket frame carries the original via
- * `payload_secure` (§18.1).
+ * cleartext `apiKey` and every `settings.env` value become `[REDACTED]`, so
+ * `command_outbox.payload` never holds a credential — including one a user put
+ * in the settings JSON instead of the apiKey field. The live WebSocket frame
+ * carries the original via `payload_secure` (§18.1).
  */
-function redactProfileApiKey(profile: RunProfilePayload): RunProfilePayload {
-  return profile.apiKey === undefined ? profile : { ...profile, apiKey: "[REDACTED]" };
+function redactProfileSecrets(profile: RunProfilePayload): RunProfilePayload {
+  const redacted: RunProfilePayload = {
+    ...profile,
+    ...(profile.apiKey === undefined ? {} : { apiKey: "[REDACTED]" }),
+    ...(typeof profile.settings === "object" && profile.settings !== null
+      ? { settings: redactSettingsEnv(profile.settings) }
+      : {}),
+  };
+  return redacted;
+}
+
+/** Replace every string value in `settings.env`; other settings stay readable. */
+function redactSettingsEnv(settings: Record<string, unknown>): Record<string, unknown> {
+  const env = settings["env"];
+  if (typeof env !== "object" || env === null || Array.isArray(env)) return settings;
+  const redactedEnv: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(env)) {
+    redactedEnv[key] = typeof value === "string" ? "[REDACTED]" : value;
+  }
+  return { ...settings, env: redactedEnv };
 }

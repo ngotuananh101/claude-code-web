@@ -592,4 +592,48 @@ describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
     const parsed = JSON.parse(row.payload_secure!) as { profile: { apiKey: string } };
     expect(parsed.profile.apiKey).toBe("sk-secret-key");
   });
+
+  test("the persisted payload redacts settings env values; the sealed copy keeps them", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const scheduler = new Scheduler(db, {
+      sealSecurePayload: (value) => `SEAL(${JSON.stringify(value)})`,
+    });
+
+    const settings = {
+      env: { ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer sk-env-secret" },
+      permissions: { allow: ["Read"] },
+    };
+    await scheduler.dispatch(
+      {
+        ...request,
+        profile: {
+          profileId: "prof-1",
+          name: "9Router",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN" as const,
+          apiKey: "sk-secret-key",
+          settings,
+        },
+      },
+      capacity(),
+    );
+
+    const row = db
+      .query("SELECT payload, payload_secure FROM command_outbox WHERE run_id = ?")
+      .get("run-1") as { payload: string; payload_secure: string };
+    const persisted = JSON.parse(row.payload) as {
+      profile: { apiKey: string; settings: { env: Record<string, string> } };
+    };
+    expect(persisted.profile.apiKey).toBe("[REDACTED]");
+    expect(persisted.profile.settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe("[REDACTED]");
+    expect(row.payload).not.toContain("sk-env-secret");
+    // The non-secret settings stay readable in the record.
+    expect(JSON.stringify(persisted.profile.settings)).toContain("Read");
+
+    // The live frame is built from the sealed copy, so the runner still gets
+    // the real value.
+    const sealed = row.payload_secure.slice("SEAL(".length, -1);
+    expect(sealed).toContain("sk-env-secret");
+  });
 });
