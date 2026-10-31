@@ -332,6 +332,12 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS scheduled_tasks_due
       ON scheduled_tasks (state, next_fire_at);
   `);
+  // §11.5: the Lịch tab lists one session's rows; without this every open
+  // scans the table, which keeps a tombstone per schedule ever created.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS scheduled_tasks_session
+      ON scheduled_tasks (session_id, next_fire_at);
+  `);
 }
 
 /**

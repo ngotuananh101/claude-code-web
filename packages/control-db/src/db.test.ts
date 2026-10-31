@@ -88,6 +88,32 @@ describe("run id indexes (§11.5)", () => {
   });
 });
 
+describe("scheduled-task indexes (§11.5)", () => {
+  test("session lookups answer from an index", () => {
+    // The Lịch tab lists one session's active rows on every open; without this
+    // index each open is a full scan of a table that keeps a tombstone per
+    // schedule ever created.
+    const db = new Database(":memory:");
+    migrate(db);
+
+    const indexes = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'scheduled_tasks_session'",
+      )
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((row) => row.name)).toEqual(["scheduled_tasks_session"]);
+
+    const plan = (
+      db
+        .query("EXPLAIN QUERY PLAN SELECT * FROM scheduled_tasks WHERE session_id = 's'")
+        .all() as Array<{ detail: string }>
+    )
+      .map((row) => row.detail)
+      .join("\n");
+    expect(plan).toContain("scheduled_tasks_session");
+  });
+});
+
 describe("workspaces.branches migration (M4)", () => {
   test("a database created before the column gains it on migrate", () => {
     const db = new Database(":memory:");
