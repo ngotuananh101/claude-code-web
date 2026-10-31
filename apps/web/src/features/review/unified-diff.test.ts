@@ -83,7 +83,7 @@ describe("context lines", () => {
         "diff --git a/a.ts b/a.ts",
         "--- a/a.ts",
         "+++ b/a.ts",
-        "@@ -2,2 +2,2 @@",
+        "@@ -2,3 +2,3 @@",
         " keep",
         "-old",
         "+new",
@@ -123,4 +123,21 @@ test("returns null for text that is not one complete text diff", () => {
       ["diff --git a/a b/a", "--- a/a", "+++ b/a", "@@ -1,2 +1,2 @@", "-x", "+y", ""].join("\n"),
     ),
   ).toBeNull(); // hunk counts do not match the body
+});
+
+test("over-delivery past exhausted counts returns null", () => {
+  // Hunk header claims 1 old / 1 new line, but the body has a second context
+  // line after the counters are exhausted → null.
+  const parsed = parseUnifiedDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,1 +1,1 @@",
+      " a",
+      " b",
+      "",
+    ].join("\n"),
+  );
+  expect(parsed).toBeNull();
 });

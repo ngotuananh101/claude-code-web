@@ -96,16 +96,24 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
 
     while (i < lines.length) {
       const body = lines[i]!;
-      // The next hunk header or the start of another file header ends this
-      // hunk's body. ("diff --git" is the only leading-header we accept as a
-      // hard stop inside a single-file diff; we already rejected multi-file
-      // diffs above, so seeing one here is stray → handled by the post-loop
-      // check.)
+      // A new hunk header or the start of another file header ends this hunk's
+      // body. ("diff --git" is the only leading-header we accept as a hard
+      // stop inside a single-file diff; we already rejected multi-file diffs
+      // above, so seeing one here is stray → handled by the post-loop check.)
       if (HUNK_RE.test(body) || body.startsWith("diff --git ")) break;
       if (body === "") return null; // a blank line is not a valid body line
 
       const prefix = body[0]!;
       const content = body.slice(1);
+
+      // Once both counters are exhausted, no further content line may appear
+      // (that would be over-delivery → null per §5.2). The only valid line
+      // after exhaustion is the "\ No newline" marker, which does not consume a
+      // counter.
+      const exhausted = oldCount <= 0 && newCount <= 0;
+      if (exhausted && prefix !== "\\") {
+        return null; // over-delivery past the claimed counts
+      }
 
       if (prefix === " ") {
         original.push(content);
@@ -145,8 +153,7 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
     }
 
     // If the body stopped early — a side claimed more lines than delivered —
-    // the diff is incomplete → null. (Counts may run negative when a hunk
-    // header under-counts its context body; that is tolerated.)
+    // the diff is incomplete → null.
     if (oldCount > 0 || newCount > 0) return null;
   }
 
