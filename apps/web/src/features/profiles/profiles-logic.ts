@@ -11,7 +11,13 @@
  * the inverse direction `jsonToForm` reads those back as `settingsJson`.
  */
 
-import type { ModelMapping, ModelRole, ProfileAuthField } from "@cc-web/protocol";
+import type {
+  ModelMapping,
+  ModelRole,
+  ProfileAuthField,
+  ProfileDetail,
+  ProfileSummary,
+} from "@cc-web/protocol";
 
 /**
  * The env-var names Claude Code reads, keyed by the model role a profile maps.
@@ -33,6 +39,18 @@ const BASE_URL_ENV = "ANTHROPIC_BASE_URL";
 
 /** The full set of model-role keys, for filtering stray env entries. */
 const MODEL_ROLE_KEYS = Object.keys(MODEL_ROLE_ENV) as ModelRole[];
+
+/**
+ * Every env var the visual form owns and regenerates from a form field. The
+ * editor keeps every other env entry verbatim — a proxy URL the operator typed
+ * into the JSON side is not the form's to drop.
+ */
+const FORM_OWNED_ENV: ReadonlySet<string> = new Set([
+  BASE_URL_ENV,
+  AUTH_ENV,
+  API_KEY_ENV,
+  ...Object.values(MODEL_ROLE_ENV),
+]);
 
 /** The visual form's primary fields. */
 export interface ProfileForm {
@@ -86,20 +104,44 @@ export function formToJson(form: ProfileForm, extra?: Record<string, unknown>): 
 }
 
 /**
+ * Split a settings object into the part the visual form does not own: every
+ * top-level key plus the `env` entries whose var no form field drives. The
+ * result is what `formToJson` takes as its `extra`, so custom env entries (a
+ * proxy, a feature flag) survive a form edit instead of being dropped, while
+ * the form-owned env keys are left for the form to regenerate.
+ *
+ * An `env` block left with no custom entries is omitted rather than emitted
+ * empty, so a profile with only form-owned settings saves as `{}`.
+ */
+export function formFreeSettings(settings: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(settings)) {
+    if (key !== "env") result[key] = value;
+  }
+
+  const env = settings["env"];
+  if (typeof env === "object" && env !== null && !Array.isArray(env)) {
+    const custom: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+      if (!FORM_OWNED_ENV.has(key)) custom[key] = value;
+    }
+    if (Object.keys(custom).length > 0) result["env"] = custom;
+  }
+  return result;
+}
+
+/**
  * Merge a regenerated `env` block into an existing settings object, preserving
- * every top-level key that the form does not own.
+ * every top-level key the form does not own and every custom env entry. The
+ * regenerated env wins on the keys the form owns.
  */
 function mergeSettings(
   extra: Record<string, unknown> | undefined,
   env: Record<string, string>,
 ): Record<string, unknown> {
-  const base = (extra ?? {}) as Record<string, unknown>;
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(base)) {
-    if (key !== "env") result[key] = base[key];
-  }
-  result.env = env;
-  return result;
+  const rest = formFreeSettings(extra ?? {});
+  const customEnv = (rest["env"] as Record<string, unknown> | undefined) ?? {};
+  return { ...rest, env: { ...customEnv, ...env } };
 }
 
 /**
@@ -145,11 +187,17 @@ export function jsonToForm(json: string): ProfileForm & { settingsJson: string }
     }
   }
 
-  // Carry the fields the visual form does not own (permissions, model, etc.).
+  // Carry the fields the visual form does not own (permissions, model, etc.),
+  // including any custom env entries the JSON side holds.
   const remainder: Record<string, unknown> = {};
   for (const key of Object.keys(record)) {
     if (key !== "env") remainder[key] = record[key];
   }
+  const customEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(envStrings)) {
+    if (!FORM_OWNED_ENV.has(key)) customEnv[key] = value;
+  }
+  if (Object.keys(customEnv).length > 0) remainder["env"] = customEnv;
   const settingsJson =
     Object.keys(remainder).length > 0 ? JSON.stringify(remainder, null, 2) : "{}";
 
@@ -166,6 +214,69 @@ export function jsonToForm(json: string): ProfileForm & { settingsJson: string }
 function extractString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Seed the visual form from a profile detail. The credential field always
+ * starts empty: the server only ever sends the key masked, and an empty input
+ * beside `hasKey` is the editor's "keep the stored key" state (§4.2).
+ */
+export function profileFormFromDetail(
+  detail: Pick<ProfileDetail, "name" | "endpoint" | "authField" | "modelMapping">,
+): ProfileForm {
+  return {
+    name: detail.name,
+    endpoint: detail.endpoint,
+    apiKey: "",
+    authField: detail.authField,
+    modelMapping: detail.modelMapping ?? {},
+  };
+}
+
+/** The PUT/POST body the profiles screen sends for a save. */
+export interface ProfileSaveBody {
+  name: string;
+  endpoint: string;
+  authField: ProfileAuthField;
+  apiKey?: string;
+  modelMapping: ModelMapping;
+  settingsJson?: string;
+}
+
+/**
+ * Build the save body from the editor state. An empty credential input means
+ * "keep the stored key" (§4.2), so the field is omitted rather than posted as
+ * an empty string; an empty settings remainder is omitted for the same reason.
+ */
+export function profileSaveBody(
+  form: ProfileForm,
+  extra?: Record<string, unknown>,
+): ProfileSaveBody {
+  return {
+    name: form.name,
+    endpoint: form.endpoint,
+    authField: form.authField,
+    ...(form.apiKey === "" ? {} : { apiKey: form.apiKey }),
+    modelMapping: form.modelMapping,
+    ...(extra !== undefined && Object.keys(extra).length > 0
+      ? { settingsJson: JSON.stringify(extra) }
+      : {}),
+  };
+}
+
+/**
+ * The profile the editor should show after a list refresh: the current
+ * selection when it still exists, otherwise the first profile, otherwise none
+ * (the screen starts a new profile).
+ */
+export function nextSelectedProfileId(
+  profiles: Array<Pick<ProfileSummary, "profileId">>,
+  current: string | null,
+): string | null {
+  if (current !== null && profiles.some((profile) => profile.profileId === current)) {
+    return current;
+  }
+  return profiles[0]?.profileId ?? null;
 }
 
 /**

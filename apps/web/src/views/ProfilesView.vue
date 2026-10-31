@@ -8,6 +8,7 @@ import type {
 import { Plus, Save, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
+import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,8 +23,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProfileForm } from "@/features/profiles/profiles-logic.ts";
 import {
+  formFreeSettings,
   formToJson,
   jsonToForm,
+  nextSelectedProfileId,
+  profileFormFromDetail,
+  profileSaveBody,
   validateSettingsJson,
 } from "@/features/profiles/profiles-logic.ts";
 import {
@@ -31,7 +36,6 @@ import {
   deleteProfile,
   getProfile,
   listProfiles,
-  type SaveProfileResult,
   updateProfile,
 } from "@/services/profiles-api.ts";
 
@@ -65,7 +69,7 @@ const form = ref<ProfileForm>({
   authField: "ANTHROPIC_AUTH_TOKEN",
   modelMapping: {},
 });
-const json = ref("");
+const json = ref("{}");
 
 const editingDetail = ref<ProfileDetail | null>(null);
 const deleteTarget = ref<ProfileSummary | null>(null);
@@ -92,13 +96,20 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const result = await listProfiles();
-    if (result.ok) {
-      profiles.value = result.profiles;
-      if (result.profiles.length > 0 && selectedId.value === null) {
-        selectedId.value = result.profiles[0].profileId;
-      }
-    } else {
+    if (!result.ok) {
       toast.error(result.message);
+      return;
+    }
+    profiles.value = result.profiles;
+    // Keep the operator on the profile they were editing when it still exists;
+    // otherwise open the first one — or a blank editor when none are left.
+    // Loading the detail here is what seeds the editor: a bare `selectedId`
+    // would leave the Select showing a profile the form knows nothing about.
+    const nextId = nextSelectedProfileId(result.profiles, selectedId.value);
+    if (nextId === null) {
+      newProfile();
+    } else {
+      await selectProfile(nextId);
     }
   } finally {
     loading.value = false;
@@ -122,16 +133,11 @@ async function selectProfile(raw: string): Promise<void> {
   const result = await getProfile(id);
   if (result.ok) {
     editingDetail.value = result.profile;
-    form.value = {
-      name: result.profile.name,
-      endpoint: result.profile.endpoint,
-      apiKey: "",
-      authField: result.profile.authField,
-      modelMapping: result.profile.modelMapping ?? {},
-    };
-    // Start the JSON editor from the masked/omitted form so the editor never
-    // shows a cleartext secret it didn't just type.
-    syncJsonFromForm();
+    form.value = profileFormFromDetail(result.profile);
+    // Seed the JSON editor from the stored settings — not from the previous
+    // selection's text — so a profile's own custom env/permissions show up and
+    // the editor never carries another profile's leftover settings.
+    json.value = formToJson(form.value, result.profile.settings ?? {});
   } else if (result.code !== "unauthorized") {
     toast.error(result.message);
   }
@@ -139,6 +145,7 @@ async function selectProfile(raw: string): Promise<void> {
 
 /** Start with a blank editor for creating a new profile. */
 function newProfile(): void {
+  selectedId.value = null;
   editingDetail.value = null;
   form.value = {
     name: "",
@@ -156,20 +163,16 @@ function syncJsonFromForm(): void {
 }
 
 /**
- * Parse the non-env remainder currently held in the editor back into a plain
- * object so `formToJson` can re-merge it without clobbering it. Returns `{}`
- * when the editor is mid-keystroke / invalid.
+ * Parse the settings the visual form does not own out of the editor text so
+ * `formToJson` can re-merge them without clobbering them. Only the env vars a
+ * form field drives are stripped — custom env entries the operator typed into
+ * the JSON side survive both a form edit and a save. Returns `undefined` when
+ * the editor is mid-keystroke / invalid.
  */
 function parseExtraSettings(): Record<string, unknown> | undefined {
   const validation = validateSettingsJson(json.value);
   if (!validation.valid) return undefined;
-  const parsed = JSON.parse(json.value);
-  const record = parsed as Record<string, unknown>;
-  const extra: Record<string, unknown> = {};
-  for (const key of Object.keys(record)) {
-    if (key !== "env") extra[key] = record[key];
-  }
-  return extra;
+  return formFreeSettings(JSON.parse(json.value) as Record<string, unknown>);
 }
 
 // When the form changes, regenerate the JSON editor — preserving any extra
@@ -184,16 +187,23 @@ watch(json, (value) => {
   if (!validation.valid) return;
   const parsed = jsonToForm(value);
   // Avoid a self-inflicted loop: only write back when something actually
-  // changed. `authField`/`apiKey` are intentionally excluded from the
-  // comparison because the editor may carry a masked value we must not
-  // round-trip into the credential input.
+  // changed. The credential and auth field are part of the comparison — typing
+  // a key into the JSON env block is a real edit, and it should reach the form
+  // (and therefore the save body) rather than being silently ignored.
   const same =
     parsed.name === form.value.name &&
     parsed.endpoint === form.value.endpoint &&
     parsed.authField === form.value.authField &&
+    parsed.apiKey === form.value.apiKey &&
     JSON.stringify(parsed.modelMapping) === JSON.stringify(form.value.modelMapping);
   if (!same) {
-    form.value = parsed;
+    form.value = {
+      name: parsed.name,
+      endpoint: parsed.endpoint,
+      apiKey: parsed.apiKey,
+      authField: parsed.authField,
+      modelMapping: parsed.modelMapping,
+    };
   }
 });
 
@@ -209,28 +219,21 @@ function onModelChange(role: keyof ModelMapping, value: string): void {
 
 async function save(): Promise<void> {
   if (saveDisabled.value) return;
-  const extra = parseExtraSettings();
-  const body = {
-    name: form.value.name,
-    endpoint: form.value.endpoint,
-    authField: form.value.authField,
-    apiKey: form.value.apiKey,
-    modelMapping: form.value.modelMapping,
-    settingsJson:
-      extra !== undefined && Object.keys(extra).length > 0 ? JSON.stringify(extra) : undefined,
-  };
+  const editingId = editingDetail.value?.id ?? null;
+  const wasCreating = editingId === null;
+  const body = profileSaveBody(form.value, parseExtraSettings());
 
-  let result: SaveProfileResult;
-  if (editingDetail.value !== null) {
-    result = await updateProfile(editingDetail.value.id, body);
-  } else {
-    result = await createProfile(body);
-  }
+  const result =
+    editingId === null ? await createProfile(body) : await updateProfile(editingId, body);
 
   if (result.ok) {
     await load();
-    void selectProfile(result.profile.profileId);
-    toast.success(editingDetail.value === null ? "Đã tạo profile." : "Đã lưu profile.");
+    // `load` may already have opened the saved profile (a create lands first in
+    // the list); only re-select when it did not.
+    if (selectedId.value !== result.profile.profileId) {
+      await selectProfile(result.profile.profileId);
+    }
+    toast.success(wasCreating ? "Đã tạo profile." : "Đã lưu profile.");
   } else {
     toast.error(result.message);
   }
@@ -245,10 +248,9 @@ async function handleDelete(): Promise<void> {
   const id = deleteTarget.value.profileId;
   const outcome = await deleteProfile(id);
   if (outcome === "deleted") {
+    // `load` re-resolves the selection: the deleted profile is gone from the
+    // list, so it opens the next one — or a blank editor when none remain.
     await load();
-    if (selectedId.value === id) {
-      selectedId.value = profiles.value[0]?.profileId ?? null;
-    }
     toast.success("Đã xoá profile.");
   } else {
     toast.error("Không thể xoá profile.");
