@@ -1,212 +1,187 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
-import { CommandOutbox, createProfile, migrate } from "@cc-web/control-db";
-import { MODEL_ROLES, type RunProfilePayload } from "@cc-web/protocol";
+import {
+  CommandOutbox,
+  createProfile,
+  getProfileWithSecret,
+  migrate,
+  Scheduler,
+} from "@cc-web/control-db";
+import type { RunProfilePayload } from "@cc-web/protocol";
 import { createSecretBox } from "../config/secret-box.ts";
-import { toEnvelope } from "./dispatcher.ts";
+import { openSealedPayload, toEnvelope } from "./dispatcher.ts";
 
 /**
- * End-to-end integration test for P3-C profile run dispatch (§17.1, §18.1).
+ * End-to-end test for profile run dispatch (§17.1, §18.1).
  *
- * This test exercises the dispatch seam directly — the Scheduler writes the
- * redacted payload + sealed `payloadSecure` to the outbox, and `toEnvelope`
- * rebuilds the runner's live frame using `openSecurePayload`. The runner's own
- * env-overlay tests (executor.ts) are out of scope here: there is no
- * `@cc-web/runner` dependency on `@cc-web/control-server`, so we assert at the
- * frame level instead and simulate the env mapping the executor would consume.
+ * The seam under test is the real one: `Scheduler.dispatch` writes the outbox
+ * row (redacted `payload`, sealed `payload_secure`), and `toEnvelope` rebuilds
+ * the runner's live frame through `openSealedPayload` — the same opener the
+ * server wires in `server.ts`. Nothing here re-implements the redaction or the
+ * sealing; a regression in either producer surfaces as a failing assertion.
  *
- * Flow:
- *   1. createProfile → sealed api_key_encrypted (v1. format)
- *   2. Scheduler.dispatch with profile → enqueues run.start with redacted payload
- *      + sealed payloadSecure
- *   3. toEnvelope(openSecurePayload) → live frame carries cleartext apiKey
- *   4. Persisted outbox row: payload.apiKey === [REDACTED], payload_secure is v1.
- *   5. RunProfilePayload shape: endpoint, apiKey, authField, modelMapping, settings
+ * The runner's own env-overlay tests (executor.ts) are out of scope: the
+ * control-server has no `@cc-web/runner` dependency, so this test stops at the
+ * frame the runner receives.
  */
+
+const capacity = {
+  runnerId: "runner-a",
+  state: "ready" as const,
+  maxConcurrentRuns: 1,
+  activeRuns: 0,
+};
+
+/** Seal/redact exactly the way the server wires the Scheduler. */
+function makeScheduler(db: Database, secretBox: ReturnType<typeof createSecretBox>): Scheduler {
+  return new Scheduler(db, {
+    sealSecurePayload: (value) => secretBox.seal(JSON.stringify(value)),
+  });
+}
+
+/**
+ * Create a profile with a sealed key and rebuild the `RunProfilePayload` the
+ * run route would dispatch (runs-routes.ts opens the seal, then maps the row).
+ */
+function makeProfilePayload(
+  db: Database,
+  secretBox: ReturnType<typeof createSecretBox>,
+): RunProfilePayload {
+  const created = createProfile(db, {
+    ownerId: "user-1",
+    name: "9Router",
+    endpoint: "http://192.168.2.3:20128",
+    authField: "ANTHROPIC_AUTH_TOKEN",
+    apiKey: secretBox.seal("sk-secret-key"),
+    modelMapping: { sonnet: "prime", opus: "titan", haiku: "nano" },
+    settingsJson: JSON.stringify({ env: { CUSTOM_VAR: "custom" }, extra: true }),
+  });
+
+  const row = getProfileWithSecret(db, created.id, "user-1");
+  expect(row).not.toBeNull();
+  const plainKey = secretBox.open(row!.apiKey!);
+  expect(plainKey).toBe("sk-secret-key");
+
+  return {
+    profileId: row!.id,
+    name: row!.name,
+    endpoint: row!.endpoint,
+    authField: row!.authField,
+    apiKey: plainKey!,
+    modelMapping: row!.modelMapping,
+    settings: row!.settings,
+  };
+}
+
 describe("profile run dispatch (§17.1, §18.1)", () => {
-  test("dispatch writes redacted payload + sealed payloadSecure; toEnvelope delivers cleartext", async () => {
+  test("dispatch persists a redacted payload; toEnvelope delivers the cleartext profile", async () => {
     const db = new Database(":memory:");
     migrate(db);
 
     const secretBox = createSecretBox(new Uint8Array(32).fill(42));
+    const scheduler = makeScheduler(db, secretBox);
     const outbox = new CommandOutbox(db);
+    const profile = makeProfilePayload(db, secretBox);
 
-    // 1. Create a profile through the DB repository layer (the way config-routes
-    // does, sealing the key with the same SecretBox).
-    const profile = createProfile(db, {
-      ownerId: "user-1",
-      name: "9Router",
-      endpoint: "http://192.168.2.3:20128",
-      authField: "ANTHROPIC_AUTH_TOKEN",
-      apiKey: "sk-secret-key",
-      modelMapping: { sonnet: "prime", opus: "titan", haiku: "nano" },
-      settingsJson: JSON.stringify({ env: { CUSTOM_VAR: "custom" }, extra: true }),
-    });
+    const decision = await scheduler.dispatch(
+      {
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        workspaceId: "default",
+        prompt: "hello",
+        ownerId: "user-1",
+        profile,
+      },
+      capacity,
+    );
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) throw new Error("dispatch refused");
 
-    // Build the RunProfilePayload the route would forward (matching runs-routes.ts).
-    const runProfile: RunProfilePayload = {
-      profileId: profile.id,
-      name: profile.name,
-      endpoint: "http://192.168.2.3:20128",
-      authField: "ANTHROPIC_AUTH_TOKEN",
-      apiKey: "sk-secret-key",
-      modelMapping: { sonnet: "prime", opus: "titan", haiku: "nano" },
-      settings: { env: { CUSTOM_VAR: "custom" }, extra: true },
-    };
-
-    // Simulate the scheduler.dispatch redaction + sealing path (scheduler.ts).
-    // The cleartext payload (what the runner receives) includes the real key.
-    const cleartextPayload = {
-      sessionId: "session-1",
-      runId: "run-1",
-      attemptId: "attempt-1",
-      workspaceId: "default",
-      prompt: "hello",
-      profile: runProfile,
-    };
-
-    // The persisted payload masks the apiKey.
-    const persistedPayload = {
-      ...cleartextPayload,
-      profile: { ...runProfile, apiKey: "[REDACTED]" },
-    };
-
-    const sealedSecure = secretBox.seal(JSON.stringify(cleartextPayload));
-
-    await outbox.enqueue({
-      commandId: "cmd-profile-1",
-      runnerId: "runner-a",
-      kind: "run.start",
-      issuedAt: "2026-10-31T00:00:00.000Z",
-      sessionId: "session-1",
-      runId: "run-1",
-      attemptId: "attempt-1",
-      workspaceId: "default",
-      payload: persistedPayload,
-      payloadSecure: sealedSecure,
-    });
-
-    // 2. Assert the persisted outbox row: payload has [REDACTED], payload_secure is v1.
-    const row = outbox.get("cmd-profile-1");
+    // The persisted row: redacted `payload`, sealed `payload_secure`.
+    const row = outbox.get(decision.commandId);
     expect(row).toBeDefined();
     expect(row!.deliveryState).toBe("pending");
 
-    // The persisted `payload` column redacts the API key.
-    const persistedProfile = (row!.payload as { profile?: { apiKey?: string } }).profile;
+    const persistedProfile = (row!.payload as { profile?: RunProfilePayload }).profile;
     expect(persistedProfile).toBeDefined();
     expect(persistedProfile!.apiKey).toBe("[REDACTED]");
-    expect(JSON.stringify(row!.payload)).not.toContain("sk-secret-key");
-
-    // The persisted `payload_secure` column is a sealed v1. string that does
-    // not contain the plaintext key.
-    const storedSecure = row!.payloadSecure as string;
-    expect(typeof storedSecure).toBe("string");
-    expect(storedSecure).toMatch(/^v1\./);
-    expect(storedSecure).not.toContain("sk-secret-key");
-
-    // 3. toEnvelope with the opener delivers the cleartext to the live frame.
-    const envelope = toEnvelope(row!, (stored) => {
-      const plain = typeof stored === "string" ? secretBox.open(stored) : null;
-      return plain === null ? null : JSON.parse(plain);
+    // I5: every settings.env string is redacted on disk too — a credential the
+    // operator put in the settings JSON instead of the apiKey field never
+    // reaches `SELECT payload FROM command_outbox`.
+    expect(persistedProfile!.settings).toEqual({
+      env: { CUSTOM_VAR: "[REDACTED]" },
+      extra: true,
     });
+    expect(JSON.stringify(row!.payload)).not.toContain("sk-secret-key");
+    expect(JSON.stringify(row!.payload)).not.toContain("custom");
 
-    // The live frame carries the cleartext apiKey.
+    const storedSecure = row!.payloadSecure;
+    expect(typeof storedSecure).toBe("string");
+    expect(storedSecure as string).toMatch(/^v1\./);
+    expect(storedSecure as string).not.toContain("sk-secret-key");
+
+    // The live frame — rebuilt through the server's own opener — carries the
+    // cleartext profile the runner's executor consumes.
+    const envelope = toEnvelope(row!, (stored) =>
+      openSealedPayload(stored, (sealed) => secretBox.open(sealed)),
+    );
+
     const frameProfile = (envelope.payload as { profile?: RunProfilePayload }).profile;
     expect(frameProfile).toBeDefined();
     expect(frameProfile!.apiKey).toBe("sk-secret-key");
+    expect(frameProfile!.profileId).toBe(profile.profileId);
+    expect(frameProfile!.name).toBe("9Router");
     expect(frameProfile!.endpoint).toBe("http://192.168.2.3:20128");
     expect(frameProfile!.authField).toBe("ANTHROPIC_AUTH_TOKEN");
-    expect(frameProfile!.name).toBe("9Router");
     expect(frameProfile!.modelMapping).toEqual({ sonnet: "prime", opus: "titan", haiku: "nano" });
     expect(frameProfile!.settings).toEqual({ env: { CUSTOM_VAR: "custom" }, extra: true });
 
-    // The rest of the run.start payload is intact on the live frame.
+    // The rest of the run.start payload rides the live frame unchanged.
     const framePayload = envelope.payload as { prompt?: string; sessionId?: string };
     expect(framePayload.prompt).toBe("hello");
     expect(framePayload.sessionId).toBe("session-1");
     expect(envelope.kind).toBe("run.start");
   });
 
-  test("toEnvelope falls back to redacted payload when the opener returns null", async () => {
+  test("toEnvelope falls back to the redacted payload when the seal cannot be opened", async () => {
     const db = new Database(":memory:");
     migrate(db);
 
     const secretBox = createSecretBox(new Uint8Array(32).fill(42));
+    const scheduler = makeScheduler(db, secretBox);
     const outbox = new CommandOutbox(db);
+    const profile = makeProfilePayload(db, secretBox);
 
-    const persistedPayload = {
-      sessionId: "session-2",
-      runId: "run-2",
-      attemptId: "attempt-2",
-      workspaceId: "default",
-      prompt: "again",
-      profile: {
-        profileId: "prof_x",
-        name: "Gateway",
-        endpoint: "http://192.168.2.3:20128",
-        authField: "ANTHROPIC_API_KEY",
-        apiKey: "[REDACTED]",
+    const decision = await scheduler.dispatch(
+      {
+        sessionId: "session-2",
+        runId: "run-2",
+        attemptId: "attempt-2",
+        workspaceId: "default",
+        prompt: "again",
+        ownerId: "user-1",
+        profile,
       },
-    };
-
-    // A sealed blob from a different key — opener returns null.
-    const foreignSecretBox = createSecretBox(new Uint8Array(32).fill(99));
-    const sealedSecure = foreignSecretBox.seal(
-      JSON.stringify({
-        ...persistedPayload,
-        profile: { ...persistedPayload.profile, apiKey: "sk-foreign" },
-      }),
+      capacity,
     );
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) throw new Error("dispatch refused");
 
-    await outbox.enqueue({
-      commandId: "cmd-profile-2",
-      runnerId: "runner-a",
-      kind: "run.start",
-      issuedAt: "2026-10-31T00:00:00.000Z",
-      sessionId: "session-2",
-      runId: "run-2",
-      attemptId: "attempt-2",
-      workspaceId: "default",
-      payload: persistedPayload,
-      payloadSecure: sealedSecure,
-    });
-
-    const row = outbox.get("cmd-profile-2");
+    const row = outbox.get(decision.commandId);
     expect(row).toBeDefined();
 
-    // The opener with the wrong key returns null → redacted payload is the frame.
-    const envelope = toEnvelope(row!, (stored) => {
-      const plain = typeof stored === "string" ? secretBox.open(stored) : null;
-      return plain === null ? null : JSON.parse(plain);
-    });
-
-    const frameProfile = (envelope.payload as { profile?: { apiKey?: string } }).profile;
-    expect(frameProfile).toBeDefined();
-    expect(frameProfile!.apiKey).toBe("[REDACTED]");
-    expect(frameProfile).not.toHaveProperty("apiKey", "sk-foreign");
-  });
-
-  test("the model mapping env vars the executor would set are derivable from the profile", async () => {
-    // The runner executor's own tests cover the env-overlay construction; this
-    // test asserts the mapping table the executor relies on, so a profile with
-    // all five model roles produces the correct env var names at the frame level.
-    const expectedVars = new Map(
-      MODEL_ROLES.map((role, i) => {
-        const vars = [
-          "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          "ANTHROPIC_DEFAULT_OPUS_MODEL",
-          "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "ANTHROPIC_DEFAULT_FABLE_MODEL",
-          "CLAUDE_CODE_SUBAGENT_MODEL",
-        ];
-        return [role, vars[i]!];
-      }),
+    // A rotated server secret: the opener cannot decrypt the row. The frame
+    // must degrade to the redacted payload, never throw and never leak.
+    const foreignSecretBox = createSecretBox(new Uint8Array(32).fill(99));
+    const envelope = toEnvelope(row!, (stored) =>
+      openSealedPayload(stored, (sealed) => foreignSecretBox.open(sealed)),
     );
 
-    expect(expectedVars.get("sonnet")).toBe("ANTHROPIC_DEFAULT_SONNET_MODEL");
-    expect(expectedVars.get("opus")).toBe("ANTHROPIC_DEFAULT_OPUS_MODEL");
-    expect(expectedVars.get("haiku")).toBe("ANTHROPIC_DEFAULT_HAIKU_MODEL");
-    expect(expectedVars.get("fable")).toBe("ANTHROPIC_DEFAULT_FABLE_MODEL");
-    expect(expectedVars.get("subagent")).toBe("CLAUDE_CODE_SUBAGENT_MODEL");
+    const frameProfile = (envelope.payload as { profile?: RunProfilePayload }).profile;
+    expect(frameProfile).toBeDefined();
+    expect(frameProfile!.apiKey).toBe("[REDACTED]");
+    expect(frameProfile!.settings).toEqual({ env: { CUSTOM_VAR: "[REDACTED]" }, extra: true });
+    expect(JSON.stringify(envelope.payload)).not.toContain("sk-secret-key");
   });
 });
