@@ -65,6 +65,7 @@ import {
   handleUpdateRunnerName,
 } from "./routes/runners-routes.ts";
 import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
+import { handleCancelSchedule, handleListSchedules } from "./routes/schedules-routes.ts";
 import {
   handleDeleteSession,
   handleListSessions,
@@ -465,6 +466,29 @@ export function createServer(options: ServerOptions): ServerHandle {
             sessionId,
           );
         }
+      }
+
+      // §11.5: a session's schedules, and cancel-by-id. Both owner-scoped.
+      const sessionSchedulesMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/schedules$/);
+      if (sessionSchedulesMatch && request.method === "GET") {
+        return handleListSchedules(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(sessionSchedulesMatch[1] ?? ""),
+        );
+      }
+
+      const scheduleMatch = url.pathname.match(/^\/api\/schedules\/([^/]+)$/);
+      if (scheduleMatch && request.method === "DELETE") {
+        return handleCancelSchedule(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(scheduleMatch[1] ?? ""),
+        );
       }
 
       // Fetch an attachment by id: browser (owner) and runner endpoints.
