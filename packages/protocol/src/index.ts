@@ -327,6 +327,17 @@ export {
 } from "./models.ts";
 export * from "./mutation.ts";
 export {
+  MODEL_ROLES,
+  type ModelMapping,
+  type ModelRole,
+  type ProfileAuthField,
+  type ProfileDetail,
+  type ProfileSummary,
+  parseModelMapping,
+  parseRunProfilePayload,
+  type RunProfilePayload,
+} from "./profiles.ts";
+export {
   type DeclaredWorkspace,
   parseDeclaredWorkspaces,
   type ReconcileAction,
