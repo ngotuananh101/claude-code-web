@@ -77,3 +77,48 @@ export function shouldFollowAppend(
 ): boolean {
   return nextCount > previousCount && !userScrolledUp;
 }
+
+/**
+ * Whether the journal should automatically load earlier turns.
+ *
+ * Only loads when:
+ * 1. The user has intentionally scrolled up to read earlier history (`userScrolledUp`).
+ * 2. There are earlier turns remaining to be loaded (`hasEarlierTurns`).
+ * 3. The viewport is scrollable (`scrollHeight > clientHeight`).
+ * 4. The viewport scroll position is near the top of the feed (`isNearTop`).
+ *
+ * This prevents accidental auto-loading when the feed mounts, when the user is
+ * at the bottom, or when the feed fits within the viewport.
+ */
+export function shouldAutoLoadEarlier(
+  userScrolledUp: boolean,
+  hasEarlierTurns: boolean,
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  threshold = DEFAULT_TOP_THRESHOLD_PX,
+): boolean {
+  if (!userScrolledUp) return false;
+  if (!hasEarlierTurns) return false;
+  if (scrollHeight <= clientHeight) return false;
+  return isNearTop(scrollTop, threshold);
+}
+
+/**
+ * Determines whether the scroll to bottom should be smooth or instant.
+ *
+ * Smooth scroll is used ONLY when a single new turn is appended to the tail
+ * while following live activity. Initial mount or bulk prepends (e.g. historical
+ * messages loading asynchronously) snap instantly with 'auto' so the user is
+ * not subjected to an animation across the entire transcript.
+ */
+export function resolveScrollBehavior(
+  previousCount: number,
+  nextCount: number,
+  previousTailKey?: string,
+  nextTailKey?: string,
+): ScrollBehavior {
+  if (previousCount === 0) return "auto";
+  const isTailAppend = nextCount === previousCount + 1 && nextTailKey !== previousTailKey;
+  return isTailAppend ? "smooth" : "auto";
+}

@@ -14,7 +14,9 @@ import {
   isNearBottom,
   isNearTop,
   previousPageStart,
+  resolveScrollBehavior,
   resolveWindowStart,
+  shouldAutoLoadEarlier,
   shouldFollowAppend,
 } from "@/features/journal/scroll.ts";
 
@@ -62,10 +64,14 @@ const emptyCopy = computed(() =>
  * `pinnedStart` freezes the window's first index once the reader scrolls up:
  * turns appended live must extend the bottom without dropping a turn off the
  * top, which would shift what they are reading. While it is null the window
- * follows the tail — the state the feed mounts in — and returning to the
- * bottom releases it again so no more than one page stays mounted.
+ * follows the tail — the state the feed mounts in.
+ *
+ * `earliestLoadedIndex` tracks how far back the reader has expanded history.
+ * Once older turns are loaded (via button or upward scroll), they remain loaded
+ * even if the reader scrolls back to the tail to inspect new output.
  */
 const pinnedStart = ref<number | null>(null);
+const earliestLoadedIndex = ref<number | null>(null);
 
 const startIndex = computed(() => resolveWindowStart(pinnedStart.value, turns.value.length));
 const displayedTurns = computed(() => turns.value.slice(startIndex.value));
@@ -98,10 +104,12 @@ function checkScrollPosition(): void {
     viewport.scrollTop,
     viewport.clientHeight,
   );
-  // Back at the tail: release the pinned window so only the newest page stays
-  // mounted. Everything below the viewport is empty here, so dropping the
-  // earlier turns cannot move what the operator is reading.
-  if (!userScrolledUp.value) pinnedStart.value = null;
+  // Back at the tail: if earlier history has not been expanded, release the
+  // window to follow the tail live. If earlier history WAS expanded, preserve
+  // it so the loaded messages are not abruptly truncated.
+  if (!userScrolledUp.value) {
+    pinnedStart.value = earliestLoadedIndex.value;
+  }
 }
 
 function onScroll(): void {
@@ -111,7 +119,15 @@ function onScroll(): void {
   const viewport = getViewport();
   if (!viewport) return;
 
-  if (hasEarlierTurns.value && isNearTop(viewport.scrollTop)) {
+  if (
+    shouldAutoLoadEarlier(
+      userScrolledUp.value,
+      hasEarlierTurns.value,
+      viewport.scrollTop,
+      viewport.scrollHeight,
+      viewport.clientHeight,
+    )
+  ) {
     loadEarlierTurns();
     return;
   }
@@ -141,7 +157,9 @@ function loadEarlierTurns(): void {
   const previousHeight = viewport.scrollHeight;
 
   isLoadingEarlier = true;
-  pinnedStart.value = previousPageStart(startIndex.value);
+  const nextStart = previousPageStart(startIndex.value);
+  earliestLoadedIndex.value = nextStart;
+  pinnedStart.value = nextStart;
 
   void nextTick(() => {
     const updated = getViewport();
@@ -183,8 +201,8 @@ onMounted(() => {
   nextTick(() => {
     const viewport = getViewport();
     if (viewport) {
-      viewport.addEventListener("scroll", onScroll, { passive: true });
       viewport.scrollTop = viewport.scrollHeight;
+      viewport.addEventListener("scroll", onScroll, { passive: true });
     }
 
     if (typeof ResizeObserver !== "undefined" && contentRef.value) {
@@ -227,16 +245,24 @@ watch(
   },
 );
 
+let lastTailKey: string | undefined = turns.value[turns.value.length - 1]?.key;
+
 // New content only pulls the viewport down while the operator is already at
 // the tail. A user turn does not override an upward read: it can arrive from
 // another client or a replay, and the composer's own send is handled by the
 // `pendingRun` watcher above, which scrolls unconditionally.
 watch(
   () => turns.value.length,
-  (newLen, oldLen) => {
+  (newLen, oldLen = 0) => {
+    const currentTailKey = newLen > 0 ? turns.value[newLen - 1]?.key : undefined;
+    const previousTailKey = lastTailKey;
+    lastTailKey = currentTailKey;
+
     if (!shouldFollowAppend(oldLen, newLen, userScrolledUp.value)) return;
+
+    const behavior = resolveScrollBehavior(oldLen, newLen, previousTailKey, currentTailKey);
     nextTick(() => {
-      scrollToBottom("smooth");
+      scrollToBottom(behavior);
     });
   },
 );

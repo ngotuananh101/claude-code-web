@@ -4,7 +4,9 @@ import {
   isNearBottom,
   isNearTop,
   previousPageStart,
+  resolveScrollBehavior,
   resolveWindowStart,
+  shouldAutoLoadEarlier,
   shouldFollowAppend,
 } from "./scroll.ts";
 
@@ -101,5 +103,56 @@ describe("shouldFollowAppend", () => {
   test("never follows when nothing was appended", () => {
     expect(shouldFollowAppend(12, 12, false)).toBe(false);
     expect(shouldFollowAppend(12, 5, false)).toBe(false);
+  });
+});
+
+describe("shouldAutoLoadEarlier", () => {
+  test("returns true when user intentionally scrolled up, feed is scrollable, near top, and has earlier turns", () => {
+    // userScrolledUp=true, hasEarlier=true, scrollTop=50 (<=80), scrollHeight=2000, clientHeight=600
+    expect(shouldAutoLoadEarlier(true, true, 50, 2000, 600)).toBe(true);
+    expect(shouldAutoLoadEarlier(true, true, 0, 2000, 600)).toBe(true);
+    expect(shouldAutoLoadEarlier(true, true, 80, 2000, 600)).toBe(true);
+  });
+
+  test("returns false when user has not scrolled up (e.g. at bottom or initial mount)", () => {
+    // userScrolledUp=false prevents the flash-expansion bug on session enter
+    expect(shouldAutoLoadEarlier(false, true, 0, 2000, 600)).toBe(false);
+  });
+
+  test("returns false when there are no earlier turns remaining", () => {
+    expect(shouldAutoLoadEarlier(true, false, 0, 2000, 600)).toBe(false);
+  });
+
+  test("returns false when feed fits inside viewport without scrolling", () => {
+    // scrollHeight <= clientHeight
+    expect(shouldAutoLoadEarlier(true, true, 0, 500, 600)).toBe(false);
+    expect(shouldAutoLoadEarlier(true, true, 0, 600, 600)).toBe(false);
+  });
+
+  test("returns false when scrolled past top threshold", () => {
+    expect(shouldAutoLoadEarlier(true, true, 81, 2000, 600)).toBe(false);
+    expect(shouldAutoLoadEarlier(true, true, 300, 2000, 600)).toBe(false);
+  });
+
+  test("respects custom threshold", () => {
+    expect(shouldAutoLoadEarlier(true, true, 100, 2000, 600, 120)).toBe(true);
+    expect(shouldAutoLoadEarlier(true, true, 100, 2000, 600, 50)).toBe(false);
+  });
+});
+
+describe("resolveScrollBehavior", () => {
+  test("returns auto for initial population from empty", () => {
+    expect(resolveScrollBehavior(0, 10, undefined, "turn-10")).toBe("auto");
+  });
+
+  test("returns smooth for single turn tail append", () => {
+    expect(resolveScrollBehavior(10, 11, "turn-10", "turn-11")).toBe("smooth");
+  });
+
+  test("returns auto for bulk historical prepend or multiple batch loads", () => {
+    // Tail key did not change -> historical prepend
+    expect(resolveScrollBehavior(5, 55, "live-turn", "live-turn")).toBe("auto");
+    // Multiple turns arrived simultaneously
+    expect(resolveScrollBehavior(5, 10, "turn-5", "turn-10")).toBe("auto");
   });
 });
