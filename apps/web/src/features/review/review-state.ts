@@ -26,10 +26,6 @@ export function reviewKey(path: string, hash: string): string {
   return `${path}\u0000${hash}`;
 }
 
-export function isReviewed(
-  reviewed: ReadonlySet<string>,
-  path: string,
-  hash: string,
-): boolean {
+export function isReviewed(reviewed: ReadonlySet<string>, path: string, hash: string): boolean {
   return reviewed.has(reviewKey(path, hash));
 }

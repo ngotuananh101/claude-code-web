@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { defaultDiffMode, isReviewed, resolveIncoming, reviewKey } from "./review-state.ts";
 
 test("defaultDiffMode prefers unified on a 420px panel and split when wide", () => {
@@ -9,12 +9,18 @@ test("defaultDiffMode prefers unified on a 420px panel and split when wide", () 
 });
 
 test("a clean draft always adopts a fresh read", () => {
-  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h1", draftDirty: false })).toBe("adopt");
-  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h2", draftDirty: false })).toBe("adopt");
+  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h1", draftDirty: false })).toBe(
+    "adopt",
+  );
+  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h2", draftDirty: false })).toBe(
+    "adopt",
+  );
 });
 
 test("a dirty draft with an unchanged hash adopts the viewer without a conflict", () => {
-  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h1", draftDirty: true })).toBe("adopt");
+  expect(resolveIncoming({ currentHash: "h1", incomingHash: "h1", draftDirty: true })).toBe(
+    "adopt",
+  );
 });
 
 test("a dirty draft whose file changed on the runner conflicts", () => {
