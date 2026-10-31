@@ -31,7 +31,8 @@ describe("profiles repository", () => {
     const listed = listProfilesForOwner(db, "user-1");
     expect(listed.length).toBe(1);
     expect(listed[0]!.hasKey).toBe(true);
-    expect((listed[0] as Record<string, unknown>).apiKey).toBeUndefined();
+    expect("apiKey" in listed[0]!).toBe(false);
+    expect(JSON.stringify(listed[0])).not.toContain("sk-secret-123");
 
     const withSecret = getProfileWithSecret(db, created.id, "user-1");
     expect(withSecret?.apiKey).toBe("sk-secret-123");
