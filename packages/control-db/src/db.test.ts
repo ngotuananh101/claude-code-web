@@ -64,6 +64,30 @@ describe("scheduled_tasks migration (§5.3)", () => {
   });
 });
 
+describe("run id indexes (§11.5)", () => {
+  test("run_events and command_outbox answer run_id lookups from an index", () => {
+    // The schedule tick asks "is this deterministic run id known?" for every
+    // due row, every 15 seconds. Without these indexes each question is a full
+    // scan of the journal and the outbox, which grow with every run.
+    const db = new Database(":memory:");
+    migrate(db);
+
+    const indexes = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('run_events_run', 'command_outbox_run')",
+      )
+      .all() as Array<{ name: string }>;
+    expect(indexes.map((row) => row.name).sort()).toEqual(["command_outbox_run", "run_events_run"]);
+
+    const plan = (sql: string) =>
+      (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+        .map((row) => row.detail)
+        .join("\n");
+    expect(plan("SELECT 1 FROM run_events WHERE run_id = 'r'")).toContain("run_events_run");
+    expect(plan("SELECT 1 FROM command_outbox WHERE run_id = 'r'")).toContain("command_outbox_run");
+  });
+});
+
 describe("workspaces.branches migration (M4)", () => {
   test("a database created before the column gains it on migrate", () => {
     const db = new Database(":memory:");

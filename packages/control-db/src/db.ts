@@ -117,6 +117,14 @@ export function migrate(db: Database): void {
       ON command_outbox (runner_id, delivery_state, created_at);
   `);
 
+  // §11.5: the schedule tick asks "is this run id known?" — once per due row
+  // per tick. The outbox is one of the three tables that answer it, and it has
+  // no other index on run_id.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS command_outbox_run
+      ON command_outbox (run_id);
+  `);
+
   // Server-side view of which run is live. This is what enforces §2.3's "one
   // active run per session" and the per-runner capacity count, without asking a
   // Runner that may be unreachable.
@@ -168,6 +176,14 @@ export function migrate(db: Database): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS run_events_attempt
       ON run_events (attempt_id, local_sequence);
+  `);
+
+  // §11.5: `runKnown` looks a deterministic scheduled run id up in the journal,
+  // which is the one table here that grows without bound while the database
+  // lives. Without this index every lookup is a full scan.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS run_events_run
+      ON run_events (run_id);
   `);
 
   // §12.1: "conflicting duplicate phải được audit". The journal keeps the first
