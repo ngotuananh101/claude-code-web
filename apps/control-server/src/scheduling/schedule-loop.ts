@@ -20,6 +20,7 @@ import type { Database } from "bun:sqlite";
 import {
   advanceSchedule,
   computeNextFire,
+  type DueScheduleCursor,
   dueSchedules,
   type RunnerState,
   runKnown,
@@ -41,18 +42,46 @@ export type ScheduleTickOptions = {
 export type ScheduleLoopOptions = ScheduleTickOptions & { intervalMs?: number };
 
 const DEFAULT_INTERVAL_MS = 15_000;
+const DUE_PAGE_SIZE = 20;
+const MAX_DUE_ROWS_PER_TICK = 500;
 
-/** One pass over every due row. A failure in one row never stops the others. */
+/**
+ * One pass over every due row. A failure in one row never stops the others.
+ *
+ * The pass pages with a keyset cursor rather than a fixed LIMIT: a row whose
+ * dispatch is refused keeps its `next_fire_at`, so with a single LIMIT the
+ * same page of stuck rows (one dead runner, say) would be fetched forever
+ * while every row behind it starved. The cursor moves past each page, so the
+ * pass considers every due row once — up to `MAX_DUE_ROWS_PER_TICK`, after
+ * which the rest wait for the next tick.
+ */
 export async function runScheduleTick(options: ScheduleTickOptions): Promise<void> {
   const now = options.now ?? (() => Date.now());
   const log = options.log ?? ((message: string) => console.warn(message));
 
-  for (const row of dueSchedules(options.db, now())) {
-    try {
-      await fireSchedule(options, row, now(), log);
-    } catch (error) {
-      log(`scheduled-tasks: tick failed for ${row.scheduleId}: ${String(error)}`);
+  let after: DueScheduleCursor | undefined;
+  let considered = 0;
+  let capped = false;
+  while (considered < MAX_DUE_ROWS_PER_TICK) {
+    const page = dueSchedules(options.db, now(), DUE_PAGE_SIZE, after);
+    if (page.length === 0) break;
+    const last = page[page.length - 1]!;
+    after = { nextFireAt: last.nextFireAt, scheduleId: last.scheduleId };
+    for (const row of page) {
+      considered += 1;
+      try {
+        await fireSchedule(options, row, now(), log);
+      } catch (error) {
+        log(`scheduled-tasks: tick failed for ${row.scheduleId}: ${String(error)}`);
+      }
     }
+    if (page.length < DUE_PAGE_SIZE) break;
+    if (considered >= MAX_DUE_ROWS_PER_TICK) capped = true;
+  }
+  if (capped) {
+    log(
+      `scheduled-tasks: ${considered} due rows considered this tick; the rest wait for the next one`,
+    );
   }
 }
 

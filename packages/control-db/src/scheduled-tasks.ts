@@ -173,15 +173,41 @@ function projectCancelled(db: Database, event: ScheduleEventInput): void {
   ).run(event.attemptId, payload.cliTaskId);
 }
 
-export function dueSchedules(db: Database, now: number, limit = 20): ScheduleRecord[] {
-  const rows = db
-    .query(
-      `SELECT * FROM scheduled_tasks
-       WHERE state = 'active' AND next_fire_at <= ?
-       ORDER BY next_fire_at, created_at
-       LIMIT ?`,
-    )
-    .all(now, limit) as Array<Record<string, unknown>>;
+/** The `(next_fire_at, schedule_id)` of the last row a tick page saw. */
+export type DueScheduleCursor = { nextFireAt: number; scheduleId: string };
+
+/**
+ * Active rows whose fire time has passed, oldest slot first, from `after`
+ * onwards. The order is `(next_fire_at, schedule_id)` — a total order, so the
+ * tick can page with a keyset cursor instead of an offset: rows a tick has
+ * already dispatched leave the result set, which would make OFFSET skip rows.
+ */
+export function dueSchedules(
+  db: Database,
+  now: number,
+  limit = 20,
+  after?: DueScheduleCursor,
+): ScheduleRecord[] {
+  const rows = (
+    after === undefined
+      ? db
+          .query(
+            `SELECT * FROM scheduled_tasks
+             WHERE state = 'active' AND next_fire_at <= ?
+             ORDER BY next_fire_at, schedule_id
+             LIMIT ?`,
+          )
+          .all(now, limit)
+      : db
+          .query(
+            `SELECT * FROM scheduled_tasks
+             WHERE state = 'active' AND next_fire_at <= ?
+               AND (next_fire_at > ? OR (next_fire_at = ? AND schedule_id > ?))
+             ORDER BY next_fire_at, schedule_id
+             LIMIT ?`,
+          )
+          .all(now, after.nextFireAt, after.nextFireAt, after.scheduleId, limit)
+  ) as Array<Record<string, unknown>>;
   return rows.map(toRecord);
 }
 

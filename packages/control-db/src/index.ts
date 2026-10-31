@@ -71,6 +71,7 @@ export {
   advanceSchedule,
   cancelScheduleForOwner,
   computeNextFire,
+  type DueScheduleCursor,
   dueSchedules,
   listActiveSchedules,
   projectScheduleEvent,

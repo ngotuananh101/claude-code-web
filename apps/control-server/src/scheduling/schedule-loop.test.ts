@@ -352,4 +352,51 @@ describe("runScheduleTick", () => {
     expect(row(db)["state"]).toBe("orphaned");
     expect(commands(db)).toHaveLength(0);
   });
+
+  test("a page of refused rows cannot starve a healthy schedule behind them", async () => {
+    const { db, scheduler } = setup();
+    // Twenty rows pinned to a dead runner, all older than the healthy one.
+    // A fixed LIMIT 20 returns exactly these on every tick, and the healthy
+    // row on the next page is never looked at: one broken runner starves
+    // every schedule behind it, server-wide.
+    for (let index = 0; index < 20; index += 1) {
+      ensureSessionPin(db, {
+        sessionId: `stuck-${index}`,
+        ownerId: "user-1",
+        workspaceId: "workspace-1",
+        runnerId: "runner-stuck",
+      });
+      projectScheduleEvent(
+        db,
+        {
+          type: "schedule.created",
+          sessionId: `stuck-${index}`,
+          attemptId: `attempt-stuck-${index}`,
+          payload: {
+            toolCallId: `toolu_stuck_${index}`,
+            cron: "0 0 1 1 *",
+            recurring: false,
+            prompt: "stuck",
+            nextFireAt: NEXT_FIRE - 1000,
+            timezone: "UTC",
+          },
+        },
+        "runner-stuck",
+      );
+    }
+    project(db, { attemptId: "attempt-healthy", toolCallId: "toolu-healthy" });
+
+    await runScheduleTick({
+      db,
+      scheduler,
+      runnerGateway: { stateOf: (runnerId) => (runnerId === "runner-a" ? "ready" : "offline") },
+      now: () => NEXT_FIRE,
+      log: () => {},
+    });
+
+    const sent = commands(db);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload).toContain("sched_attempt-healthy_toolu-healthy");
+    expect(row(db, "sched_attempt-healthy_toolu-healthy")["state"]).toBe("done");
+  });
 });
