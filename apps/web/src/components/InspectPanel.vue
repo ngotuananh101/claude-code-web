@@ -8,12 +8,13 @@ import type {
   ScheduledTask,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { classifyDiffLines } from "../features/inspect/diff";
 import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
+import { resolveIncoming } from "../features/review/review-state";
 import { toScheduleRow } from "../features/schedules/schedule-rows";
 import {
   compositeId,
@@ -78,6 +79,25 @@ const draft = ref<string | null>(null);
 const saving = ref(false);
 const saveError = ref<string | null>(null);
 
+// Draft conflict handling (P3-D): a file changed on the runner between open
+// and write, while the operator still had an unsaved draft.
+const conflictIncoming = ref<FileReadResult | null>(null);
+const conflictNote = ref<string | null>(null);
+
+/** True when the open viewer has unsaved edits in the draft. */
+function isDraftDirty(): boolean {
+  return (
+    viewer.value !== null &&
+    draft.value !== null &&
+    isDirty(viewer.value.content ?? "", draft.value)
+  );
+}
+
+/** Text/editable predicate mirrored from `openEntry` for conflict adoption. */
+function isEditableRead(outcome: FileReadResult): boolean {
+  return !outcome.binary && !outcome.truncated && outcome.content !== null;
+}
+
 // Changes
 const changes = ref<GitChangesResult | null>(null);
 const changesError = ref<string | null>(null);
@@ -134,6 +154,10 @@ onBeforeUnmount(() => {
 let epoch = 0;
 
 const crumbs = computed(() => breadcrumbs(directory.value));
+
+// CodeMirror editor (P3-D): lazy-loaded so the Files tab never pays the
+// parse/compile cost until an editable file is opened.
+const CodeEditor = defineAsyncComponent(() => import("./review/CodeEditor.vue"));
 
 // The runner is trusted to be well-behaved, not to be bug-free: a wrongly typed
 // result must not tear down the whole panel's render.
@@ -287,6 +311,29 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
     draft.value = null;
     return;
   }
+
+  // An incoming open of the same path the operator is already editing: the
+  // runner may have changed the file since the draft was opened. Resolve
+  // against the draft's dirtiness — a clean draft silently adopts the new
+  // content, a dirty one raises a conflict and keeps the draft.
+  if (viewer.value !== null && viewer.value.path === path && draft.value !== null) {
+    const resolution = resolveIncoming({
+      currentHash: viewer.value.hash,
+      incomingHash: outcome.value.hash,
+      draftDirty: isDirty(viewer.value.content ?? "", draft.value),
+    });
+    if (resolution === "conflict") {
+      // Keep viewer + draft, keep the operator's work; surface the new bytes.
+      conflictIncoming.value = outcome.value;
+      conflictNote.value = null;
+      return;
+    }
+  }
+
+  // Different path or a clean resolution: drop any stale conflict state.
+  conflictIncoming.value = null;
+  conflictNote.value = null;
+
   viewer.value = outcome.value;
   // Editable only for text, untruncated files with content available.
   if (!outcome.value.binary && !outcome.value.truncated && outcome.value.content !== null) {
@@ -346,10 +393,86 @@ async function saveFile(): Promise<void> {
   if (current !== epoch) return;
   saving.value = false;
   if (!outcome.ok) {
+    // A hash mismatch means the file changed under the operator since they
+    // last read it: surface the runner's current bytes so they can adopt or
+    // overwrite their draft instead of losing it to a silent overwrite.
+    if (outcome.code === "FILE_CONFLICT") {
+      const fresh = await readFile(id, viewer.value.path);
+      if (fresh.ok) {
+        conflictIncoming.value = fresh.value;
+        conflictNote.value = outcome.message;
+      } else {
+        // Network/parse failure fetching the fresh bytes: fall back to the
+        // translated save error so the operator still sees a reason.
+        saveError.value = outcome.message;
+      }
+      return;
+    }
     saveError.value = outcome.message;
     return;
   }
+
+  // A clean write clears any in-flight conflict; the draft is now the source
+  // of truth for the freshly written hash.
+  conflictIncoming.value = null;
+  conflictNote.value = null;
   viewer.value = viewerAfterSave(viewer.value, draft.value, outcome.value);
+  draft.value = outcome.value.content;
+  void loadFiles(directory.value);
+}
+
+/** Adopt the runner's version of the file, discarding the unsaved draft. */
+async function adoptConflict(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  const fresh = conflictIncoming.value;
+  if (fresh === null) return;
+  // Only text, untruncated files are editable — others keep the read-only
+  // `<pre>` path and have no draft to clear.
+  if (isEditableRead(fresh)) {
+    draft.value = fresh.content;
+  } else {
+    draft.value = null;
+  }
+  viewer.value = fresh;
+  conflictIncoming.value = null;
+  conflictNote.value = null;
+  saveError.value = null;
+}
+
+/**
+ * Overwrite the runner's version with the draft, re-checking against the
+ * freshest hash the runner currently holds.
+ */
+async function overwriteConflict(): Promise<void> {
+  const id = workspace.value;
+  if (id === null) return;
+  if (viewer.value === null || draft.value === null) return;
+  const path = viewer.value.path;
+
+  const latest = await readFile(id, path);
+  if (!latest.ok) {
+    saveError.value = latest.message;
+    return;
+  }
+  const outcome = await writeFile(id, path, draft.value, latest.value.hash);
+  if (!outcome.ok) {
+    // A second hash mismatch keeps the banner: refetch the latest bytes again
+    // so the adopt/overwrite buttons work against fresh state.
+    if (outcome.code === "FILE_CONFLICT") {
+      const fresh = await readFile(id, path);
+      if (fresh.ok) conflictIncoming.value = fresh.value;
+      conflictNote.value = outcome.message;
+    } else {
+      saveError.value = outcome.message;
+    }
+    return;
+  }
+
+  conflictIncoming.value = null;
+  conflictNote.value = null;
+  saveError.value = null;
+  viewer.value = viewerAfterSave(latest.value, draft.value, outcome.value);
   draft.value = outcome.value.content;
   void loadFiles(directory.value);
 }
@@ -418,6 +541,8 @@ watch(
     draft.value = null;
     saving.value = false;
     saveError.value = null;
+    conflictIncoming.value = null;
+    conflictNote.value = null;
     changes.value = null;
     changesError.value = null;
     changesLoading.value = false;
@@ -530,7 +655,7 @@ watch(tab, (next) => {
             Nội dung đã được rút gọn — chỉ hiển thị phần đầu của tệp.
           </p>
 
-          <!-- Editor (P3-B save): textarea only for text, untruncated files. -->
+          <!-- Editor (P3-B save / P3-D): CodeMirror only for text, untruncated files. -->
           <template v-if="draft !== null">
             <div class="mb-2 flex items-center justify-between gap-2">
               <span class="text-muted-foreground">bản nháp</span>
@@ -547,6 +672,34 @@ watch(tab, (next) => {
                 {{ saving ? "đang lưu…" : "lưu" }}
               </button>
             </div>
+            <!-- Conflict banner (P3-D): the file changed on the runner while the
+                 draft was open with unsaved edits. Appears above the editor;
+                 the save-error line below still shows when saveError !== null. -->
+            <div
+              v-if="conflictIncoming !== null"
+              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-foreground"
+            >
+              <p class="mb-1">
+                Tệp đã bị thay đổi trên Runner kể từ khi mở. Bản nháp của bạn được giữ nguyên.
+              </p>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="text-primary hover:underline"
+                  @click="adoptConflict"
+                >
+                  Tải bản mới (bỏ bản nháp)
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md bg-destructive px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50"
+                  :disabled="saving"
+                  @click="overwriteConflict"
+                >
+                  Ghi đè bằng bản nháp
+                </button>
+              </div>
+            </div>
             <p
               v-if="saveError !== null"
               class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-destructive"
@@ -561,11 +714,7 @@ watch(tab, (next) => {
                 tải lại
               </button>
             </p>
-            <textarea
-              v-model="draft"
-              class="w-full resize-y overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-background/60 p-2 font-mono text-xs text-foreground"
-              rows="16"
-            />
+            <CodeEditor v-model="draft" :path="viewer.path" class="max-h-80" />
           </template>
 
           <pre
