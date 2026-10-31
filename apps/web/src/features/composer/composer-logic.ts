@@ -9,7 +9,7 @@
  * into these helpers.
  */
 
-import type { EffortLevel, SessionSummary } from "@cc-web/protocol";
+import type { EffortLevel, ModelMapping, ProfileSummary, SessionSummary } from "@cc-web/protocol";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { type RegisterWorkspaceOutcome, registerWorkspace } from "@/services/browse-api.ts";
 import type { StartRunRequest } from "@/services/runs-api.ts";
@@ -158,6 +158,13 @@ export type RunPayloadInputs = {
    * attachments" and travels as nothing on the wire.
    */
   attachmentIds?: string[];
+  /**
+   * The selected profile id (Task 7), or null when the "Runner Host" default is
+   * active. Sent only when a real profile is chosen so the server applies the
+   * profile overlay; omitted otherwise so the run falls back to the host config.
+   * `undefined` is accepted for callers that have not yet resolved a value.
+   */
+  profileId: string | null | undefined;
 };
 
 /**
@@ -182,6 +189,7 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
     model,
     effort,
     ultracode,
+    profileId,
     workspaceId,
     projectRunnerId,
     runnerId,
@@ -203,6 +211,12 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   if (effort !== null) body.effort = effort;
   body.ultracode = ultracode;
 
+  // Profile: only when a real profile is chosen (not null/undefined) — the
+  // server applies the profile overlay; omitted means fall back to host config.
+  if (profileId !== null && profileId !== undefined) {
+    body.profileId = profileId;
+  }
+
   // Workspace / runner context rides only on the new-session page, and only
   // once the operator has chosen a folder to run in.
   if (inputs.isNewSessionPage && projectRunnerId !== undefined && workspaceId !== undefined) {
@@ -221,4 +235,47 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
   }
 
   return body;
+}
+
+/**
+ * Resolve the display label for a model role, given the active profile.
+ *
+ * When the active profile remaps that role to an upstream name (e.g.
+ * `sonnet -> prime`), the mapped value is appended in parentheses to the
+ * canonical label: `"Sonnet (prime)"` (§4.5.3). With no mapping the plain
+ * canonical label is returned so the picker always reads naturally.
+ */
+export function resolveModelLabel(input: {
+  model: string;
+  profile?: { modelMapping?: ModelMapping } | null;
+}): string {
+  const role = input.model.toLowerCase();
+  const mapping: ModelMapping | undefined = input.profile?.modelMapping;
+  const mapped = mapping?.[role as keyof ModelMapping];
+
+  // The canonical label for a role uses its capitalized form; an arbitrary
+  // value falls back gracefully to itself.
+  const canonical =
+    role === "sonnet"
+      ? "Sonnet"
+      : role === "opus"
+        ? "Opus"
+        : role === "haiku"
+          ? "Haiku"
+          : role === "fable"
+            ? "Fable"
+            : role === "subagent"
+              ? "Subagent"
+              : input.model;
+
+  if (typeof mapped === "string" && mapped.trim() !== "") {
+    return `${canonical} (${mapped})`;
+  }
+  return canonical;
+}
+
+/** Resolve a profile's display name from a summary. */
+export function profileName(profile: ProfileSummary | null | undefined): string {
+  if (!profile) return "Mặc định (Runner Host)";
+  return profile.name || profile.profileId;
 }

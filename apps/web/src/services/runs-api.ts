@@ -45,6 +45,11 @@ export type StartRunRequest = {
    * were picked so the wire carries exactly the files that were chosen.
    */
   attachmentIds?: string[];
+  /**
+   * The selected profile id (Task 7, §4.5.3). Omitted when absent so the run
+   * falls back to the runner host's default configuration.
+   */
+  profileId?: string;
 };
 
 export async function startRun(sessionId: string, run: StartRunRequest): Promise<StartRunResult> {
@@ -60,6 +65,7 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     if (run.branch !== undefined) body["branch"] = run.branch;
     if (run.resumeSessionId !== undefined) body["resumeSessionId"] = run.resumeSessionId;
     if (run.attachmentIds !== undefined) body["attachmentIds"] = run.attachmentIds;
+    if (run.profileId !== undefined) body["profileId"] = run.profileId;
     response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { EffortLevel, RunnerModel } from "@cc-web/protocol";
+import type { EffortLevel, ProfileSummary, RunnerModel } from "@cc-web/protocol";
 import { Check, ChevronDown, ChevronRight, Cpu, Sparkles, Zap } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { resolveModelLabel } from "@/features/composer/composer-logic.ts";
 import {
   EFFORT_LABELS,
   effortAt,
@@ -39,6 +40,10 @@ const props = defineProps<{
   effort: EffortLevel | null;
   /** The standing ultracode mode. */
   ultracode: boolean;
+  /** The selected profile id, or null/undefined for the runner-host default. */
+  profileId: string | null | undefined;
+  /** Profiles the operator can pick from; empty means the profile selector is hidden. */
+  profiles: readonly ProfileSummary[];
   disabled?: boolean;
   /** Whether the popover starts opened (useful in previews / deep links). */
   defaultOpen?: boolean;
@@ -48,6 +53,7 @@ const emit = defineEmits<{
   "update:model": [value: string];
   "update:effort": [value: EffortLevel | null];
   "update:ultracode": [value: boolean];
+  "update:profileId": [value: string | null];
 }>();
 
 const open = ref(props.defaultOpen ?? false);
@@ -57,8 +63,36 @@ const showDescriptions = ref(false);
 const models = computed(() => pickerModels(props.advertised));
 const selected = computed(() => modelFor(models.value, props.model));
 const levels = computed(() => effortLevelsFor(selected.value));
-const triggerLabel = computed(() => modelLabel(models.value, props.model));
+const triggerLabel = computed(() => {
+  const base = modelLabel(models.value, props.model);
+  // When a profile remaps this model's role, surface the upstream name on the
+  // closed trigger too (e.g. "Sonnet (prime)") so the chip stays accurate.
+  const mapped = profileMapping.value[props.model as keyof typeof profileMapping.value];
+  if (typeof mapped === "string" && mapped.trim() !== "") {
+    return resolveModelLabel({
+      model: props.model,
+      profile: { modelMapping: profileMapping.value as Record<string, string> },
+    });
+  }
+  return base;
+});
 const knobPosition = computed(() => effortPosition(levels.value, props.effort));
+
+/** The active profile object (if any), looked up by id from the saved list. */
+const activeProfile = computed<ProfileSummary | undefined>(() => {
+  if (!props.profileId) return undefined;
+  return props.profiles.find((p) => p.profileId === props.profileId);
+});
+
+/** The model-mapping overlay for the active profile; empty when none selected. */
+const profileMapping = computed(() => activeProfile.value?.modelMapping ?? {});
+
+/** Whether the profile selector should be shown (only when profiles exist). */
+const showProfileSelector = computed(() => props.profiles.length > 0);
+
+function selectProfile(value: string | null): void {
+  emit("update:profileId", value);
+}
 const activeIndex = computed(() =>
   props.effort === null ? -1 : levels.value.indexOf(props.effort),
 );
@@ -129,8 +163,8 @@ function percent(index: number): string {
         size="sm"
         :disabled="disabled"
         class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-        aria-label="Chọn model và mức nỗ lực"
-        :title="`Model: ${triggerLabel}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
+        aria-label="Chọn model, mức nỗ lực và profile"
+        :title="`Model: ${triggerLabel}${activeProfile.value ? ` · ${activeProfile.value.name}` : ''}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
       >
         <Cpu :size="13" class="shrink-0" />
         <span class="max-w-[110px] truncate">{{ triggerLabel }}</span>
@@ -180,6 +214,62 @@ function percent(index: number): string {
         </button>
       </div>
 
+      <!-- Profile selector (§4.5.3): runner-host default first (null), then saved profiles.
+           When a profile with a model mapping is active, the rows below re-label
+           the model roles with their upstream names (e.g. "Sonnet (prime)"). -->
+      <div v-if="showProfileSelector" class="border-b border-border pb-1.5">
+        <div class="flex items-center justify-between px-1 pb-1">
+          <span class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Provider profile
+          </span>
+          <button
+            v-if="profileId"
+            type="button"
+            class="cursor-pointer rounded px-1 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+            title="Bỏ chọn profile — dùng cấu hình mặc định của runner"
+            @click="selectProfile(null)"
+          >
+            Bỏ
+          </button>
+        </div>
+        <button
+          type="button"
+          role="radio"
+          :aria-checked="profileId == null"
+          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          :class="profileId == null && 'bg-accent/60'"
+          @click="selectProfile(null)"
+        >
+          <span class="min-w-0 flex-1 truncate text-[13px]">Mặc định (Runner Host)</span>
+          <Check v-if="profileId == null" :size="14" class="shrink-0 text-primary" />
+        </button>
+        <button
+          v-for="profile in profiles"
+          :key="profile.profileId"
+          type="button"
+          role="radio"
+          :aria-checked="profile.profileId === profileId"
+          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          :class="profile.profileId === profileId && 'bg-accent/60'"
+          @click="selectProfile(profile.profileId)"
+        >
+          <span class="min-w-0 flex-1">
+            <span
+              class="block truncate text-[13px]"
+              :class="
+                profile.profileId === profileId
+                  ? 'font-medium text-foreground'
+                  : 'text-foreground/90'
+              "
+            >
+              {{ profile.name }}</span>
+            <span class="block truncate font-mono text-[10px] text-muted-foreground">
+              {{ profile.endpoint }}</span>
+          </span>
+          <Check v-if="profile.profileId === profileId" :size="14" class="shrink-0 text-primary" />
+        </button>
+      </div>
+
       <!-- Models: one row per model the runner offers, check on the chosen one. -->
       <div class="grid gap-0.5" role="radiogroup" aria-label="Model">
         <button
@@ -197,7 +287,7 @@ function percent(index: number): string {
               class="block truncate text-[13px]"
               :class="entry.value === model ? 'font-medium text-foreground' : 'text-foreground/90'"
             >
-              {{ formatModelDisplayName(entry) }}
+              {{ profileMapping[entry.value as keyof typeof profileMapping] ? resolveModelLabel({ model: entry.value, profile: { modelMapping: profileMapping as Record<string, string> } }) : formatModelDisplayName(entry) }}
             </span>
             <span
               v-if="showDescriptions && formatModelDescription(entry) !== ''"

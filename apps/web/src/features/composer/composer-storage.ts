@@ -5,6 +5,8 @@ export type ComposerSettings = {
   model: string;
   effort: EffortLevel | null;
   ultracode: boolean;
+  /** The selected profile id, or null for the runner-host default (Task 7). */
+  profileId: string | null;
 };
 
 export const DEFAULT_COMPOSER_SETTINGS: Readonly<ComposerSettings> = {
@@ -12,9 +14,10 @@ export const DEFAULT_COMPOSER_SETTINGS: Readonly<ComposerSettings> = {
   model: "default",
   effort: null,
   ultracode: false,
+  profileId: null,
 };
 
-const STORAGE_KEY_DEFAULT = "cc-web.composer.default";
+export const STORAGE_KEY_DEFAULT = "cc-web.composer.default";
 const STORAGE_KEY_SESSION_PREFIX = "cc-web.composer.session.";
 
 export function sessionSettingsKey(sessionId: string): string {
@@ -40,6 +43,13 @@ export function parseComposerSettings(raw: string | null): ComposerSettings | nu
         typeof parsed.ultracode === "boolean"
           ? parsed.ultracode
           : DEFAULT_COMPOSER_SETTINGS.ultracode,
+      // Backward-compatible: a pre-Task-7 stored blob has no `profileId`, so the
+      // field is defaulted to null (the runner-host default) rather than surfacing
+      // as an undefined that would short-circuit `buildRunRequest`'s conditional.
+      profileId:
+        parsed.profileId === null || typeof parsed.profileId === "string"
+          ? parsed.profileId
+          : DEFAULT_COMPOSER_SETTINGS.profileId,
     };
   } catch {
     return null;

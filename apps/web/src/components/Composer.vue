@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { AttachmentInfo, EffortLevel, RunnerModel, SessionSummary } from "@cc-web/protocol";
+import type {
+  AttachmentInfo,
+  EffortLevel,
+  ProfileSummary,
+  RunnerModel,
+  SessionSummary,
+} from "@cc-web/protocol";
 import {
   ArrowUp,
   FileImage,
@@ -46,6 +52,7 @@ import {
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { uploadSessionAttachments } from "../services/attachments-api";
+import { listProfiles } from "../services/profiles-api";
 import {
   fetchRunners,
   liveRunners,
@@ -100,6 +107,10 @@ const permission = ref(initialSettings.permission);
 const model = ref(initialSettings.model);
 const effort = ref<EffortLevel | null>(initialSettings.effort);
 const ultracode = ref(initialSettings.ultracode);
+/** Profile selection state (Task 7, §4.5.3). */
+const profileId = ref<string | null>(initialSettings.profileId ?? null);
+/** Profiles loaded from the control server for the selector. */
+const profiles = ref<ProfileSummary[]>([]);
 
 watch(
   () => props.sessionId,
@@ -109,15 +120,17 @@ watch(
     model.value = loaded.model;
     effort.value = loaded.effort;
     ultracode.value = loaded.ultracode;
+    profileId.value = loaded.profileId ?? null;
   },
 );
 
-watch([permission, model, effort, ultracode], ([perm, mdl, eff, ultra]) => {
+watch([permission, model, effort, ultracode, profileId], ([perm, mdl, eff, ultra, prof]) => {
   saveComposerSettings(props.sessionId ?? null, {
     permission: perm,
     model: mdl,
     effort: eff,
     ultracode: ultra,
+    profileId: prof,
   });
 });
 
@@ -145,7 +158,14 @@ const workspaces = ref<OwnerWorkspace[]>([]);
 onMounted(() => {
   void refreshRunners();
   void refreshWorkspaces();
+  void refreshProfiles();
 });
+
+/** Load the owner's saved profiles for the profile selector (§4.5.3). */
+async function refreshProfiles(): Promise<void> {
+  const result = await listProfiles();
+  if (result.ok) profiles.value = result.profiles;
+}
 
 /**
  * The runner registry, with each live runner's advertised models (§5.2).
@@ -456,6 +476,7 @@ async function send(): Promise<void> {
       model: model.value,
       effort: effort.value,
       ultracode: ultracode.value,
+      profileId: profileId.value,
       workspaceId: folder?.workspaceId,
       projectRunnerId: folder?.runnerId,
       runnerId: runnerId.value,
@@ -472,6 +493,7 @@ async function send(): Promise<void> {
         model: model.value,
         effort: effort.value,
         ultracode: ultracode.value,
+        profileId: profileId.value,
       });
       prompt.value = "";
       attachments.value = [];
@@ -744,6 +766,8 @@ async function stop(): Promise<void> {
           v-model:model="model"
           v-model:effort="effort"
           v-model:ultracode="ultracode"
+          v-model:profileId="profileId"
+          :profiles="profiles"
           :runner-id="pickerRunnerId"
           :advertised="advertisedModels"
         />

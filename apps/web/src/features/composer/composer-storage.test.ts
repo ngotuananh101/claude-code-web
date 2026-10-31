@@ -4,6 +4,7 @@ import {
   DEFAULT_COMPOSER_SETTINGS,
   loadComposerSettings,
   parseComposerSettings,
+  STORAGE_KEY_DEFAULT,
   saveComposerSettings,
   sessionSettingsKey,
 } from "./composer-storage.ts";
@@ -38,6 +39,7 @@ describe("composer-storage", () => {
         model: "claude-sonnet-4-5",
         effort: "high",
         ultracode: true,
+        profileId: null,
       },
       storage,
     );
@@ -48,6 +50,7 @@ describe("composer-storage", () => {
       model: "claude-sonnet-4-5",
       effort: "high",
       ultracode: true,
+      profileId: null,
     });
   });
 
@@ -61,6 +64,7 @@ describe("composer-storage", () => {
         model: "default",
         effort: null,
         ultracode: false,
+        profileId: null,
       },
       storage,
     );
@@ -73,6 +77,7 @@ describe("composer-storage", () => {
         model: "claude-opus-4-6",
         effort: "max",
         ultracode: true,
+        profileId: null,
       },
       storage,
     );
@@ -82,6 +87,7 @@ describe("composer-storage", () => {
       model: "claude-opus-4-6",
       effort: "max",
       ultracode: true,
+      profileId: null,
     });
 
     // Session 2 should fall back to default
@@ -90,6 +96,7 @@ describe("composer-storage", () => {
       model: "claude-opus-4-6",
       effort: "max",
       ultracode: true,
+      profileId: null,
     });
   });
 
@@ -112,11 +119,31 @@ describe("composer-storage", () => {
         model: "default",
         effort: "low",
         ultracode: false,
+        profileId: null,
       },
       storage,
     );
     expect(storage.getItem(sessionSettingsKey("session-1"))).not.toBeNull();
     clearComposerSettings("session-1", storage);
     expect(storage.getItem(sessionSettingsKey("session-1"))).toBeNull();
+  });
+
+  // --- Task 7: profileId persistence & backward-compatible migration ---
+  test("persists and loads profileId", () => {
+    const storage = createMockStorage();
+    saveComposerSettings(null, { ...DEFAULT_COMPOSER_SETTINGS, profileId: "prof_123" }, storage);
+    expect(loadComposerSettings(null, storage).profileId).toBe("prof_123");
+  });
+
+  test("defaults profileId to null for pre-Task-7 stored blobs", () => {
+    const storage = createMockStorage();
+    // A blob written before `profileId` existed — no such field.
+    storage.setItem(
+      STORAGE_KEY_DEFAULT,
+      JSON.stringify({ permission: "plan", model: "default", effort: null, ultracode: false }),
+    );
+    const loaded = loadComposerSettings(null, storage);
+    expect(loaded.profileId).toBeNull();
+    expect(loaded).toEqual({ ...DEFAULT_COMPOSER_SETTINGS, permission: "plan" });
   });
 });
