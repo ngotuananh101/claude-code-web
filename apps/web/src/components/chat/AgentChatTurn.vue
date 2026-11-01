@@ -6,7 +6,7 @@ import { toast } from "vue-sonner";
 import { peekApprovalUi } from "@/features/approvals/store.ts";
 import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
 import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
-import type { AgentTurn } from "@/features/journal/chat-turns";
+import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
 import AgentLiveStatus from "./AgentLiveStatus.vue";
 import AgentProcessAccordion from "./AgentProcessAccordion.vue";
@@ -45,6 +45,23 @@ const completedSteps = computed(() => {
     (step) => step.kind !== "tool" || step.state !== "running",
   );
 });
+
+/** Filter steps for a process segment, holding back running tools for AgentLiveStatus. */
+function segmentSteps(steps: AgentStep[]): AgentStep[] {
+  if (props.turn.status !== "running") return steps ?? [];
+  return (steps ?? []).filter((step) => step.kind !== "tool" || step.state !== "running");
+}
+
+/** Check if the segment at idx is the last process segment in the turn. */
+function isLastProcessSegment(idx: number): boolean {
+  const segments = props.turn.segments ?? [];
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i]?.kind === "process") {
+      return i === idx;
+    }
+  }
+  return false;
+}
 
 /** Number of pending approvals that require operator decision. */
 const pendingApprovalCount = computed(() => {
@@ -118,15 +135,45 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       <span class="h-px flex-1 bg-border/60" aria-hidden="true" />
     </div>
 
-    <!-- Process accordion: thinking and settled tool steps collapse into one summary row -->
-    <AgentProcessAccordion
-      v-if="completedSteps.length > 0"
-      :steps="completedSteps"
-      :status="turn.status"
-      :duration-text="turn.durationText"
-      :terminal-for="terminalFor"
-      :task-for="taskFor"
-    />
+    <!-- Interleaved Segments (Process frames and Prose text in chronological order) -->
+    <template v-if="turn.segments && turn.segments.length > 0">
+      <template v-for="(seg, idx) in turn.segments" :key="seg.key">
+        <AgentProcessAccordion
+          v-if="seg.kind === 'process' && segmentSteps(seg.steps).length > 0"
+          :steps="segmentSteps(seg.steps)"
+          :status="isLastProcessSegment(idx) ? turn.status : 'done'"
+          :duration-text="isLastProcessSegment(idx) ? turn.durationText : undefined"
+          :terminal-for="terminalFor"
+          :task-for="taskFor"
+        />
+
+        <div
+          v-else-if="seg.kind === 'text' && seg.text"
+          :class="proseClasses"
+          class="min-w-0 max-w-full break-words"
+          v-html="renderMarkdown(seg.text)"
+        />
+      </template>
+    </template>
+
+    <!-- Legacy fallback when turn has no segments array -->
+    <template v-else>
+      <AgentProcessAccordion
+        v-if="completedSteps.length > 0"
+        :steps="completedSteps"
+        :status="turn.status"
+        :duration-text="turn.durationText"
+        :terminal-for="terminalFor"
+        :task-for="taskFor"
+      />
+
+      <div
+        v-if="turn.text"
+        :class="proseClasses"
+        class="min-w-0 max-w-full break-words"
+        v-html="renderMarkdown(turn.text)"
+      />
+    </template>
 
     <!-- Unified CLI-style live status while turn is running -->
     <AgentLiveStatus
@@ -134,14 +181,6 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       :turn="turn"
       :steps="turn.steps ?? []"
       :pending-approval-count="pendingApprovalCount"
-    />
-
-    <!-- Assistant Response Prose -->
-    <div
-      v-if="turn.text"
-      :class="proseClasses"
-      class="min-w-0 max-w-full break-words"
-      v-html="renderMarkdown(turn.text)"
     />
 
     <!-- Actions row (Copy response, Raw JSON toggle) - icon only, visible on hover -->
