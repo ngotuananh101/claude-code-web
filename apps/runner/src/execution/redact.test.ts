@@ -23,7 +23,21 @@ import { redactErrorText, redactSdkMessage } from "./redact.ts";
  * must break a test, and a key that is only ever exercised by one hand-written
  * payload is a key nobody will notice losing.
  */
-const CREDENTIAL_KEYS = ["apiKeySource", "apiKeyHelper", "apiKey", "authorization", "credential"];
+const CREDENTIAL_KEYS = [
+  "apiKeySource",
+  "apiKeyHelper",
+  "apiKey",
+  "authorization",
+  "credential",
+  // The SDK spells its own fields in snake_case in places (`api_key` on a
+  // settings/env echo), and a key-name walk that only knows camelCase hands
+  // the same secret to the outbox by a differently spelled door.
+  "api_key",
+  "auth_token",
+  "access_token",
+  "refresh_token",
+  "client_secret",
+];
 const WITHHELD_KEYS = [
   "total_cost_usd",
   "cost_usd",

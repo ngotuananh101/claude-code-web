@@ -186,6 +186,21 @@ export function modelLabel(models: readonly PickerModel[], value: string): strin
 }
 
 /**
+ * The closed trigger's text: the model label plus the selected profile's name.
+ *
+ * The chip must say which upstream a run will use. A profile with no model
+ * mapping changes nothing else the chip shows, so without its name the same
+ * chip means two different dispatches.
+ */
+export function triggerLabelWithProfile(
+  modelLabelText: string,
+  profileName: string | null | undefined,
+): string {
+  const name = profileName?.trim();
+  return name ? `${modelLabelText} · ${name}` : modelLabelText;
+}
+
+/**
  * The effort levels this model offers — `[]` means the picker hides the
  * section entirely (the model has no effort parameter to set).
  */

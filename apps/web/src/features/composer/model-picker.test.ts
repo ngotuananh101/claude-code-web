@@ -14,6 +14,7 @@ import {
   normalizeEffort,
   pickerModels,
   stepEffort,
+  triggerLabelWithProfile,
 } from "./model-picker.ts";
 
 /**
@@ -71,6 +72,20 @@ describe("modelFor / modelLabel", () => {
     expect(modelLabel(models, "pro")).toBe("pro (Opus)");
     expect(modelLabel(models, "default")).toBe("Mặc định");
     expect(modelLabel(models, "gone")).toBe("gone");
+  });
+});
+
+describe("triggerLabelWithProfile", () => {
+  test("appends the selected profile's name to the closed chip", () => {
+    // Without it the chip looks identical whether or not a profile is active —
+    // a profile with no model mapping changes nothing else it shows.
+    expect(triggerLabelWithProfile("Sonnet (prime)", "9Router")).toBe("Sonnet (prime) · 9Router");
+  });
+
+  test("keeps the model label alone when no profile is selected", () => {
+    expect(triggerLabelWithProfile("Sonnet (prime)", null)).toBe("Sonnet (prime)");
+    expect(triggerLabelWithProfile("Sonnet (prime)", undefined)).toBe("Sonnet (prime)");
+    expect(triggerLabelWithProfile("Sonnet (prime)", "   ")).toBe("Sonnet (prime)");
   });
 });
 

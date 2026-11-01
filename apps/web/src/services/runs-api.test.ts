@@ -141,6 +141,18 @@ describe("startRun", () => {
     });
   });
 
+  test("a 400 profile_key_unreadable keeps its own outcome", async () => {
+    // The stored key was sealed with a different server secret (usually a JWT
+    // rotation) or was tampered with. Retrying cannot help and a generic
+    // failure would hide the fix: re-enter the key for that profile.
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response("profile_key_unreadable", { status: 400 })) as typeof fetch;
+    expect(await startRun("s", { prompt: "p", profileId: "prof_sealed" })).toEqual({
+      ok: false,
+      reason: "profile_key_unreadable",
+    });
+  });
+
   test("other 400s stay a plain error", async () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response("validation_failed", { status: 400 })) as typeof fetch;

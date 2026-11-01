@@ -520,6 +520,12 @@ async function send(): Promise<void> {
       void refreshProfiles();
       return;
     }
+    if (result.reason === "profile_key_unreadable") {
+      // The stored key cannot be opened with the server's current secret
+      // (usually after a JWT rotation). Retrying unchanged cannot work.
+      toast.error("Không đọc được API key đã lưu của profile — vào trang Profiles nhập lại key.");
+      return;
+    }
     toast.error("Không gửi được prompt — thử lại.");
   } finally {
     sending.value = false;

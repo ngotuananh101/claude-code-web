@@ -116,6 +116,13 @@ function validateSettingsJson(value: unknown): string | undefined {
   }
 }
 
+/**
+ * The placeholder the outbox and event journal use where a credential was
+ * removed. It is a storage artifact, never a credential: a client that echoes
+ * it back must not have it stored as the profile's key.
+ */
+const REDACTION_SENTINEL = "[REDACTED]";
+
 type ParsedProfileBody = {
   name: string;
   endpoint: string;
@@ -184,6 +191,12 @@ async function parseProfileBody(
       return jsonError("BAD_REQUEST", "apiKey must be a string", 400);
     } else {
       apiKey = undefined;
+    }
+    // Reject the sentinel on both paths. Silently treating it as "keep" would
+    // let a client believe it changed the key; storing it would hand every run
+    // a credential that can never authenticate.
+    if (apiKey === REDACTION_SENTINEL) {
+      return jsonError("BAD_REQUEST", "apiKey must not be the redaction sentinel", 400);
     }
   }
 

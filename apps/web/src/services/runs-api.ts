@@ -20,6 +20,7 @@ export type StartRunResult =
         | "session_pinned"
         | "runner_unavailable"
         | "unknown_profile"
+        | "profile_key_unreadable"
         | "error";
     };
 
@@ -90,10 +91,13 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
   }
   if (response.status === 503) return { ok: false, reason: "runner_unavailable" };
   if (response.status === 400) {
-    // A selected profile can be deleted between picking it and sending. The
-    // route answers `unknown_profile`; any other 400 is ordinary validation.
+    // A selected profile can be deleted between picking it and sending, or its
+    // sealed key can fail to open after the server secret changed. The route
+    // names both; any other 400 is ordinary validation.
     const body = (await response.text()).trim();
-    return { ok: false, reason: body === "unknown_profile" ? "unknown_profile" : "error" };
+    if (body === "unknown_profile") return { ok: false, reason: "unknown_profile" };
+    if (body === "profile_key_unreadable") return { ok: false, reason: "profile_key_unreadable" };
+    return { ok: false, reason: "error" };
   }
   if (!response.ok) return { ok: false, reason: "error" };
 

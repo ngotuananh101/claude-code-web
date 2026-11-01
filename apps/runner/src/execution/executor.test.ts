@@ -2553,6 +2553,53 @@ describe("P3-C profile injection", () => {
     expect("BOOL_VAR" in env).toBe(false);
   });
 
+  test("a profile's settings.env overrides a host value without touching process.env", async () => {
+    // The adapter merges `{ ...process.env, ...input.env }`, so an overlay entry
+    // must win over the host value — here PATH, the one every spawned tool
+    // consumes. And the daemon's own environment must come out unchanged: the
+    // overlay is per-run state, not a global edit (§5, §19.4).
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    const hostPath = process.env["PATH"];
+
+    let seen: SdkOptions | undefined;
+    const sdk: SdkStream = (options) => {
+      seen = options;
+      return (async function* () {
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+    };
+
+    const commandWithPath = {
+      ...COMMAND,
+      payload: {
+        prompt: "hello",
+        profile: {
+          profileId: "prof_path",
+          name: "Path Override",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "sk-test",
+          settings: { env: { PATH: "/profile/bin:/usr/bin" } },
+        },
+      },
+    };
+
+    await executeRun(db, commandWithPath, {
+      workspacePath: "/home/runner/project",
+      sdk,
+    });
+
+    const env = seen!.env as Record<string, string | undefined>;
+    expect(env["PATH"]).toBe("/profile/bin:/usr/bin");
+    expect(process.env["PATH"]).toBe(hostPath);
+  });
+
   test("a profile with non-env settings passes them as the settings overlay", async () => {
     const { db } = setup();
     beginAttempt(db, {

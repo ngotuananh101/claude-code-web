@@ -104,9 +104,11 @@ export type DispatchRequest = {
    * An upstream provider profile selected for this run (§17.1, §18.1). When
    * present, the run.start payload carries the resolved `RunProfilePayload`
    * with the cleartext `apiKey`. The on-disk outbox persists a redacted copy
-   * (apiKey replaced with `[REDACTED]`) while the live WebSocket frame delivers
-   * the key to the runner. Absent means no profile — the key is omitted,
-   * never sent as `null`.
+   * (apiKey and settings env values replaced with `[REDACTED]`) while the
+   * cleartext object is sealed into `payload_secure` and opened by the
+   * dispatcher on each drain. A dispatch with a profile but no sealer is
+   * refused (`profile_secrets_unavailable`). Absent means no profile — the key
+   * is omitted, never sent as `null`.
    */
   profile?: RunProfilePayload;
 };
@@ -120,7 +122,8 @@ export type DispatchDecision =
         | "runner_not_ready"
         | "runner_at_capacity"
         | "session_busy"
-        | "duplicate_run";
+        | "duplicate_run"
+        | "profile_secrets_unavailable";
     };
 
 type ActiveRow = {
@@ -143,8 +146,10 @@ export type SchedulerOptions = {
   /**
    * Seals a cleartext secure payload before it is persisted to
    * `command_outbox.payload_secure` (§18.1, P3-C Task 5b). When a profile is
-   * present the cleartext `apiKey` lives in `payloadSecure`; without this seam
-   * the object is stored as-is for backward compatibility.
+   * present the cleartext `apiKey` lives in `payloadSecure`. A profile dispatch
+   * without this seam is refused (`profile_secrets_unavailable`) — storing the
+   * cleartext object as a fallback would put the credential on disk in plain
+   * sight. Production wires the server's SecretBox here.
    */
   sealSecurePayload?: (value: unknown) => unknown;
 };
@@ -163,6 +168,16 @@ export class Scheduler {
   }
 
   async dispatch(request: DispatchRequest, capacity: RunnerCapacity): Promise<DispatchDecision> {
+    const sealer = this.#sealSecurePayload;
+    // §18.1: a profile carries a cleartext credential, and the only durable copy
+    // this scheduler may write is the sealed one. Without a sealer there is no
+    // safe place for the key — persisting it cleartext would defeat the whole
+    // point — so refuse before anything is written. Production always wires the
+    // server's SecretBox; this guards other embedders and tests.
+    if (request.profile !== undefined && sealer === undefined) {
+      return { ok: false, reason: "profile_secrets_unavailable" };
+    }
+
     if (capacity.state === "offline" || capacity.state === "revoked") {
       return { ok: false, reason: "runner_offline" };
     }
@@ -192,12 +207,12 @@ export class Scheduler {
     // Enqueue carries the envelope fields, not just the payload: the dispatcher
     // rebuilds the frame from the stored row alone, and a missing `sessionId`
     // would leave the runner unable to attribute the work.
-    // §17.1, §18.1: when a profile is selected, the cleartext `apiKey` rides the
-    // live WebSocket frame so the runner receives it, while the on-disk outbox
-    // persists a redacted copy so `SELECT payload FROM command_outbox` never
-    // holds the secret. The dispatcher's `toEnvelope` rebuilds the frame from
-    // the stored row using `payloadSecure` when present, falling back to the
-    // redacted `payload` after a restart (the runner rejects the missing key).
+    // §17.1, §18.1: when a profile is selected, the redacted copy is all that
+    // `SELECT payload` may hold, while the cleartext object rides
+    // `payload_secure` sealed by the server's SecretBox. The dispatcher opens
+    // the seal on every drain; only a legacy row without a secure payload falls
+    // back to the redacted copy, and that fails authentication rather than
+    // substituting a key.
     const cleartextPayload = {
       sessionId: request.sessionId,
       runId: request.runId,
@@ -234,13 +249,7 @@ export class Scheduler {
       attemptId: request.attemptId,
       workspaceId: request.workspaceId,
       payload: persistedPayload,
-      ...(hasProfile
-        ? {
-            payloadSecure: this.#sealSecurePayload
-              ? this.#sealSecurePayload(cleartextPayload)
-              : cleartextPayload,
-          }
-        : {}),
+      ...(hasProfile && sealer !== undefined ? { payloadSecure: sealer(cleartextPayload) } : {}),
     });
 
     // The pin is written only for an accepted dispatch — a refusal must never

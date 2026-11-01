@@ -567,7 +567,7 @@ describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
     expect(stored).toMatch(/^SEAL\(.*\)$/);
   });
 
-  test("without sealSecurePayload, the cleartext payloadSecure is stored as-is", async () => {
+  test("without a sealer a profile dispatch is refused and nothing is persisted", async () => {
     const db = new Database(":memory:");
     migrate(db);
     const scheduler = new Scheduler(db);
@@ -583,14 +583,18 @@ describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
       },
     };
 
-    await scheduler.dispatch(profileRequest, capacity());
+    // §18.1: the only durable copy of the cleartext payload is the sealed one.
+    // Without a sealer the scheduler has no safe place to put the key, so the
+    // dispatch is refused before anything is written — storing it cleartext
+    // would put the credential on disk in plain sight.
+    const decision = await scheduler.dispatch(profileRequest, capacity());
+    expect(decision).toEqual({ ok: false, reason: "profile_secrets_unavailable" });
 
-    const row = db
-      .query("SELECT payload_secure FROM command_outbox WHERE run_id = ?")
-      .get("run-1") as { payload_secure: string | null };
-    expect(row.payload_secure).not.toBeNull();
-    const parsed = JSON.parse(row.payload_secure!) as { profile: { apiKey: string } };
-    expect(parsed.profile.apiKey).toBe("sk-secret-key");
+    // No command (which would later replay a cleartext or poisoned start), no
+    // pin, no held slot.
+    const rows = db.query("SELECT COUNT(*) AS n FROM command_outbox").get() as { n: number };
+    expect(rows.n).toBe(0);
+    expect(scheduler.activeRunFor("session-1")).toBeUndefined();
   });
 
   test("the persisted payload redacts settings env values; the sealed copy keeps them", async () => {

@@ -17,6 +17,14 @@ const REDACTED_KEYS: ReadonlySet<string> = new Set([
   "apikey",
   "authorization",
   "credential",
+  // Snake_case spellings the SDK and our own settings overlays use. Matched as
+  // key names (the walk lowercases), not via the free-text patterns below,
+  // because a structured field is exactly the case the key walk exists for.
+  "api_key",
+  "auth_token",
+  "access_token",
+  "refresh_token",
+  "client_secret",
   "total_cost_usd",
   "modelusage",
   "cost_usd",

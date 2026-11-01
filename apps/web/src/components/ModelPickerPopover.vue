@@ -17,6 +17,7 @@ import {
   modelLabel,
   pickerModels,
   stepEffort,
+  triggerLabelWithProfile,
 } from "@/features/composer/model-picker.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 
@@ -89,6 +90,11 @@ const activeProfile = computed<ProfileSummary | undefined>(() => {
 
 /** The model-mapping overlay for the active profile; empty when none selected. */
 const profileMapping = computed(() => activeProfile.value?.modelMapping ?? {});
+
+/** The closed chip: the model label plus the selected profile's name. */
+const chipLabel = computed(() =>
+  triggerLabelWithProfile(triggerLabel.value, activeProfile.value?.name),
+);
 
 /** Whether the profile selector should be shown (only when profiles exist). */
 const showProfileSelector = computed(() => props.profiles.length > 0);
@@ -182,7 +188,7 @@ function percent(index: number): string {
         :title="`Model: ${triggerLabel}${activeProfile ? ` · ${activeProfile.name}` : ''}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
       >
         <Cpu :size="13" class="shrink-0" />
-        <span class="max-w-[110px] truncate">{{ triggerLabel }}</span>
+        <span class="max-w-[170px] truncate">{{ chipLabel }}</span>
         <span
           v-if="tuned"
           class="size-1.5 shrink-0 rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400"

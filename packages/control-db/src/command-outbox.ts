@@ -36,11 +36,14 @@ export type EnqueueInput = {
    */
   payload: unknown;
   /**
-   * The cleartext payload used only for the live WebSocket frame. Stored in the
-   * `payload_secure` column, which the dispatcher reads when rebuilding the
-   * frame from the row. After a restart the column is gone or NULL, so the
-   * dispatcher falls back to the redacted `payload` — the runner rejects the
-   * missing secret rather than receiving a bad key.
+   * The secure payload persisted to `payload_secure`. When a profile is
+   * present this is the cleartext run.start object after the scheduler sealed
+   * it (§18.1); the dispatcher opens the envelope on every drain and sends the
+   * result as the live WebSocket frame, while `payload` stays the redacted
+   * copy. Rows written before the column existed carry NULL here, and the
+   * dispatcher falls back to the redacted `payload` — the runner then has no
+   * usable key and fails authentication rather than receiving a substituted
+   * one.
    */
   payloadSecure?: unknown;
   issuedAt: string;
@@ -67,7 +70,7 @@ export type OutboxCommand = {
   runId: string | undefined;
   workspaceId: string | undefined;
   rejectionReason: string | undefined;
-  /** Cleartext payload for the live WebSocket frame; undefined when none was stored. */
+  /** The sealed payload the dispatcher opens for the live frame; undefined when none was stored. */
   payloadSecure: unknown | undefined;
 };
 

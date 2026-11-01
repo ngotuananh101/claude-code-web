@@ -146,6 +146,79 @@ describe("config-routes (/api/config/profiles)", () => {
     expect(detail.profile.apiKeyMasked).toBe("sk-***key");
   });
 
+  test("the redaction sentinel is never accepted as an apiKey", async () => {
+    const db = makeDb();
+    const secretBox = makeSecretBox();
+
+    // Create: `[REDACTED]` is a storage artifact, not a credential. Accepting
+    // it would store a key no run can authenticate with, and `hasKey` would
+    // then claim a usable secret exists.
+    const createReq = new Request("http://localhost/api/config/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Sentinel",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN",
+        apiKey: "[REDACTED]",
+        settingsJson: "{}",
+      }),
+    });
+    const createRes = await handleCreateProfile(createReq, { db, secretBox }, authorized);
+    expect(createRes.status).toBe(400);
+
+    const listReq = new Request("http://localhost/api/config/profiles");
+    const list = (await (
+      await handleListProfiles(listReq, { db, secretBox }, authorized)
+    ).json()) as { profiles: unknown[] };
+    expect(list.profiles).toEqual([]);
+  });
+
+  test("an update carrying the redaction sentinel is refused and the key survives", async () => {
+    const db = makeDb();
+    const secretBox = makeSecretBox();
+
+    const createReq = new Request("http://localhost/api/config/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Keeper",
+        endpoint: "http://192.168.2.3:20128",
+        authField: "ANTHROPIC_AUTH_TOKEN",
+        apiKey: "sk-live-key",
+        settingsJson: "{}",
+      }),
+    });
+    const created = (await (
+      await handleCreateProfile(createReq, { db, secretBox }, authorized)
+    ).json()) as { profile: { profileId: string } };
+
+    const updateReq = new Request(
+      `http://localhost/api/config/profiles/${created.profile.profileId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Keeper",
+          endpoint: "http://192.168.2.3:20128",
+          authField: "ANTHROPIC_AUTH_TOKEN",
+          apiKey: "[REDACTED]",
+          settingsJson: "{}",
+        }),
+      },
+    );
+    const updateRes = await handleUpdateProfile(updateReq, { db, secretBox }, authorized);
+    expect(updateRes.status).toBe(400);
+
+    const getRes = await handleGetProfile(
+      new Request(`http://localhost/api/config/profiles/${created.profile.profileId}`),
+      { db, secretBox },
+      authorized,
+    );
+    const detail = (await getRes.json()) as { profile: { apiKeyMasked: string } };
+    expect(detail.profile.apiKeyMasked).toBe("sk-***key");
+  });
+
   test("DELETE then GET returns 404", async () => {
     const db = makeDb();
     const secretBox = makeSecretBox();

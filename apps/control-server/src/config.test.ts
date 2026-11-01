@@ -2,12 +2,14 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
+  createProfile,
   issueRunnerCredential,
   migrate,
   revokeRunner,
   verifyRunnerCredential,
 } from "@cc-web/control-db";
 import { hashPassword } from "./auth/password.ts";
+import { createSecretBox } from "./config/secret-box.ts";
 import { buildServerOptions, resolveDataPaths, type ServerConfig } from "./config.ts";
 import { createServer, type ServerHandle } from "./server.ts";
 
@@ -136,6 +138,68 @@ describe("the real control server wiring", () => {
     expect(handle!.dispatcher!.drain("runner-a")).toEqual({ sent: 0, skipped: 1 });
 
     void url;
+  });
+});
+
+describe("startup warning for unreadable profile keys", () => {
+  const oldSecret = new Uint8Array(32).fill(1);
+  const newSecret = new Uint8Array(32).fill(2);
+
+  function seededDb(apiKey: string | undefined): Database {
+    const db = new Database(":memory:");
+    migrate(db);
+    createProfile(db, {
+      ownerId: "user-1",
+      name: "9Router",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      ...(apiKey === undefined ? {} : { apiKey }),
+      settingsJson: "{}",
+    });
+    return db;
+  }
+
+  function warningsFor(db: Database, secret: Uint8Array): string[] {
+    const warnings: string[] = [];
+    buildServerOptions({
+      db,
+      secret,
+      allowedOrigins: [origin],
+      warn: (message) => warnings.push(message),
+    });
+    return warnings;
+  }
+
+  test("a stored key sealed under an older secret is reported at boot", () => {
+    // The SecretBox key is derived from CC_WEB_JWT_SECRET, so rotating that
+    // secret (or mistyping it in a new deployment) leaves every stored profile
+    // key unreadable. Without this the operator learns it one failed dispatch
+    // at a time, as `profile_key_unreadable`; here they learn it once, before
+    // the first run.
+    const db = seededDb(createSecretBox(oldSecret).seal("sk-old-key"));
+
+    const warnings = warningsFor(db, newSecret);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("CC_WEB_JWT_SECRET");
+    expect(warnings[0]).toContain("9Router");
+  });
+
+  test("keys sealed under the current secret raise no warning", () => {
+    const db = seededDb(createSecretBox(newSecret).seal("sk-current-key"));
+
+    expect(warningsFor(db, newSecret)).toEqual([]);
+  });
+
+  test("a profile with no key raises no warning", () => {
+    expect(warningsFor(seededDb(undefined), newSecret)).toEqual([]);
+  });
+
+  test("a legacy cleartext key raises no warning — it is still usable", () => {
+    // Rows written before sealing stored the cleartext directly; the dispatch
+    // route passes those through. Warning here would tell the operator to
+    // re-enter a key that works.
+    expect(warningsFor(seededDb("sk-legacy-cleartext"), newSecret)).toEqual([]);
   });
 });
 

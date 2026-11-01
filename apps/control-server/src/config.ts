@@ -17,7 +17,7 @@ import { CommandOutbox, verifyRunnerCredential } from "@cc-web/control-db";
 import { AuthService } from "./auth/auth-service.ts";
 import { hashPassword, verifyPassword } from "./auth/password.ts";
 import { createSigner } from "./auth/tokens.ts";
-import { createSecretBox } from "./config/secret-box.ts";
+import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import type { ServerOptions } from "./server.ts";
 
 /** Where the control server keeps its state on disk. */
@@ -54,10 +54,51 @@ export type ServerConfig = {
   port?: number;
   /** Directory where session attachments are stored on disk. */
   attachmentsDir?: string;
+  /** Where startup warnings go; defaults to `console.warn`. */
+  warn?: (message: string) => void;
 };
+
+/**
+ * Report stored profile keys that the current secret cannot open (§18.1).
+ *
+ * The SecretBox key is derived from `CC_WEB_JWT_SECRET`, so rotating that
+ * secret — or deploying with a different value than the one that sealed the
+ * keys — makes every stored profile key unreadable. Without this the operator
+ * discovers it one failed dispatch at a time, as `profile_key_unreadable`;
+ * one boot-time warning lets them re-enter the keys before the first run.
+ *
+ * A legacy cleartext row (no `v1.` envelope) is skipped: the dispatch route
+ * passes it through unchanged, so it still works and warning would send the
+ * operator to re-enter a key that needs no fixing.
+ */
+export function warnUnreadableProfileKeys(
+  db: Database,
+  secretBox: SecretBox,
+  warn: (message: string) => void,
+): void {
+  const rows = db
+    .prepare(
+      "SELECT name, api_key_encrypted FROM config_profiles WHERE api_key_encrypted IS NOT NULL",
+    )
+    .all() as Array<{ name: string; api_key_encrypted: string }>;
+  const unreadable = rows.filter(
+    (row) =>
+      row.api_key_encrypted.startsWith("v1.") && secretBox.open(row.api_key_encrypted) === null,
+  );
+  if (unreadable.length === 0) return;
+  warn(
+    `control server: ${unreadable.length} stored profile API key(s) cannot be opened with ` +
+      `CC_WEB_JWT_SECRET (${unreadable.map((row) => row.name).join(", ")}). ` +
+      "If the secret was rotated, re-enter those keys on the Profiles page.",
+  );
+}
 
 export function buildServerOptions(config: ServerConfig): ServerOptions {
   const auth = new AuthService({ db: config.db, signer: createSigner(config.secret) });
+  // §18.1, P3-C Task 5b: derive the secret box from the server secret so the
+  // same key seals every profile at rest across restarts.
+  const secretBox = createSecretBox(config.secret);
+  warnUnreadableProfileKeys(config.db, secretBox, config.warn ?? console.warn);
 
   return {
     db: config.db,
@@ -65,9 +106,7 @@ export function buildServerOptions(config: ServerConfig): ServerOptions {
     allowedOrigins: config.allowedOrigins,
     ...(config.port === undefined ? {} : { port: config.port }),
     ...(config.attachmentsDir === undefined ? {} : { attachmentsDir: config.attachmentsDir }),
-    // §18.1, P3-C Task 5b: derive the secret box from the server secret so the
-    // same key seals every profile at rest across restarts.
-    secretBox: createSecretBox(config.secret),
+    secretBox,
     // Read through the database on every upgrade, so a rotation or revoke takes
     // effect on the next connection rather than at the next restart (§6.3).
     verifyRunnerCredential: (credential) => {
