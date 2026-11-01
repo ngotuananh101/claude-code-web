@@ -606,6 +606,28 @@ describe("event frames", () => {
     expect(loop.state).not.toBe("ready");
     expect(loop.sendFrame({ type: "events", events: [] })).toBe(false);
   });
+
+  test("sendFrame carries a pre-serialized payload verbatim", async () => {
+    const h = harness();
+    await h.loop.start();
+    h.link.receive({ type: "hello.ok", generation: 1, connectionState: "connected" });
+    h.link.receive({ type: "reconcile.ok", ready: true });
+
+    // The outbox measured the exact bytes it will send; a second stringify here
+    // would throw that measurement away. The text handed over is what goes on
+    // the wire, untouched.
+    expect(
+      h.loop.sendFrame(
+        { type: "events", events: [] },
+        '{"type":"events","events":[{"eventId":"evt-9"}]}',
+      ),
+    ).toBe(true);
+    expect(h.link.sent.at(-1)).toEqual({ type: "events", events: [{ eventId: "evt-9" }] });
+
+    // Without pre-serialized text, the frame object is serialized as before.
+    expect(h.loop.sendFrame({ type: "events", events: [{ eventId: "evt-10" }] })).toBe(true);
+    expect(h.link.sent.at(-1)).toEqual({ type: "events", events: [{ eventId: "evt-10" }] });
+  });
 });
 
 describe("declared workspaces on the wire", () => {

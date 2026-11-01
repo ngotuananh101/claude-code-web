@@ -19,6 +19,7 @@ import {
   type EventType,
   PROTOCOL_VERSION,
   type RunnerEvent,
+  serializeEventBatch,
 } from "@cc-web/protocol";
 import {
   ackUpTo,
@@ -35,12 +36,24 @@ export type SpoolReport = {
   bytes: number;
 };
 
+/** One frame's events, plus the text the transport must send for them. */
+export type EventBatch = {
+  events: RunnerEvent[];
+  /** The comma-joined serialized events; the frame text is this in the envelope. */
+  serialized: string;
+};
+
 export type EventPumpOptions = {
   db: Database;
   runnerId: string;
   bootId: string;
-  /** Hand a frame to the transport; false means it was not carried. */
-  send: (frame: EventBatchFrame) => boolean;
+  /**
+   * Hand a frame to the transport; false means it was not carried. The text is
+   * the frame already serialized — the same text the batch's byte ceiling was
+   * measured over — so the transport sends it verbatim instead of serializing
+   * the frame a second time.
+   */
+  send: (frame: EventBatchFrame, serialized: string) => boolean;
   /**
    * Defer the retry of a refused send. Defaults to `setTimeout`; the seam
    * exists so a test can drive the retry instead of sleeping through it.
@@ -81,7 +94,7 @@ export class EventPump {
   readonly #db: Database;
   readonly #runnerId: string;
   readonly #bootId: string;
-  readonly #send: (frame: EventBatchFrame) => boolean;
+  readonly #send: (frame: EventBatchFrame, serialized: string) => boolean;
   readonly #schedule: (fn: () => void, ms: number) => unknown;
   readonly #unschedule: (handle: unknown) => void;
   readonly #onSpoolWarning: ((report: SpoolReport) => void) | undefined;
@@ -135,16 +148,24 @@ export class EventPump {
 
   /**
    * The offline-spool critical threshold (§12.6): 25,000 unacked events or
-   * 64 MiB of unacked payload. Here the run is to be stopped and a minimal
-   * failure record written from a reserved budget, rather than silently
-   * dropping mandatory events and reporting the run as a success.
+   * 64 MiB of unacked payload. The report is a signal the controller turns into
+   * a cancel; the executor then writes the minimal `run.failed` record at its
+   * own next sequence, and the backlog stays on disk rather than being dropped.
    */
   static readonly SPOOL_CRITICAL = { events: 25_000, bytes: 64 * 1024 * 1024 };
 
   /** Send one bounded batch for every attempt with pending rows. */
   flush(): void {
     if (this.#stopped) return;
-    for (const attemptId of pendingEventAttempts(this.#db)) {
+    const attempts = pendingEventAttempts(this.#db);
+
+    // Depth is read for every attempt before anything is sent. A refused send
+    // for one attempt ends the send loop — the link is down for all of them —
+    // but that must not swallow another attempt's crossing: a deepening spool
+    // is exactly the situation where the link is the problem.
+    for (const attemptId of attempts) this.#reportSpoolDepth(attemptId);
+
+    for (const attemptId of attempts) {
       // A refused send means the link is down; every later attempt would be
       // refused too, and the rows stay pending for the next ready flush.
       if (!this.#flushAttempt(attemptId)) return;
@@ -158,6 +179,10 @@ export class EventPump {
   handleAck(ack: { attemptId: string; through: number }): void {
     if (this.#stopped) return;
     ackUpTo(this.#db, { attemptId: ack.attemptId, sequence: ack.through });
+    // The depth is read here, after the ack has been applied, so a spool the
+    // ack drained re-arms its thresholds deterministically rather than
+    // depending on a later flush that happens to sample a low depth.
+    this.#reportSpoolDepth(ack.attemptId);
     this.#flushAttempt(ack.attemptId);
   }
 
@@ -197,16 +222,12 @@ export class EventPump {
   }
 
   #flushAttempt(attemptId: string): boolean {
-    // Depth is checked before anything is sent, so a drop back below a
-    // threshold re-arms it even on a flush that has nothing left to send.
-    this.#reportSpoolDepth(attemptId);
-
-    const rows = this.#selectBatch(attemptId);
-    if (rows.length === 0) return true;
-    const carried = this.#send({
-      type: "events",
-      events: rows.map((row) => this.#toWireEvent(row)),
-    });
+    const batch = this.#selectBatch(attemptId);
+    if (batch.events.length === 0) return true;
+    const carried = this.#send(
+      { type: "events", events: batch.events },
+      serializeEventBatch(batch.serialized),
+    );
     if (!carried) this.#armRetry();
     return carried;
   }
@@ -249,36 +270,44 @@ export class EventPump {
   }
 
   /**
-   * The rows for one frame: at most `BATCH_LIMIT` events and at most
-   * `BATCH_BYTES_LIMIT` serialized bytes, always at least one row.
+   * The events for one frame: at most `BATCH_LIMIT` events and at most
+   * `BATCH_BYTES_LIMIT` serialized bytes, always at least one event.
    *
    * Sizing is done in UTF-8 bytes over the framed batch, because that is what
    * the transport buffers. Two things make this more than a nicety: the content
    * is largely Vietnamese, so `JSON.stringify(...).length` (UTF-16 code units)
    * under-counts the wire by ~1.3×, and the frame envelope
-   * (`{"type":"events","events":[…]}`) is itself ~24 B the code units do not see.
+   * (`{"type":"events","events":[…]}`) is itself ~26 B the code units do not see.
    * Counting payload bytes instead would miss the measured 359 B/event envelope.
+   *
+   * Each event is serialized exactly once: that chunk is both the unit the
+   * ceiling is measured over and part of the text the transport sends, so the
+   * frame is never stringified a second time.
    */
-  #selectBatch(attemptId: string): PendingEvent[] {
+  #selectBatch(attemptId: string): EventBatch {
     const rows = pendingEvents(this.#db, attemptId, { limit: EventPump.BATCH_LIMIT });
-    const selected: PendingEvent[] = [];
-    let bytes = 0;
+    const events: RunnerEvent[] = [];
+    const chunks: string[] = [];
+    // The envelope counts too, so the ceiling bounds the bytes actually sent.
+    let bytes = Buffer.byteLength(serializeEventBatch(""));
 
     for (const row of rows) {
       const event = this.#toWireEvent(row);
+      const json = JSON.stringify(event);
       // The separator plus the event, so the count matches the comma-joined
       // array the frame actually carries.
-      const size = Buffer.byteLength((selected.length === 0 ? "" : ",") + JSON.stringify(event));
+      const size = Buffer.byteLength((chunks.length === 0 ? "" : ",") + json);
       // The first row is always taken, however large: the per-event byte cap
       // (§12.6, enforced at append time in the executor) keeps a single event
       // under the transport ceiling, so it is always deliverable on its own
       // frame. Refusing it would be the silent drop §12.6 forbids.
-      if (selected.length > 0 && bytes + size > EventPump.BATCH_BYTES_LIMIT) break;
-      selected.push(row);
+      if (chunks.length > 0 && bytes + size > EventPump.BATCH_BYTES_LIMIT) break;
+      events.push(event);
+      chunks.push(json);
       bytes += size;
     }
 
-    return selected;
+    return { events, serialized: chunks.join(",") };
   }
 
   /**

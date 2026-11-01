@@ -154,6 +154,23 @@ export type EventBatchFrame = {
   events: RunnerEvent[];
 };
 
+/**
+ * The batch frame's wire text, built from events that are already serialized.
+ *
+ * The runner measures each event's serialized bytes against the frame ceiling
+ * before it adds the event, and then hands the transport this exact text — so
+ * what was measured is what is sent, and no event is serialized twice.
+ *
+ * The envelope is written by hand because the point is to avoid a second
+ * `JSON.stringify` of the whole frame. It must stay byte-for-byte equal to
+ * `JSON.stringify(frame)` for an `EventBatchFrame`; `event-batch.test.ts` pins
+ * that against the real serializer, so a field added to the frame type without
+ * a change here fails the suite.
+ */
+export function serializeEventBatch(eventsJson: string): string {
+  return `{"type":"events","events":[${eventsJson}]}`;
+}
+
 /** Server → Runner: the contiguous watermark an attempt is acknowledged through. */
 export type EventAckFrame = {
   type: "events.ack";

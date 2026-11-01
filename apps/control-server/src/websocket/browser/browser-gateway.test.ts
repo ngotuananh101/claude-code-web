@@ -359,6 +359,26 @@ describe("session subscription and replay", () => {
     expect(gateway.socketCount(userId)).toBe(1);
   });
 
+  test("a socket that falls over the send limit during a live publish is closed 4002", async () => {
+    const { gateway, cookie, userId } = await setup();
+
+    // Healthy for the subscribe frames, then past `backpressureLimit`: the live
+    // frame is dropped, not queued. Reading that drop as a delivery is the
+    // silent loss §12.6 forbids, so the socket goes with the backpressure close
+    // code and its client replays the gap on reconnect.
+    let status = 1;
+    const { sent, closed } = await subscribe(gateway, cookie, "session-1", undefined, () => status);
+    const delivered = sent.length;
+
+    status = 0;
+    gateway.publish({ sessionId: "session-1", ...replayEvent(1) });
+
+    expect(sent).toHaveLength(delivered);
+    expect(closed).toContain(4002);
+    expect(gateway.socketCount(userId)).toBe(0);
+    expect(gateway.socketCountForSession("session-1")).toBe(0);
+  });
+
   test("a send Bun reports as queued under backpressure is not a drop", async () => {
     const { gateway, cookie, userId } = await setup();
 

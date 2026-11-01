@@ -298,11 +298,16 @@ export class ReconnectLoop {
    * dead socket — so a caller keeps what it tried to send. A send that returns
    * true means the bytes were handed to the socket, nothing more: delivery is
    * proven by an ACK, never by this.
+   *
+   * `serialized` is the frame already encoded, handed over by a caller that
+   * measured those exact bytes (the outbox's batch ceiling). It is sent
+   * verbatim so the measurement and the wire agree; without it the payload is
+   * serialized here.
    */
-  sendFrame(payload: Record<string, unknown>): boolean {
+  sendFrame(payload: Record<string, unknown>, serialized?: string): boolean {
     if (this.#state !== "ready" || this.#link === undefined) return false;
     try {
-      this.#link.send(JSON.stringify(payload));
+      this.#link.send(serialized ?? JSON.stringify(payload));
       return true;
     } catch {
       return false;

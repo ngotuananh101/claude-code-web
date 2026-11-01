@@ -295,7 +295,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     db,
     runnerId: identity.runnerId,
     bootId: bootId(),
-    send: (frame) => loop.sendFrame(frame),
+    send: (frame, serialized) => loop.sendFrame(frame, serialized),
     ...(options.pumpSchedule === undefined ? {} : { schedule: options.pumpSchedule }),
     ...(options.pumpUnschedule === undefined ? {} : { unschedule: options.pumpUnschedule }),
     // §12.6 clause 5: the warning is journaled, not just logged, so the

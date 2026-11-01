@@ -155,6 +155,38 @@ describe("flushing", () => {
     expect(frames[1]!.events).toHaveLength(1);
   });
 
+  test("the transport is handed the same text the batch was measured over", () => {
+    const db = new Database(":memory:");
+    migrateRunnerDb(db);
+    const captured: Array<{ frame: EventBatchFrame; text: string }> = [];
+    const pump = new EventPump({
+      db,
+      runnerId: "runner-a",
+      bootId: "boot-1",
+      send: (frame, text) => {
+        captured.push({ frame, text });
+        return true;
+      },
+    });
+    append(db, 1);
+    append(db, 2);
+
+    pump.flush();
+
+    // Each event is serialized once, while its bytes are measured; the frame
+    // the transport carries is those chunks joined, not a second stringify of
+    // the whole frame.
+    const sent = captured[0]!;
+    expect(sent.text).toBe(JSON.stringify(sent.frame));
+    expect(JSON.parse(sent.text)).toEqual({
+      type: "events",
+      events: [
+        expect.objectContaining({ eventId: "evt-attempt-1-1", localSequence: 1 }),
+        expect.objectContaining({ eventId: "evt-attempt-1-2", localSequence: 2 }),
+      ],
+    });
+  });
+
   test("a batch is bounded, and the ack of a batch pumps the next one", () => {
     const { db, pump, frames } = setup();
     for (let i = 1; i <= 100; i++) append(db, i);
@@ -362,22 +394,23 @@ describe("spool thresholds (§12.6)", () => {
     expect(spoolDepth(db, "attempt-1").events).toBe(EventPump.SPOOL_WARNING.events);
   });
 
-  test("the warning re-arms once the depth falls back below the threshold", () => {
+  test("the warning re-arms on the ack that drains the spool", () => {
     const { db, pump, warnings } = setupWithSchedule();
     for (let i = 1; i <= EventPump.SPOOL_WARNING.events; i += 1) append(db, i);
 
     pump.flush();
     expect(warnings).toHaveLength(1);
 
-    // Everything drains below the threshold, with a flush passing through the
-    // low depth — that is the crossing that re-arms it.
+    // The ack drains the spool to zero. The depth is read at that moment, not
+    // by a later flush that happens to land on a low depth — an explicit read
+    // after the ACK is what makes the re-arm deterministic.
     pump.handleAck({ attemptId: "attempt-1", through: EventPump.SPOOL_WARNING.events });
-    append(db, EventPump.SPOOL_WARNING.events + 1);
-    pump.flush();
-    expect(warnings).toHaveLength(1);
+    expect(spoolDepth(db, "attempt-1").events).toBe(0);
 
+    // Refill past the threshold in one go: no low-depth flush passes in
+    // between, so only the ACK's own read could have re-armed the warning.
     for (
-      let i = EventPump.SPOOL_WARNING.events + 2;
+      let i = EventPump.SPOOL_WARNING.events + 1;
       i <= EventPump.SPOOL_WARNING.events * 2;
       i += 1
     ) {
@@ -424,6 +457,22 @@ describe("spool thresholds (§12.6)", () => {
     // The run is being stopped; a "the spool is getting deep" note is noise.
     expect(warnings).toHaveLength(0);
     expect(criticals).toHaveLength(1);
+  });
+
+  test("a refused send for one attempt does not swallow another attempt's crossing", () => {
+    const { db, pump, criticals } = setupWithSchedule(
+      (frame) => !frame.events.some((event) => event.attemptId === "attempt-1"),
+    );
+
+    // attempt-1 sorts first and refuses to send; attempt-2 sits at the depth
+    // that stops its run. The stop must not depend on another attempt's link:
+    // a deepening spool is exactly the case where the link is the problem.
+    append(db, 1, "attempt-1");
+    for (let i = 1; i <= EventPump.SPOOL_CRITICAL.events; i += 1) append(db, i, "attempt-2");
+
+    pump.flush();
+
+    expect(criticals.map((report) => report.attemptId)).toEqual(["attempt-2"]);
   });
 
   test("a shallow spool reports nothing", () => {
