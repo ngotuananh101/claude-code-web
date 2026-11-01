@@ -9,6 +9,7 @@ import type {
   SnapshotEntry,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
+import { Maximize2 } from "@lucide/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { classifyDiffLines } from "../features/inspect/diff";
 import { isDirty, viewerAfterSave } from "../features/inspect/edit";
@@ -133,10 +134,15 @@ const diffSaveError = ref<string | null>(null);
 const UnifiedDiff = defineAsyncComponent(() => import("./review/UnifiedDiff.vue"));
 const SplitDiff = defineAsyncComponent(() => import("./review/SplitDiff.vue"));
 const ReviewToolbar = defineAsyncComponent(() => import("./review/ReviewToolbar.vue"));
+const ReviewDialog = defineAsyncComponent(() => import("./review/ReviewDialog.vue"));
 
 // Layout measurement for the diff mode auto-select (P3-D)
 const diffContainer = ref<HTMLElement | null>(null);
 let diffResizeObserver: ResizeObserver | null = null;
+
+// ReviewDialog integration state
+const reviewDialogOpen = ref(false);
+const reviewDialogMode = ref<"diff" | "file">("diff");
 
 onMounted(() => {
   if (typeof ResizeObserver !== "undefined") {
@@ -279,10 +285,39 @@ const revertHintText = computed(() => {
   return "Khôi phục tệp về bản chụp lúc bắt đầu chạy.";
 });
 
+function isPathReviewed(path: string): boolean {
+  // For ReviewDialog navigation: check if a path is reviewed
+  // We need to find the hash for this path from changes or snapshot
+  if (changes.value) {
+    const entry = changes.value.entries.find((e) => e.path === path);
+    if (entry) {
+      // For git changes, we don't have a direct hash, use empty string
+      return isReviewed(reviewed.value, path, "");
+    }
+  }
+  if (snapshotStatus.value) {
+    const entry = snapshotStatus.value.entries.find((e) => e.path === path);
+    if (entry?.currentHash) {
+      return isReviewed(reviewed.value, path, entry.currentHash);
+    }
+  }
+  return false;
+}
+
 const scheduleRows = computed(() => {
   const tasks = schedules.value;
   if (tasks === null) return [];
   return tasks.map((task) => ({ ...toScheduleRow(task, now.value), cron: task.cron }));
+});
+
+const changedPaths = computed(() => {
+  if (changes.value && changes.value.entries.length > 0) {
+    return changes.value.entries.map((c) => c.path);
+  }
+  if (snapshotStatus.value?.entries) {
+    return snapshotStatus.value.entries.map((e) => e.path);
+  }
+  return [];
 });
 
 const STATUS_LABELS: Record<string, string> = {
@@ -478,6 +513,10 @@ async function openDiff(path: string): Promise<void> {
   diff.value = diffOutcome.value;
   diffPath.value = path;
 
+  // Open ReviewDialog in diff mode
+  reviewDialogMode.value = "diff";
+  reviewDialogOpen.value = true;
+
   // A truncated diff never becomes a merge view.
   let parsed = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
 
@@ -542,8 +581,16 @@ async function openDiff(path: string): Promise<void> {
   reviewSnapshotEntry.value = entry ?? null;
 }
 
-function toggleReviewed(): void {
-  const key = diffReviewKey.value;
+function toggleReviewed(path?: string, hash?: string): void {
+  // If path and hash are provided (from ReviewDialog), use them
+  // Otherwise use the current diff's key
+  let key: string | null = null;
+  if (path !== undefined && hash !== undefined) {
+    key = reviewKey(path, hash);
+  } else {
+    key = diffReviewKey.value;
+  }
+
   if (key === null) return;
   const next = new Set(reviewed.value);
   if (next.has(key)) {
@@ -595,6 +642,21 @@ async function saveDiff(): Promise<void> {
   }
 }
 
+async function confirmRevert(path: string): Promise<void> {
+  // Wrapper for revert called from ReviewDialog
+  if (reviewDialogMode.value === "diff") {
+    await revertDiff();
+  } else {
+    // File mode: find the snapshot entry and revert
+    if (snapshotStatus.value) {
+      const entry = snapshotStatus.value.entries.find((e) => e.path === path);
+      if (entry) {
+        await revertOneFile(entry);
+      }
+    }
+  }
+}
+
 async function revertDiff(): Promise<void> {
   if (diffReverting.value) return;
   const id = workspace.value;
@@ -628,6 +690,11 @@ async function revertDiff(): Promise<void> {
   } finally {
     diffReverting.value = false;
   }
+}
+
+async function saveDraft(): Promise<void> {
+  // Wrapper for save file called from ReviewDialog in file mode
+  await saveFile();
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -936,13 +1003,23 @@ watch(source, (next) => {
             <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="viewer.path">
               {{ viewer.path }}
             </span>
-            <button
-              type="button"
-              class="shrink-0 text-primary hover:underline"
-              @click="viewer = null"
-            >
-              đóng
-            </button>
+            <div class="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                class="text-muted-foreground hover:text-foreground"
+                title="Toàn màn hình / Mở rộng"
+                @click="reviewDialogMode = 'file'; reviewDialogOpen = true"
+              >
+                <Maximize2 class="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                class="text-primary hover:underline"
+                @click="viewer = null"
+              >
+                đóng
+              </button>
+            </div>
           </div>
           <p
             v-if="viewer.binary"
@@ -1592,5 +1669,25 @@ watch(source, (next) => {
         </template>
       </template>
     </div>
+
+    <!-- ReviewDialog integration -->
+    <ReviewDialog
+      v-model:open="reviewDialogOpen"
+      :mode="reviewDialogMode"
+      :path="reviewDialogMode === 'diff' ? (diffPath ?? '') : (viewer?.path ?? '')"
+      :all-paths="reviewDialogMode === 'diff' ? changedPaths : (viewer ? [viewer.path] : [])"
+      :original="diffOriginal ?? ''"
+      :modified="diffModified ?? ''"
+      :content="draft"
+      :is-reviewed="diffPath ? isReviewed(reviewed, diffPath, diffRead?.hash ?? '') : false"
+      :is-path-reviewed="isPathReviewed"
+      :dirty="reviewDialogMode === 'diff' ? diffDirty : (draft !== null && viewer !== null && draft !== viewer.content)"
+      @update:modified="diffModified = $event"
+      @update:content="draft = $event"
+      @select-path="openDiff($event)"
+      @save="reviewDialogMode === 'diff' ? saveDiff() : saveDraft()"
+      @revert="reviewDialogMode === 'diff' ? (diffPath ? confirmRevert(diffPath) : undefined) : (viewer ? confirmRevert(viewer.path) : undefined)"
+      @toggle-reviewed="diffPath && toggleReviewed(diffPath, diffRead?.hash ?? '')"
+    />
   </aside>
 </template>
