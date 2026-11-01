@@ -804,6 +804,91 @@ describe("deriveChatTurns — live events", () => {
     expect(turn2Steps[0]).toMatchObject({ kind: "tool", toolName: "Read", state: "done" });
   });
 
+  test("interleaves live stream tool steps and streaming text deltas into segments", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "r1", prompt: "Fix issue" }),
+        liveEvent("tool.started", { toolCallId: "t1", toolName: "Read", input: { file_path: "foo.ts" } }, "r1"),
+        liveEvent("tool.completed", { toolCallId: "t1", outputSummary: "10 lines" }, "r1"),
+        liveEvent("message.delta", { text: "Found files" }, "r1"),
+        liveEvent("message.delta", { text: ", inspecting..." }, "r1"),
+        liveEvent("tool.started", { toolCallId: "t2", toolName: "Edit", input: { file_path: "foo.ts" } }, "r1"),
+        liveEvent("tool.completed", { toolCallId: "t2", outputSummary: "done edit" }, "r1"),
+        liveEvent("message.delta", { text: "All done." }, "r1"),
+        liveEvent("run.finished", { durationMs: 4000 }, "r1"),
+      ],
+    );
+
+    expect(turns).toHaveLength(2); // user turn + agent turn
+    const agent = turns[1] as AgentTurn;
+    expect(agent.kind).toBe("agent");
+    expect(agent.segments).toHaveLength(4);
+
+    expect(agent.segments[0].kind).toBe("process");
+    expect((agent.segments[0] as ProcessSegment).steps).toHaveLength(1);
+    expect((agent.segments[0] as ProcessSegment).steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Read",
+    });
+
+    expect(agent.segments[1].kind).toBe("text");
+    expect((agent.segments[1] as TextSegment).text).toBe("Found files, inspecting...");
+
+    expect(agent.segments[2].kind).toBe("process");
+    expect((agent.segments[2] as ProcessSegment).steps).toHaveLength(1);
+    expect((agent.segments[2] as ProcessSegment).steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Edit",
+    });
+
+    expect(agent.segments[3].kind).toBe("text");
+    expect((agent.segments[3] as TextSegment).text).toBe("All done.");
+
+    // Backward compatibility
+    expect(agent.steps).toHaveLength(2);
+    expect(agent.text).toBe("Found files, inspecting...All done.");
+  });
+
+  test("empty or whitespace message.delta does not create an empty text segment", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "r1", prompt: "Hello" }),
+        liveEvent("tool.started", { toolCallId: "t1", toolName: "Read" }, "r1"),
+        liveEvent("message.delta", { text: "" }, "r1"),
+        liveEvent("message.delta", { text: "   " }, "r1"),
+        liveEvent("run.finished", {}, "r1"),
+      ],
+    );
+
+    const agent = turns[1] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect(agent.segments[0].kind).toBe("process");
+  });
+
+  test("live approval.requested attaches to current process segment or starts a new one", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "r1", prompt: "Run bash" }),
+        liveEvent("message.delta", { text: "Let me ask for approval" }, "r1"),
+        liveEvent("approval.requested", { approvalId: "appr-1", command: "rm -rf" }, "r1"),
+      ],
+    );
+
+    const agent = turns[1] as AgentTurn;
+    expect(agent.segments).toHaveLength(2);
+    expect(agent.segments[0].kind).toBe("text");
+    expect((agent.segments[0] as TextSegment).text).toBe("Let me ask for approval");
+    expect(agent.segments[1].kind).toBe("process");
+    expect((agent.segments[1] as ProcessSegment).steps).toHaveLength(1);
+    expect((agent.segments[1] as ProcessSegment).steps[0].kind).toBe("approval");
+  });
+
   test("historical messages: flushes current agent turn and starts new turn on <task-notification>", () => {
     const turns = deriveChatTurns(
       [

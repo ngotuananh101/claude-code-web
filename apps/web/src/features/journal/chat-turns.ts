@@ -980,7 +980,19 @@ export function deriveChatTurns(
 
     if (event.type === "message.delta") {
       const text = asString(payload["text"]);
-      if (text !== undefined) liveAgentTurn.text += text;
+      if (text !== undefined && text !== "") {
+        liveAgentTurn.text += text;
+        const last = liveAgentTurn.segments[liveAgentTurn.segments.length - 1];
+        if (last !== undefined && last.kind === "text") {
+          last.text += text;
+        } else if (text.trim() !== "") {
+          liveAgentTurn.segments.push({
+            kind: "text",
+            key: `${liveAgentTurn.key}-text-${liveAgentTurn.segments.length}`,
+            text,
+          });
+        }
+      }
       continue;
     }
 
@@ -990,7 +1002,10 @@ export function deriveChatTurns(
         const content = msg["content"];
         if (liveAgentTurn.text === "") {
           const prose = textFromContentBlocks(content);
-          if (prose !== "") liveAgentTurn.text = prose;
+          if (prose !== "") {
+            liveAgentTurn.text = prose;
+            appendTextToSegments(liveAgentTurn, prose);
+          }
         }
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -1015,15 +1030,15 @@ export function deriveChatTurns(
       const rawInput = payload["input"];
       const inputRecord = preCollected ?? asRecord(rawInput);
       if (inputRecord !== null) {
-        liveAgentTurn.steps.push(
-          newLiveToolStep(
-            liveAgentTurn.key,
-            liveAgentTurn.steps.length,
-            toolCallId,
-            toolName,
-            inputRecord,
-          ),
+        const step = newLiveToolStep(
+          liveAgentTurn.key,
+          liveAgentTurn.steps.length,
+          toolCallId,
+          toolName,
+          inputRecord,
         );
+        liveAgentTurn.steps.push(step);
+        appendStepToSegments(liveAgentTurn, step);
         livePendingTools.set(toolCallId, {
           toolCallId,
           toolName,
@@ -1034,15 +1049,15 @@ export function deriveChatTurns(
           completed: false,
         });
       } else {
-        liveAgentTurn.steps.push(
-          newLiveToolStep(
-            liveAgentTurn.key,
-            liveAgentTurn.steps.length,
-            toolCallId,
-            toolName,
-            undefined,
-          ),
+        const step = newLiveToolStep(
+          liveAgentTurn.key,
+          liveAgentTurn.steps.length,
+          toolCallId,
+          toolName,
+          undefined,
         );
+        liveAgentTurn.steps.push(step);
+        appendStepToSegments(liveAgentTurn, step);
         livePendingTools.set(toolCallId, {
           toolCallId,
           toolName,
@@ -1073,11 +1088,13 @@ export function deriveChatTurns(
     }
 
     if (event.type === "approval.requested") {
-      liveAgentTurn.steps.push({
+      const step: ApprovalStep = {
         kind: "approval",
         key: `${liveAgentTurn.key}-approval-${liveAgentTurn.steps.length}`,
         event,
-      });
+      };
+      liveAgentTurn.steps.push(step);
+      appendStepToSegments(liveAgentTurn, step);
     }
   }
 
