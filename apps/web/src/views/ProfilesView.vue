@@ -272,7 +272,7 @@ async function confirmDelete(): Promise<void> {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div class="mx-auto w-full max-w-[720px] px-7 py-7">
+    <div class="w-full px-7 py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
         cc-web / profiles
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
@@ -323,7 +323,9 @@ async function confirmDelete(): Promise<void> {
       </div>
 
       <template v-else>
-        <div class="grid grid-cols-1 gap-6 md:grid-cols-[1.1fr_0.9fr]">
+        <!-- The page is full width now: the form column stays readable at a
+             fixed maximum and the JSON editor takes every remaining pixel. -->
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
           <!-- LEFT: Visual form + model mapping table -->
           <section class="space-y-5">
             <div class="space-y-2">
@@ -473,7 +475,7 @@ async function confirmDelete(): Promise<void> {
                 id="profile-json"
                 v-model="json"
                 spellcheck="false"
-                class="font-mono text-xs"
+                class="h-full min-h-[460px] font-mono text-xs"
                 rows="18"
               />
               <div
