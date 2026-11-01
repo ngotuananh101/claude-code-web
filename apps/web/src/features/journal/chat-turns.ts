@@ -433,57 +433,6 @@ function userPromptText(message: SessionMessage): string {
   return textFromContentBlocks(msg["content"]);
 }
 
-/** Read the assistant prose from an `assistant` SessionMessage. */
-function assistantProse(message: SessionMessage): string {
-  const msg = asRecord(message.message);
-  if (msg === null) return "";
-  return textFromContentBlocks(msg["content"]);
-}
-
-type ToolUseBlock = {
-  type: "tool_use";
-  id: string;
-  name: string;
-  input: Record<string, unknown> | undefined;
-};
-
-/** Collect tool_use blocks from an assistant message's content array. */
-function toolUseBlocksOf(message: SessionMessage): ToolUseBlock[] {
-  const msg = asRecord(message.message);
-  if (msg === null) return [];
-  const content = msg["content"];
-  if (!Array.isArray(content)) return [];
-  const blocks: ToolUseBlock[] = [];
-  for (const block of content) {
-    if (typeof block !== "object" || block === null) continue;
-    const record = block as Record<string, unknown>;
-    if (record["type"] !== "tool_use") continue;
-    const id = asString(record["id"]);
-    const name = asString(record["name"]);
-    if (id === undefined || name === undefined) continue;
-    const input = asRecord(record["input"]);
-    blocks.push({ type: "tool_use", id, name, input: input ?? undefined });
-  }
-  return blocks;
-}
-
-/** Collect thinking blocks from an assistant message's content array. */
-function thinkingBlocksOf(message: SessionMessage): string[] {
-  const msg = asRecord(message.message);
-  if (msg === null) return [];
-  const content = msg["content"];
-  if (!Array.isArray(content)) return [];
-  const texts: string[] = [];
-  for (const block of content) {
-    if (typeof block !== "object" || block === null) continue;
-    const record = block as Record<string, unknown>;
-    if (record["type"] !== "thinking") continue;
-    const thinking = record["thinking"];
-    if (typeof thinking === "string" && thinking !== "") texts.push(thinking);
-  }
-  return texts;
-}
-
 function extractToolField(
   name: string,
   input?: Record<string, unknown> | null,
