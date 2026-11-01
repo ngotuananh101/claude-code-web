@@ -1,0 +1,89 @@
+/**
+ * Review navigation utilities for cycling through file paths.
+ */
+
+/**
+ * Finds the next unreviewed path in cyclic order.
+ * @param paths - Array of file paths
+ * @param currentPath - Current active path
+ * @param isReviewed - Function to check if a path is reviewed
+ * @returns Next unreviewed path, or null if all are reviewed
+ */
+export function findNextUnreviewedPath(
+  paths: string[],
+  currentPath: string,
+  isReviewed: (path: string) => boolean,
+): string | null {
+  if (paths.length === 0) {
+    return null;
+  }
+
+  const currentIndex = paths.indexOf(currentPath);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  // Search forward from current position (wrapping around)
+  for (let i = 1; i <= paths.length; i++) {
+    const nextIndex = (currentIndex + i) % paths.length;
+    const nextPath = paths[nextIndex];
+    if (nextPath && !isReviewed(nextPath)) {
+      return nextPath;
+    }
+  }
+
+  // All files are reviewed
+  return null;
+}
+
+/**
+ * Finds the previous path in the list (wraps around).
+ * @param paths - Array of file paths
+ * @param currentPath - Current active path
+ * @returns Previous path, or null if current path not found
+ */
+export function findPrevPath(paths: string[], currentPath: string): string | null {
+  if (paths.length === 0) {
+    return null;
+  }
+
+  const currentIndex = paths.indexOf(currentPath);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  const prevIndex = (currentIndex - 1 + paths.length) % paths.length;
+  return paths[prevIndex] ?? null;
+}
+
+/**
+ * Finds the next path in the list (wraps around).
+ * @param paths - Array of file paths
+ * @param currentPath - Current active path
+ * @returns Next path, or null if current path not found
+ */
+export function findNextPath(paths: string[], currentPath: string): string | null {
+  if (paths.length === 0) {
+    return null;
+  }
+
+  const currentIndex = paths.indexOf(currentPath);
+  if (currentIndex === -1) {
+    return null;
+  }
+
+  const nextIndex = (currentIndex + 1) % paths.length;
+  return paths[nextIndex] ?? null;
+}
+
+/**
+ * Formats the file counter as "current / total" (1-based).
+ * @param paths - Array of file paths
+ * @param currentPath - Current active path
+ * @returns Formatted counter string, e.g., "2 / 5"
+ */
+export function formatFileCounter(paths: string[], currentPath: string): string {
+  const currentIndex = paths.indexOf(currentPath);
+  const position = currentIndex === -1 ? 0 : currentIndex + 1;
+  return `${position} / ${paths.length}`;
+}
