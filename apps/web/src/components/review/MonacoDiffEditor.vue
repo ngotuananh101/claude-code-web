@@ -3,6 +3,7 @@ import type * as monaco from "monaco-editor";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { monacoLanguageForPath } from "@/features/monaco/monaco-languages";
 import { initMonaco } from "@/features/monaco/monaco-setup";
+import { type LineChangeSummary, summariseLineChanges } from "@/features/review/diff-stats";
 
 const props = withDefaults(
   defineProps<{
@@ -10,20 +11,24 @@ const props = withDefaults(
     modified: string;
     path?: string;
     renderSideBySide?: boolean;
+    minimap?: boolean;
   }>(),
   {
     renderSideBySide: true,
+    minimap: true,
   },
 );
 
 const emit = defineEmits<{
   "update:modified": [value: string];
+  stats: [value: LineChangeSummary];
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 let originalModel: monaco.editor.ITextModel | null = null;
 let modifiedModel: monaco.editor.ITextModel | null = null;
+let statsDisposable: monaco.IDisposable | null = null;
 // `setValue` below also fires `onDidChangeContent`; without this flag the
 // editor would echo the parent's own content back as a user edit.
 let applyingExternal = false;
@@ -41,6 +46,13 @@ onMounted(() => {
     theme: "cc-web-dark",
     automaticLayout: true,
     renderSideBySide: props.renderSideBySide,
+    minimap: { enabled: props.minimap },
+  });
+
+  // The header pill mirrors Monaco's own hunks, so it always agrees with what
+  // the operator sees (and follows edits, saves and reverts as they re-diff).
+  statsDisposable = diffEditor.onDidUpdateDiff(() => {
+    emit("stats", summariseLineChanges(diffEditor?.getLineChanges() ?? []));
   });
 
   diffEditor.setModel({
@@ -61,6 +73,13 @@ watch(
     if (diffEditor) {
       diffEditor.updateOptions({ renderSideBySide: newValue });
     }
+  },
+);
+
+watch(
+  () => props.minimap,
+  (enabled) => {
+    diffEditor?.updateOptions({ minimap: { enabled } });
   },
 );
 
@@ -90,6 +109,7 @@ watch(
 );
 
 onUnmounted(() => {
+  statsDisposable?.dispose();
   diffEditor?.dispose();
   originalModel?.dispose();
   modifiedModel?.dispose();

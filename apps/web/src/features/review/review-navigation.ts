@@ -113,3 +113,38 @@ export function formatFileCounter(paths: string[], currentPath: string): string 
   const position = currentIndex === -1 ? 0 : currentIndex + 1;
   return `${position} / ${paths.length}`;
 }
+
+/**
+ * The diff dialog's file list must agree with the Changes tab the operator is
+ * looking at. A list that has not loaded yields no paths rather than borrowing
+ * the hidden tab's set, which would let prev/next jump to files the visible
+ * list does not contain.
+ */
+export function pathsForSource(input: {
+  source: "git" | "snapshot";
+  gitPaths: readonly string[];
+  snapshotPaths: readonly string[];
+}): string[] {
+  return input.source === "git" ? [...input.gitPaths] : [...input.snapshotPaths];
+}
+
+export type DiffOpenIntent = "navigate" | "refresh";
+
+/**
+ * Whether the diff dialog should be open after a selection or a refresh.
+ *
+ * A row click (`navigate`) opens a usable diff, or closes the dialog when the
+ * diff cannot be shown. A refresh (`refresh`) is what a save or revert runs:
+ * the dialog just stays as the operator left it, because they may have closed
+ * it while the write was in flight — reopening would yank them back. An
+ * unusable diff closes in both cases so stale content is never stranded.
+ *
+ * @returns true to open, false to close, null to leave the state unchanged.
+ */
+export function reviewDialogVisibility(
+  intent: DiffOpenIntent,
+  diffIsUsable: boolean,
+): boolean | null {
+  if (!diffIsUsable) return false;
+  return intent === "navigate" ? true : null;
+}

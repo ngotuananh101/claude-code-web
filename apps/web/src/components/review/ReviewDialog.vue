@@ -4,6 +4,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns2,
+  FileText,
+  Map as MapIcon,
   Maximize2,
   Minimize2,
   RotateCcw,
@@ -11,11 +13,14 @@ import {
   Save,
   X,
 } from "@lucide/vue";
+import { useElementSize, useMediaQuery } from "@vueuse/core";
 import { computed, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import MonacoCodeEditor from "@/components/review/MonacoCodeEditor.vue";
 import MonacoDiffEditor from "@/components/review/MonacoDiffEditor.vue";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { minimapVisible, resolveSideBySide } from "@/features/review/diff-layout";
+import type { LineChangeSummary } from "@/features/review/diff-stats";
 import {
   findNextPath,
   findPrevPath,
@@ -35,6 +40,8 @@ const props = defineProps<{
   isReviewed?: boolean;
   dirty?: boolean;
   isPathReviewed?: (path: string) => boolean;
+  /** The file's change type in the visible Changes list ("sửa", "thêm", …). */
+  statusLabel?: string;
   /** Save/revert failure surfaced by the parent; rendered in the footer. */
   error?: string | null;
   /** The file changed on the runner while a draft was open (file mode). */
@@ -56,8 +63,36 @@ const emit = defineEmits<{
 }>();
 
 const isFullscreen = ref(false);
-const renderSideBySide = ref(window.innerWidth >= 1024);
 const confirmingRevert = ref(false);
+
+// Split/inline follows the dialog's own width — the modal is 92vw windowed
+// and 100vw fullscreen, so the viewport alone is not the width the diff gets.
+// The header spans the dialog, so measuring it measures the content; before
+// the first ResizeObserver tick the viewport breakpoint stands in.
+const headerRef = ref<HTMLDivElement | null>(null);
+const { width: modalWidth } = useElementSize(headerRef);
+const isWideViewport = useMediaQuery("(min-width: 1024px)");
+// An operator's toggle holds until the dialog closes; reopening recomputes
+// the width-based default.
+const sideBySideOverride = ref<boolean | null>(null);
+const renderSideBySide = computed(() =>
+  resolveSideBySide({
+    override: sideBySideOverride.value,
+    modalWidth: modalWidth.value,
+    wideViewport: isWideViewport.value,
+  }),
+);
+
+// The minimap toggle hides below 900px of modal width (spec §4.1); with the
+// toggle gone the minimap itself is off, so it never eats the narrow column.
+const minimapOn = ref(true);
+const showMinimapToggle = computed(() =>
+  minimapVisible({ modalWidth: modalWidth.value, wideViewport: isWideViewport.value }),
+);
+const minimapEnabled = computed(() => showMinimapToggle.value && minimapOn.value);
+
+// Monaco computes the diff; the header's `+x -y` pill mirrors its hunks.
+const diffStats = ref<LineChangeSummary | null>(null);
 
 const fileName = computed(() => {
   const parts = props.path.split("/");
@@ -137,11 +172,13 @@ const handleClose = () => {
   emit("update:open", false);
 };
 
-// Navigating to another file resets the inline revert confirmation.
+// Navigating to another file resets the inline revert confirmation and the
+// previous file's `+x -y` counts (Monaco reports the new ones).
 watch(
   () => props.path,
   () => {
     confirmingRevert.value = false;
+    diffStats.value = null;
   },
 );
 
@@ -168,9 +205,13 @@ watch(
       });
     }
     if (!newOpen) {
-      // Reopening starts windowed with no confirmation in flight (M18).
+      // Reopening starts windowed with the width-based diff mode, the minimap
+      // on, and no confirmation in flight (M18).
       isFullscreen.value = false;
       confirmingRevert.value = false;
+      sideBySideOverride.value = null;
+      minimapOn.value = true;
+      diffStats.value = null;
     }
   },
   { immediate: true },
@@ -189,12 +230,26 @@ watch(
       :show-close-button="false"
     >
       <!-- Header -->
-      <div class="flex items-center justify-between border-b border-border px-4 py-3 bg-muted/20">
+      <div
+        ref="headerRef"
+        class="flex items-center justify-between border-b border-border px-4 py-3 bg-muted/20"
+      >
         <div class="flex flex-col gap-0.5 min-w-0 flex-1">
           <div class="flex items-center gap-2">
+            <FileText class="h-4 w-4 shrink-0 text-muted-foreground" />
             <DialogTitle class="text-sm font-semibold truncate">
               {{ fileName }}
             </DialogTitle>
+            <span
+              v-if="statusLabel"
+              class="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            >
+              {{ statusLabel }}
+            </span>
+            <span v-if="mode === 'diff' && diffStats !== null" class="shrink-0 font-mono text-[11px]">
+              <span class="text-emerald-600 dark:text-emerald-500">+{{ diffStats.added }}</span>
+              <span class="ml-1 text-destructive">-{{ diffStats.removed }}</span>
+            </span>
             <span class="text-xs text-muted-foreground">
               {{ fileCounter }}
             </span>
@@ -234,8 +289,9 @@ watch(
                 'px-2 py-1 text-xs rounded-l-md transition-colors',
                 renderSideBySide ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
               )"
+              :aria-pressed="renderSideBySide"
               title="Hiển thị chia đôi"
-              @click="renderSideBySide = true"
+              @click="sideBySideOverride = true"
             >
               <Columns2 class="h-3.5 w-3.5" />
             </button>
@@ -245,12 +301,25 @@ watch(
                 'px-2 py-1 text-xs rounded-r-md transition-colors',
                 !renderSideBySide ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
               )"
+              :aria-pressed="!renderSideBySide"
               title="Hiển thị nội tuyến"
-              @click="renderSideBySide = false"
+              @click="sideBySideOverride = false"
             >
               <Rows2 class="h-3.5 w-3.5" />
             </button>
           </div>
+
+          <button
+            v-if="mode === 'diff' && showMinimapToggle"
+            type="button"
+            class="p-1.5 hover:bg-muted rounded-md transition-colors"
+            :class="minimapEnabled ? 'text-foreground' : 'text-muted-foreground'"
+            :aria-pressed="minimapEnabled"
+            :title="minimapEnabled ? 'Ẩn bản đồ thu nhỏ' : 'Hiện bản đồ thu nhỏ'"
+            @click="minimapOn = !minimapOn"
+          >
+            <MapIcon class="h-4 w-4" />
+          </button>
 
           <button
             type="button"
@@ -281,7 +350,9 @@ watch(
           :modified="modified || ''"
           :path="path"
           :render-side-by-side="renderSideBySide"
+          :minimap="minimapEnabled"
           @update:modified="emit('update:modified', $event)"
+          @stats="diffStats = $event"
         />
         <MonacoCodeEditor
           v-else-if="mode === 'file'"

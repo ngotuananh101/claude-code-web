@@ -5,6 +5,8 @@ import {
   findPrevPath,
   formatFileCounter,
   nextPathAfterToggleReview,
+  pathsForSource,
+  reviewDialogVisibility,
 } from "./review-navigation.ts";
 
 describe("review-navigation", () => {
@@ -90,5 +92,36 @@ describe("review-navigation", () => {
         isPathReviewed,
       }),
     ).toBeNull();
+  });
+});
+
+describe("review-navigation — dialog source and visibility", () => {
+  test("pathsForSource follows the visible Changes source", () => {
+    const gitPaths = ["a.ts", "b.ts"];
+    const snapshotPaths = ["a.ts", "c.ts"];
+    expect(pathsForSource({ source: "git", gitPaths, snapshotPaths })).toEqual(gitPaths);
+    expect(pathsForSource({ source: "snapshot", gitPaths, snapshotPaths })).toEqual(snapshotPaths);
+  });
+
+  test("pathsForSource never borrows the hidden tab's list", () => {
+    // The git list is still loading/empty: the dialog must show no paths
+    // rather than the snapshot tab's (different) set.
+    expect(pathsForSource({ source: "git", gitPaths: [], snapshotPaths: ["a.ts"] })).toEqual([]);
+    expect(pathsForSource({ source: "snapshot", gitPaths: ["a.ts"], snapshotPaths: [] })).toEqual(
+      [],
+    );
+  });
+
+  test("reviewDialogVisibility opens on navigation and closes on an unusable diff", () => {
+    expect(reviewDialogVisibility("navigate", true)).toBe(true);
+    expect(reviewDialogVisibility("navigate", false)).toBe(false);
+  });
+
+  test("reviewDialogVisibility leaves the dialog alone on a successful refresh", () => {
+    // A save/revert refreshes the diff; it must not reopen a dialog the
+    // operator closed while the write was in flight.
+    expect(reviewDialogVisibility("refresh", true)).toBeNull();
+    // An unusable diff still closes, so stale content is never stranded.
+    expect(reviewDialogVisibility("refresh", false)).toBe(false);
   });
 });

@@ -22,6 +22,11 @@ import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
 import { draftAfterNavigation, rememberDraft } from "../features/review/diff-drafts";
 import {
+  type DiffOpenIntent,
+  pathsForSource,
+  reviewDialogVisibility,
+} from "../features/review/review-navigation";
+import {
   isReviewed,
   isReviewedByPath,
   resolveIncoming,
@@ -220,15 +225,16 @@ const scheduleRows = computed(() => {
   return tasks.map((task) => ({ ...toScheduleRow(task, now.value), cron: task.cron }));
 });
 
-const changedPaths = computed(() => {
-  if (changes.value && changes.value.entries.length > 0) {
-    return changes.value.entries.map((c) => c.path);
-  }
-  if (snapshotStatus.value?.entries) {
-    return snapshotStatus.value.entries.map((e) => e.path);
-  }
-  return [];
-});
+// The dialog's prev/next list follows the Changes tab's visible source. A
+// list that has not loaded yields no paths rather than borrowing the hidden
+// tab's set, which would navigate to files the operator cannot see.
+const changedPaths = computed(() =>
+  pathsForSource({
+    source: source.value,
+    gitPaths: changeEntries.value.map((entry) => entry.path),
+    snapshotPaths: (snapshotStatus.value?.entries ?? []).map((entry) => entry.path),
+  }),
+);
 
 const STATUS_LABELS: Record<string, string> = {
   added: "thêm",
@@ -240,6 +246,26 @@ const STATUS_LABELS: Record<string, string> = {
   conflicted: "xung đột",
   typechange: "đổi loại",
 };
+
+const SNAPSHOT_STATUS_LABELS: Record<string, string> = {
+  modified: "sửa",
+  created: "thêm",
+  deleted: "xoá",
+  excluded: "loại trừ",
+};
+
+// The diff dialog's header badge: the status of the file being viewed, using
+// the labels of the Changes list the operator has in front of them.
+const diffStatusLabel = computed<string | undefined>(() => {
+  const path = diffPath.value;
+  if (path === null) return undefined;
+  if (source.value === "git") {
+    const entry = changeEntries.value.find((candidate) => candidate.path === path);
+    return entry === undefined ? undefined : (STATUS_LABELS[entry.status] ?? entry.status);
+  }
+  const entry = snapshotStatus.value?.entries.find((candidate) => candidate.path === path);
+  return entry === undefined ? undefined : (SNAPSHOT_STATUS_LABELS[entry.status] ?? entry.status);
+});
 
 async function loadFiles(dir: string, options: { keepViewer?: boolean } = {}): Promise<void> {
   const id = workspace.value;
@@ -417,7 +443,7 @@ function openFileDialog(): void {
   reviewDialogOpen.value = true;
 }
 
-async function openDiff(path: string): Promise<void> {
+async function openDiff(path: string, intent: DiffOpenIntent = "navigate"): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
 
@@ -495,15 +521,16 @@ async function openDiff(path: string): Promise<void> {
   diffOriginal.value = original;
   diffModified.value = parsed === null ? "" : modified;
 
-  // Only a file with a comparable diff opens the dialog; the sidebar explains
-  // the rest instead of rendering an editor it cannot drive.
+  // A row click opens the dialog; a refresh (save/revert) leaves it as the
+  // operator left it, so a dialog closed mid-write stays closed. An unusable
+  // diff closes either way instead of stranding stale content.
+  const visibility = reviewDialogVisibility(intent, parsed !== null);
   if (parsed !== null) {
     reviewDialogMode.value = "diff";
-    reviewDialogOpen.value = true;
   } else {
     diffError.value = unavailable ?? "Không dựng được chế độ so sánh cho tệp này.";
-    reviewDialogOpen.value = false;
   }
+  if (visibility !== null) reviewDialogOpen.value = visibility;
 
   // Review state resets for the newly opened diff. Reviewed keys stay: the set
   // is session-scoped (path + hash), not diff-open-scoped.
@@ -587,12 +614,13 @@ async function saveDiff(): Promise<void> {
 
   await loadChanges();
 
-  // Re-open the diff ONLY if the refreshed change list still contains the path.
+  // Refresh the diff ONLY if the refreshed change list still contains the path.
   // If the saved content now matches HEAD, the change is gone and we clear the
-  // diff state instead of letting openDiff 404.
+  // diff state instead of letting openDiff 404. A refresh never reopens the
+  // dialog: the operator may have closed it while the write was in flight.
   const stillPresent = changes.value?.entries.some((e) => e.path === path) ?? false;
   if (stillPresent) {
-    void openDiff(path);
+    void openDiff(path, "refresh");
   } else {
     diffPath.value = null;
     diffRead.value = null;
@@ -673,13 +701,13 @@ async function revertDiff(): Promise<void> {
 
     // Refresh the snapshot status and the git changes sequentially (each bumps
     // the epoch; firing them concurrently would make one loader drop its own
-    // response and leave its spinner stuck), then re-open the diff against the
-    // post-revert baseline.
+    // response and leave its spinner stuck), then refresh the diff against the
+    // post-revert baseline (without reopening a dialog the operator closed).
     await loadSnapshot();
     if (source.value === "git") await loadChanges();
-    // The session watcher closes the dialog on a session switch; reopening here
+    // The session watcher closes the dialog on a session switch; refreshing here
     // would pull the previous session's path into the new panel.
-    if (workspace.value === id) await openDiff(path);
+    if (workspace.value === id) await openDiff(path, "refresh");
   } finally {
     diffReverting.value = false;
   }
@@ -1427,6 +1455,7 @@ watch(source, (next) => {
       :mode="reviewDialogMode"
       :path="reviewDialogMode === 'diff' ? (diffPath ?? '') : (viewer?.path ?? '')"
       :all-paths="reviewDialogMode === 'diff' ? changedPaths : (viewer ? [viewer.path] : [])"
+      :status-label="reviewDialogMode === 'diff' ? diffStatusLabel : undefined"
       :original="diffOriginal ?? ''"
       :modified="diffModified ?? ''"
       :content="draft ?? ''"
