@@ -131,6 +131,22 @@ describe("deriveJournalRows", () => {
     ]);
   });
 
+  test("a second run terminal does not re-time an already-interrupted entry", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("message.started", { messageId: "msg_1" }),
+      event("message.delta", { messageId: "msg_1", text: "partial" }),
+      event("run.interrupted", {}),
+      event("run.failed", {}),
+    ]);
+    expect(streamingRows(rows)[0]).toMatchObject({
+      interrupted: true,
+      // The second terminal changed nothing visible — the row was already
+      // interrupted — so the tooltip keeps the terminal that marked it.
+      lastOccurredAt: "2026-10-25T00:00:03Z",
+    });
+  });
+
   test("a delta without a started message is ignored", () => {
     reset();
     const rows = deriveJournalRows([
@@ -345,9 +361,27 @@ describe("deriveJournalRows", () => {
     });
   });
 
+  test("a duplicate tool.started on a running row moves placement and time together", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      // No name this time: nothing visible changes, but the row's placement
+      // follows the event, so its tooltip time must follow too — this is the
+      // one path where the pairing could diverge.
+      event("tool.started", { toolCallId: "toolu-1" }),
+    ]);
+    expect(toolRows(rows)[0]).toMatchObject({
+      state: "running",
+      toolName: "Bash",
+      lastSequence: 2,
+      lastOccurredAt: "2026-10-25T00:00:02Z",
+    });
+  });
+
   test("a tool_use in a completed message attaches its input to the tool row", () => {
-    // The summary attaches without disturbing the row: state stays running and
-    // lastSequence stays at the tool's own last event, not the message's.
+    // The summary attaches without disturbing the row: state stays running,
+    // lastSequence stays at the tool's own last event, not the message's, and
+    // so does the tooltip time — the summary is derived, not an event.
     reset();
     const rows = deriveJournalRows([
       event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
@@ -357,6 +391,7 @@ describe("deriveJournalRows", () => {
       state: "running",
       inputSummary: '{"command":"ls"}',
       lastSequence: 1,
+      lastOccurredAt: "2026-10-25T00:00:01Z",
     });
   });
 
@@ -398,6 +433,19 @@ describe("deriveJournalRows", () => {
     expect(toolRows(rows)[1]?.inputSummary).toBe(null);
   });
 
+  test("a tool input that JSON cannot serialize is skipped, not thrown", () => {
+    // `JSON.stringify` returns undefined — rather than throwing — for a
+    // function or symbol value. The socket boundary parses JSON so this shape
+    // is unreachable there, but "malformed blocks are skipped, never thrown"
+    // is the rule, and this is the one shape that would break it.
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([{ type: "tool_use", id: "toolu-1", input: () => "fn" }]),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe(null);
+  });
+
   test("tool_use blocks without a usable id are skipped", () => {
     reset();
     const rows = deriveJournalRows([
@@ -410,6 +458,42 @@ describe("deriveJournalRows", () => {
       ]),
     ]);
     expect(toolRows(rows)[0]?.inputSummary).toBe('{"command":"ls"}');
+  });
+
+  test("a null input is a real value: its summary is the JSON literal", () => {
+    // `null` is a valid tool input (a no-argument tool can send it), and it is
+    // distinct from "no input at all": the row should show `null`, not nothing.
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash", input: null }]),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe("null");
+  });
+
+  test("a repeated tool_use id keeps the last input", () => {
+    // Duplicate blocks for one id are not a wire shape the SDK promises, but
+    // the attachment pass must still be deterministic: the last complete wins.
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "ls" } }]),
+      completedWith([{ type: "tool_use", id: "toolu-1", name: "Bash", input: { command: "pwd" } }]),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe('{"command":"pwd"}');
+  });
+
+  test("a completed message whose content is not an array contributes no summary", () => {
+    reset();
+    const rows = deriveJournalRows([
+      event("tool.started", { toolCallId: "toolu-1", toolName: "Bash" }),
+      event("message.completed", {
+        type: "assistant",
+        message: { id: "msg_1", content: "not an array", model: "m" },
+        parent_tool_use_id: null,
+      }),
+    ]);
+    expect(toolRows(rows)[0]?.inputSummary).toBe(null);
   });
 
   test("malformed tool payloads are ignored", () => {

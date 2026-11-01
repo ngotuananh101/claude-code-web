@@ -276,12 +276,14 @@ export {
   type SessionCleanupRequest,
   type SessionCleanupResult,
 } from "./attachments.ts";
+
 export {
   ConnectionRegistry,
   type OpenParams,
   type OpenResult,
   type TrafficCheck,
 } from "./connection-registry.ts";
+
 export {
   type NegotiatedPolicy,
   type NegotiateResult,
@@ -290,6 +292,7 @@ export {
   parseCapabilities,
   type ServerPolicy,
 } from "./handshake.ts";
+
 export {
   BINARY_SNIFF_BYTES,
   BROWSE_CAPABILITY,
@@ -334,6 +337,7 @@ export {
   type SnapshotStatusResult,
   type WorkspaceInspectRequest,
 } from "./inspection.ts";
+
 export {
   EFFORT_LEVELS,
   type EffortLevel,
@@ -342,7 +346,9 @@ export {
   parseRunnerModels,
   type RunnerModel,
 } from "./models.ts";
+
 export * from "./mutation.ts";
+
 export {
   MODEL_ROLES,
   type ModelMapping,
@@ -354,6 +360,7 @@ export {
   parseRunProfilePayload,
   type RunProfilePayload,
 } from "./profiles.ts";
+
 export {
   type DeclaredWorkspace,
   parseDeclaredWorkspaces,
@@ -364,6 +371,7 @@ export {
   reconcile,
   type ServerRunState,
 } from "./reconcile.ts";
+
 export {
   type DesiredState,
   type ObservedState,
@@ -371,6 +379,7 @@ export {
   RunRegistry,
   toServerRunState,
 } from "./run-registry.ts";
+
 export {
   parseScheduleCancelledPayload,
   parseScheduleCreatedPayload,

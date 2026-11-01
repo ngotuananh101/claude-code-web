@@ -113,12 +113,17 @@ function toolInputSummariesOf(payload: unknown, into: Map<string, string>): void
     const id = record["id"];
     if (typeof id !== "string" || id === "") continue;
     if (record["input"] === undefined) continue;
-    let json: string;
+    let json: string | undefined;
     try {
       json = JSON.stringify(record["input"]);
     } catch {
       continue;
     }
+    // A function- or symbol-valued input makes `JSON.stringify` return
+    // undefined without throwing. The socket boundary parses JSON, so this is
+    // only reachable from a non-wire caller — skip it like any other
+    // malformed block rather than reading `.length` off undefined.
+    if (typeof json !== "string") continue;
     into.set(id, json.length > INPUT_SUMMARY_MAX ? `${json.slice(0, INPUT_SUMMARY_MAX)}…` : json);
   }
 }
@@ -202,13 +207,14 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
       } else {
         // A late started for an id a completion already settled (the SDK can
         // emit complete frames before their own raw events) only fills the
-        // name — a settled row keeps its position and state. The name is a
-        // visible change, so the row's time does move to this event.
-        if (typeof name === "string" && name !== "") {
-          entry.toolName = name;
-          entry.lastOccurredAt = event.occurredAt;
-        }
+        // name — a settled row keeps its position and state. A running row's
+        // placement follows the event, and so does its time: a duplicate
+        // started with no name changes nothing visible, but leaving the time
+        // behind is the one path where placement and tooltip would diverge.
+        const named = typeof name === "string" && name !== "";
+        if (named) entry.toolName = name;
         if (entry.state === "running") entry.lastSequence = event.sessionSequence;
+        if (named || entry.state === "running") entry.lastOccurredAt = event.occurredAt;
       }
       continue;
     }
@@ -249,8 +255,12 @@ export function deriveJournalRows(events: readonly BrowserReplayEvent[]): Journa
     if (RUN_TERMINALS.has(event.type)) {
       // The interrupted mark is a visible change to every open entry, so the
       // terminal's time is what their tooltips carry — placement is not: it
-      // stays at each entry's own last event.
+      // stays at each entry's own last event. Only entries not already
+      // interrupted are re-timed: a second terminal changes nothing about a
+      // row the first one already marked, and moving its tooltip would claim
+      // it did.
       for (const entry of open.values()) {
+        if (entry.interrupted) continue;
         entry.interrupted = true;
         entry.lastOccurredAt = event.occurredAt;
       }
