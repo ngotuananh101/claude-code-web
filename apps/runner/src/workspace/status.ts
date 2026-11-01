@@ -174,7 +174,7 @@ async function computeStatus(
   // and non-regular files are already in collected.excluded in the common case;
   // the lstat/re-read here is a race guard and also catches oversize/binary
   // files that the collector admits (it only filters by name, not content).
-  const currentHashes = new Map<string, { hash: string; size: number; mode: number }>();
+  const currentHashes = new Map<string, { hash: string; size: number }>();
   const currentExcluded = new Map<string, string>();
   for (const rel of collected.paths) {
     const absolute = join(root, rel);
@@ -205,7 +205,6 @@ async function computeStatus(
     currentHashes.set(rel, {
       hash: sha256(bytes),
       size: info.size,
-      mode: info.mode & 0o777,
     });
   }
 
@@ -321,7 +320,9 @@ async function computeStatus(
       snapshotHash: b.hash,
       currentHash: c.hash,
       size: c.size,
-      revertable: true,
+      // A kept row without a hash has no blob to restore from (corrupt/legacy
+      // manifest), so the row is informative but never actable.
+      revertable: b.hash !== null,
     });
   }
 

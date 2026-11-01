@@ -159,7 +159,7 @@ export function pruneSnapshots(db: Database, workspacePath: string, keep: number
       )
       .all(workspacePath, keep) as Array<{ attempt_id: string }>;
 
-    if (toDrop.length === 0) return [] as string[];
+    if (toDrop.length === 0) return [];
 
     // Candidate hashes owned by rows about to be deleted. A hash may be shared
     // with a surviving run; that is checked again after the delete.

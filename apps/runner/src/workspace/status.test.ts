@@ -101,6 +101,43 @@ test("classifies modified, created and deleted against the baseline", async () =
   expect(result.digest).toMatch(/^[0-9a-f]{64}$/);
 });
 
+test("a kept baseline row without a hash is never offered for revert", async () => {
+  const root = await workspace();
+  const db = freshDb();
+  // A kept row with a null hash is a corrupt/legacy manifest rather than a
+  // capture result. No blob exists for it, so a restore would have nothing to
+  // write: neither the modified nor the deleted row may be revertable.
+  recordSnapshot(db, {
+    attemptId: "a1",
+    workspacePath: root,
+    collector: "walk",
+    capturedAt: 1_000,
+    partial: false,
+    entries: [
+      { path: "a.txt", state: "kept", hash: null, size: 5, mode: 0o644 },
+      { path: "gone.txt", state: "kept", hash: null, size: 4, mode: 0o644 },
+    ],
+  });
+  await writeFile(join(root, "a.txt"), "next\n");
+
+  const status = createSnapshotStatus({ db, spawn: noGit });
+  const out = await status(root);
+  expect(out.ok).toBe(true);
+  if (!out.ok) throw new Error("expected ok");
+
+  const byPath = new Map(out.result.entries.map((e) => [e.path, e]));
+  expect(byPath.get("a.txt")).toMatchObject({
+    status: "modified",
+    snapshotHash: null,
+    revertable: false,
+  });
+  expect(byPath.get("gone.txt")).toMatchObject({
+    status: "deleted",
+    snapshotHash: null,
+    revertable: false,
+  });
+});
+
 test("the digest is stable across identical trees and changes with the content", async () => {
   const root = await workspace();
   const db = freshDb();

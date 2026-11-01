@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireWorkspaceLock, migrateRunnerDb, recordSnapshot } from "@cc-web/runner-db";
+import type { GitSpawn } from "../git/spawn.ts";
 import { computeSnapshotPlan } from "../workspace/status.ts";
 import { createMutationHandler } from "./handler.ts";
 
@@ -31,14 +32,14 @@ const sha = (s: string) => createHash("sha256").update(Buffer.from(s)).digest("h
 
 const noGit = async () => ({ exitCode: 1, stdout: "" });
 
-function setup(root: string, homeDir: string = root) {
+function setup(root: string, homeDir: string = root, spawn: GitSpawn = noGit) {
   const db = new Database(":memory:");
   migrateRunnerDb(db);
   const handler = createMutationHandler({
     db,
     workspacePathFor: (id) => (id === "default" ? root : undefined),
     homeDir,
-    spawn: noGit,
+    spawn,
   });
   return { db, handler, homeDir };
 }
@@ -336,6 +337,36 @@ test("a stale plan applies nothing", async () => {
   expect(frame.ok).toBe(false);
   expect(frame.error?.code).toBe("REVERT_STALE");
   expect(await readFile(join(root, "a.txt"), "utf8")).toBe("changed\n");
+});
+
+test("a workspace that changes while the lock is being acquired is refused under the lock", async () => {
+  const root = await workspace();
+  const homeDir = await homeDirFor();
+  // The first collection (the handler's initial plan) sees a non-repo and walks
+  // the tree — the same view the preview digest was taken from. The second
+  // collection is the under-lock recheck: it writes a file first and answers as
+  // a git repo, so the plan the lock was taken for is no longer the plan on
+  // disk. Only the recheck can catch this: step 5 compared clean.
+  let collections = 0;
+  const changingSpawn: GitSpawn = async (argv) => {
+    if (argv[1] !== "ls-files") return { exitCode: 1, stdout: "" };
+    collections += 1;
+    if (collections === 1) return { exitCode: 1, stdout: "" };
+    await writeFile(join(root, "late.txt"), "late\n");
+    return { exitCode: 0, stdout: "a.txt\0late.txt\0" };
+  };
+  const { db, handler } = setup(root, homeDir, changingSpawn);
+  await seedBaseline(db, root, "a-1", { "a.txt": "prev\n" }, homeDir);
+  await writeFile(join(root, "a.txt"), "next\n");
+  const digest = await planDigestFor(db, root);
+
+  const frame = await handler(apply("c1", digest));
+  expect(frame.ok).toBe(false);
+  expect(frame.error?.code).toBe("REVERT_STALE");
+  // Nothing was applied: the pre-apply content survives and the late file stays.
+  expect(await readFile(join(root, "a.txt"), "utf8")).toBe("next\n");
+  expect(await readFile(join(root, "late.txt"), "utf8")).toBe("late\n");
+  expect(collections).toBe(2);
 });
 
 test("a partial baseline refuses the bulk revert", async () => {
