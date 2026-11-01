@@ -7,6 +7,7 @@ import SessionRail from "../components/SessionRail.vue";
 import {
   initialRailOpen,
   loadRailPreference,
+  railOpenOnViewportChange,
   saveRailPreference,
 } from "../features/layout/layout-prefs.ts";
 import { loadSessions } from "../stores/sessions.ts";
@@ -20,27 +21,32 @@ const isWide = useMediaQuery("(min-width: 1024px)");
 const openButton = ref<HTMLButtonElement | null>(null);
 const railOpen = ref(initialRailOpen(loadRailPreference(), isWide.value));
 
-// Crossing the breakpoint adopts that viewport's convention: a phone never
-// inherits an inline rail, and a wide screen restores the stored choice.
+// Crossing the breakpoint adopts that viewport's convention: narrowing turns
+// the rail into a drawer and starts it collapsed; widening restores the
+// stored choice for the inline rail.
 watch(isWide, (wide) => {
-  railOpen.value = initialRailOpen(loadRailPreference(), wide);
+  railOpen.value = railOpenOnViewportChange(loadRailPreference(), wide);
 });
 
-// Only the wide layout owns a stored choice; a drawer is a per-visit action.
+// Every action on the rail itself is the operator's choice, so it is stored
+// at every viewport width; a route change is navigation, not a choice, and
+// closes the drawer without overwriting the preference.
 // Collapsing removes the focused button from the DOM, so focus follows the
 // edge tab that replaces it.
 function toggleRail(): void {
   railOpen.value = !railOpen.value;
-  if (isWide.value) saveRailPreference(railOpen.value);
+  saveRailPreference(railOpen.value);
   if (!railOpen.value) void nextTick(() => openButton.value?.focus());
 }
 
 function openRail(): void {
   railOpen.value = true;
+  saveRailPreference(true);
 }
 
 function closeRail(): void {
   railOpen.value = false;
+  saveRailPreference(false);
 }
 
 // A drawer left open would hide the page the operator just navigated to.
@@ -52,7 +58,7 @@ watch(
 );
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape" && !isWide.value) railOpen.value = false;
+  if (event.key === "Escape" && !isWide.value) closeRail();
 }
 
 // The rail's session list stays fresh on every console page, not just the

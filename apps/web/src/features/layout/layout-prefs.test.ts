@@ -7,6 +7,7 @@ import {
   loadRailPreference,
   parseRailPreference,
   RAIL_OPEN_KEY,
+  railOpenOnViewportChange,
   saveInspectPreference,
   saveRailPreference,
 } from "./layout-prefs.ts";
@@ -40,9 +41,28 @@ describe("layout-prefs", () => {
     expect(initialRailOpen(false, true)).toBe(false);
   });
 
-  test("a narrow viewport always starts closed — the journal keeps the screen", () => {
+  test("a narrow viewport starts closed — the journal keeps the screen", () => {
     expect(initialRailOpen(null, false)).toBe(false);
-    expect(initialRailOpen(true, false)).toBe(false);
+    expect(initialRailOpen(false, false)).toBe(false);
+  });
+
+  test("a stored choice wins at every viewport width", () => {
+    // The viewport default only applies until the operator chooses: a rail
+    // they opened on a phone must still be open after a reload.
+    expect(initialRailOpen(true, false)).toBe(true);
+    expect(initialRailOpen(true, true)).toBe(true);
+    expect(initialRailOpen(false, false)).toBe(false);
+  });
+
+  test("crossing the breakpoint adopts the viewport's default when narrowing", () => {
+    // A resize is not a visit: a stored "open" from the desktop layout must
+    // not pop a drawer over a narrow page in the same session. Widening still
+    // restores the stored choice for the inline rail.
+    expect(railOpenOnViewportChange(true, false)).toBe(false);
+    expect(railOpenOnViewportChange(null, false)).toBe(false);
+    expect(railOpenOnViewportChange(true, true)).toBe(true);
+    expect(railOpenOnViewportChange(false, true)).toBe(false);
+    expect(railOpenOnViewportChange(null, true)).toBe(true);
   });
 
   test("reads the stored preference, surviving blocked storage", () => {
@@ -74,8 +94,10 @@ describe("layout-prefs", () => {
     ).not.toThrow();
   });
 
-  test("the inspection panel starts open unless the operator hid it", () => {
-    expect(initialInspectOpen(null)).toBe(true);
+  test("the inspection panel starts closed until the operator opens it", () => {
+    // The journal owns the screen on first load; the panel is one click away
+    // through the right-edge tab, and the choice outlives a reload.
+    expect(initialInspectOpen(null)).toBe(false);
     expect(initialInspectOpen(true)).toBe(true);
     expect(initialInspectOpen(false)).toBe(false);
   });
