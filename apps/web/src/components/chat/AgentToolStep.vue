@@ -15,11 +15,14 @@ import {
 } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
+import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
 import type { ToolStep } from "@/features/journal/chat-turns";
 
 const props = defineProps<{
   /** The tool step to render. */
   step: ToolStep;
+  /** The background task this tool call spawned, when the journal knows it (P2b). */
+  task?: BackgroundTask | undefined;
 }>();
 
 /** Collapsed by default. */
@@ -58,6 +61,33 @@ const toolLabel = computed(() => {
 
 /** The icon component to render. */
 const IconComponent = computed(() => toolIcon(props.step.toolName));
+
+/**
+ * Elapsed time of the spawned task. Not reactive on its own clock: the task
+ * row changes on every progress/update event, and that re-render is enough —
+ * the band is the ticking surface.
+ */
+const taskElapsed = computed(() => {
+  const task = props.task;
+  if (task === undefined) return "";
+  const started = Date.parse(task.startedAt);
+  return Number.isNaN(started) ? "" : formatTaskElapsed(Date.now() - started);
+});
+
+const taskDotClass = computed(() => {
+  switch (props.task?.status) {
+    case "running":
+      return "bg-primary animate-pulse";
+    case "completed":
+      return "bg-primary";
+    case "failed":
+      return "bg-destructive";
+    case "stopped":
+      return "bg-muted-foreground";
+    default:
+      return "";
+  }
+});
 
 /** Copy a string to the clipboard with a toast. */
 async function copyToClipboard(text: string, label: string): Promise<void> {
@@ -98,6 +128,19 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       </div>
 
       <div class="flex items-center gap-1.5 shrink-0">
+        <!-- Background task badge: status dot + elapsed, joined by tool-use id. -->
+        <span
+          v-if="task"
+          class="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/5 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
+          :title="task.description || task.subagentType || task.taskId"
+        >
+          <i class="size-[6px] shrink-0 rounded-full" :class="taskDotClass" aria-hidden="true" />
+          <span class="font-mono">{{ taskElapsed }}</span>
+          <span v-if="task.lastToolName" class="max-w-24 truncate font-mono">
+            {{ task.lastToolName }}
+          </span>
+        </span>
+
         <!-- Status badge. -->
         <span
           v-if="step.state === 'running'"

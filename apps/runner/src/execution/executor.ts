@@ -30,6 +30,7 @@ import { boundEventPayload } from "./payload-bound.ts";
 import { redactErrorText, redactSdkMessage } from "./redact.ts";
 import { createScheduleObserver } from "./schedule-events.ts";
 import { createStreamNormalizer } from "./stream-normalizer.ts";
+import { isTaskLifecycleFrame, taskEventOf } from "./task-events.ts";
 import { isToolResultFrame, toolCompletionsOf } from "./tool-results.ts";
 
 /** The SDK seam: given options, returns the message stream (§10.2). */
@@ -573,6 +574,17 @@ export async function executeRun(
         }
       }
 
+      // §12.3: task-lifecycle frames carry their own semantics — journal them as
+      // typed events instead of letting eventTypeOf fold every one into an
+      // opaque run.status row. An unexpected task shape returns null here and
+      // still lands on that generic path (minus its prompt, below), so nothing
+      // is silently dropped.
+      const taskEvent = taskEventOf(sdkMessage);
+      if (taskEvent !== null) {
+        append(taskEvent.type, taskEvent.payload);
+        continue;
+      }
+
       // §12.3: partial `stream_event` frames are the raw deltas behind a message
       // the SDK also sends complete. The normalizer boils them down to
       // message.started / message.delta keyed by the SDK message id — the
@@ -594,7 +606,13 @@ export async function executeRun(
       }
 
       const eventType = eventTypeOf(sdkMessage);
-      append(eventType, redactSdkMessage(sdkMessage));
+      // A rejected task frame is still persisted, but never with its prompt:
+      // the typed path drops it (§12.3 hygiene), and the fallback must not put
+      // it back.
+      append(
+        eventType,
+        redactSdkMessage(isTaskLifecycleFrame(sdkMessage) ? withoutPrompt(sdkMessage) : sdkMessage),
+      );
       if (eventType === "run.finished") {
         state = "finished";
         terminalWritten = true;
@@ -641,6 +659,17 @@ export async function executeRun(
   }
 
   return { ...(sdkSessionId === undefined ? {} : { sdkSessionId }), state };
+}
+
+/**
+ * A copy of a task frame without its `prompt`: large, user-authored content the
+ * journal never carries, even on the path that keeps a malformed frame visible.
+ */
+function withoutPrompt(message: Record<string, unknown>): Record<string, unknown> {
+  if (!("prompt" in message)) return message;
+  const copy = { ...message };
+  delete copy["prompt"];
+  return copy;
 }
 
 function eventTypeOf(message: Record<string, unknown>): string {

@@ -10,6 +10,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
+import { liveActivityTasks, taskStateFromEvents } from "../features/journal/background-tasks.ts";
 import {
   initialInspectOpen,
   loadInspectPreference,
@@ -149,6 +150,17 @@ const liveRunId = computed(() => {
   }
   return null;
 });
+
+/**
+ * Background work that outlived its run. Derived from the journal exactly like
+ * the turns, so a replay rebuilds the same band. The level signal is what
+ * decides: a missed `task.completed` cannot leave this list stuck.
+ *
+ * Deliberately independent of `liveRunId`: the Stop button stays tied to the
+ * run, and this band is the honest indicator that something is still working.
+ */
+const backgroundTaskState = computed(() => taskStateFromEvents(sessions.stream?.events ?? []));
+const backgroundTasks = computed(() => liveActivityTasks(backgroundTaskState.value));
 
 // A terminal event for the run this page started is the honest "it is over":
 // the composer's stop button disappears with it, not on a timer.
@@ -326,6 +338,8 @@ async function refreshNow(): Promise<void> {
               :events="sessions.stream.events"
               :needs-resync="sessions.stream.needsResync"
               :session-live="activeLive"
+              :background-tasks="backgroundTasks"
+              :background-task-state="backgroundTaskState"
               :historical-messages="historicalMessages"
               :pending-run="activePendingRun"
             />

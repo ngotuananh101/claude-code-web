@@ -4,6 +4,7 @@ import { AlertCircle, Check, ChevronDown, ChevronRight, CircleStop } from "@luci
 import { computed, ref, watch } from "vue";
 import { peekApprovalUi } from "@/features/approvals/store.ts";
 import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
+import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
 import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
 import {
   processBodyVisible,
@@ -31,6 +32,8 @@ const props = defineProps<{
   terminalFor?:
     | ((event: BrowserReplayEvent) => { decision?: "allow" | "deny"; reason?: string } | undefined)
     | undefined;
+  /** Optional background-task lookup for the spawning tool step (P2b). */
+  taskFor?: ((toolCallId: string) => BackgroundTask | undefined) | undefined;
 }>();
 
 const summary = computed(() => summarizeProcessState(props.steps, props.status));
@@ -132,7 +135,11 @@ const summaryLabel = computed(() => {
           >
             <template v-for="step in executionSteps" :key="step.key">
               <AgentThinkingStep v-if="step.kind === 'thinking'" :step="step" />
-              <AgentToolStep v-else-if="step.kind === 'tool'" :step="step" />
+              <AgentToolStep
+                v-else-if="step.kind === 'tool'"
+                :step="step"
+                :task="taskFor?.(step.toolCallId)"
+              />
             </template>
             <ApprovalCard
               v-for="step in closedApprovals"

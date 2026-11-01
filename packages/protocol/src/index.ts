@@ -109,7 +109,12 @@ export type EventType =
   | "spool.warning"
   | "session.updated"
   | "schedule.created"
-  | "schedule.cancelled";
+  | "schedule.cancelled"
+  | "task.started"
+  | "task.progress"
+  | "task.updated"
+  | "task.completed"
+  | "tasks.changed";
 
 /**
  * The `EventType` union as a runtime list. The wire carries event types as
@@ -142,6 +147,11 @@ export const EVENT_TYPES = [
   "session.updated",
   "schedule.created",
   "schedule.cancelled",
+  "task.started",
+  "task.progress",
+  "task.updated",
+  "task.completed",
+  "tasks.changed",
 ] as const satisfies readonly EventType[];
 
 type EventTypesCoverEventType = EventType extends (typeof EVENT_TYPES)[number] ? true : false;
@@ -389,3 +399,5 @@ export {
   type ScheduledTask,
   type ScheduleState,
 } from "./schedules.ts";
+
+export * from "./task-events.ts";

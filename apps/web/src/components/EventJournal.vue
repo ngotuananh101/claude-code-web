@@ -3,11 +3,13 @@ import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web
 import { ArrowDown } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AgentChatTurn from "@/components/chat/AgentChatTurn.vue";
+import BackgroundTaskBand from "@/components/chat/BackgroundTaskBand.vue";
 import UserChatBubble from "@/components/chat/UserChatBubble.vue";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ApprovalTerminal } from "@/features/approvals/terminal.ts";
 import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
+import type { BackgroundTask, BackgroundTaskState } from "@/features/journal/background-tasks.ts";
 import { deriveChatTurns } from "@/features/journal/chat-turns.ts";
 import {
   computeScrollAnchorOffset,
@@ -26,6 +28,10 @@ const props = defineProps<{
   historicalMessages?: SessionMessage[];
   needsResync: boolean;
   sessionLive: boolean;
+  /** Live background work that outlived the run it belongs to. */
+  backgroundTasks?: BackgroundTask[];
+  /** Every task the journal has seen, live or settled (tool-step badges). */
+  backgroundTaskState?: BackgroundTaskState;
   pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] } | undefined;
 }>();
 
@@ -49,6 +55,21 @@ function terminalFor(event: BrowserReplayEvent): ApprovalTerminal | undefined {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const approvalId = payload["approvalId"];
   return typeof approvalId === "string" ? approvalTerminals.value.get(approvalId) : undefined;
+}
+
+// The spawning `Task`/`Agent` tool step joins the task by its tool-use id. The
+// SDK emits the same id on `tool_use_id`, `task.toolUseId`, and the tool step's
+// `toolCallId`, so the lookup is a plain map (P2b).
+const taskByToolCallId = computed(() => {
+  const map = new Map<string, BackgroundTask>();
+  for (const task of props.backgroundTaskState?.tasks.values() ?? []) {
+    if (task.toolUseId !== undefined) map.set(task.toolUseId, task);
+  }
+  return map;
+});
+
+function taskFor(toolCallId: string): BackgroundTask | undefined {
+  return taskByToolCallId.value.get(toolCallId);
 }
 
 const emptyCopy = computed(() =>
@@ -293,6 +314,11 @@ watch(
   >
     <ScrollArea ref="scrollAreaRef" class="min-h-0 min-w-0 flex-1">
       <div ref="contentRef" class="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-6 px-4 py-6 md:px-6">
+        <BackgroundTaskBand
+          v-if="(backgroundTasks?.length ?? 0) > 0"
+          :tasks="backgroundTasks ?? []"
+        />
+
         <p
           v-if="needsResync"
           class="border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
@@ -323,6 +349,7 @@ watch(
               v-else-if="turn.kind === 'agent'"
               :turn="turn"
               :terminal-for="terminalFor"
+              :task-for="taskFor"
               :data-turn-key="turn.key"
             />
           </template>

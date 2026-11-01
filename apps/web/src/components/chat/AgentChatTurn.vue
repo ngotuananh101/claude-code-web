@@ -5,6 +5,7 @@ import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import { peekApprovalUi } from "@/features/approvals/store.ts";
 import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
+import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
 import type { AgentTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
 import AgentLiveStatus from "./AgentLiveStatus.vue";
@@ -17,6 +18,8 @@ const props = defineProps<{
   terminalFor?: (
     event: BrowserReplayEvent,
   ) => { decision?: "allow" | "deny"; reason?: string } | undefined;
+  /** Optional background-task lookup for the spawning tool step (P2b). */
+  taskFor?: ((toolCallId: string) => BackgroundTask | undefined) | undefined;
 }>();
 
 /** Whether the raw payload panel is open. */
@@ -122,6 +125,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       :status="turn.status"
       :duration-text="turn.durationText"
       :terminal-for="terminalFor"
+      :task-for="taskFor"
     />
 
     <!-- Unified CLI-style live status while turn is running -->

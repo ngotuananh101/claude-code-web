@@ -2758,3 +2758,93 @@ describe("P3-C profile injection", () => {
     expect(terminal?.type).toBe("run.finished");
   });
 });
+
+describe("task lifecycle frames", () => {
+  test("task frames become typed events, not run.status", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        yield {
+          type: "system",
+          subtype: "task_started",
+          task_id: "task-1",
+          tool_use_id: "toolu-1",
+          description: "Sweep the repo",
+        };
+        yield {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", task_type: "local_agent" }],
+        };
+        yield {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "task-1",
+          status: "completed",
+          summary: "done",
+        };
+        yield { type: "result", subtype: "success", result: "hi" };
+      })();
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+    });
+
+    const list = events(db);
+    const types = list.map((e) => e.type);
+    expect(types).toContain("task.started");
+    expect(types).toContain("tasks.changed");
+    expect(types).toContain("task.completed");
+    // Before the mapper every task frame landed as an opaque run.status row.
+    expect(types).not.toContain("run.status");
+    expect(list.at(-1)?.type).toBe("run.finished");
+
+    const started = list.find((e) => e.type === "task.started");
+    expect(JSON.parse(started!.payload)["taskId"]).toBe("task-1");
+  });
+
+  test("a malformed task frame keeps its prompt out of the generic fallback", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        // No task_id: the mapper rejects it, so the frame lands as run.status.
+        yield {
+          type: "system",
+          subtype: "task_started",
+          description: "Sweep the repo",
+          prompt: "SECRET-PROMPT",
+        };
+        yield { type: "result", subtype: "success", result: "hi" };
+      })();
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+    });
+
+    const list = events(db);
+    const fallback = list.find((e) => e.type === "run.status");
+    // The frame is not silently dropped — but the typed path's hygiene rule
+    // (prompt never leaves the runner) applies on the fallback path too.
+    expect(fallback).toBeDefined();
+    expect(JSON.parse(fallback!.payload)["subtype"]).toBe("task_started");
+    expect(fallback!.payload).not.toContain("SECRET-PROMPT");
+  });
+});

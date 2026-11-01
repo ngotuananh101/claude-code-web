@@ -26,6 +26,18 @@ describe("event types", () => {
     expect(EVENT_TYPES).toContain("schedule.cancelled" as EventType);
   });
 
+  test("task lifecycle event types are accepted on the wire", () => {
+    for (const type of [
+      "task.started",
+      "task.progress",
+      "task.updated",
+      "task.completed",
+      "tasks.changed",
+    ] as const) {
+      expect(EVENT_TYPES).toContain(type);
+    }
+  });
+
   test("the list has no duplicates and stays a set of distinct names", () => {
     expect(new Set(EVENT_TYPES).size).toBe(EVENT_TYPES.length);
   });
