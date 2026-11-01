@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   MoreHorizontal,
+  PanelLeftClose,
   Pencil,
   Search,
   Server,
@@ -58,6 +59,10 @@ import RenameDialog from "./RenameDialog.vue";
 
 const route = useRoute();
 const router = useRouter();
+
+// The shell owns whether the rail is shown (inline column or phone drawer);
+// this component only asks to be dismissed.
+const emit = defineEmits<{ close: [] }>();
 
 const workspaces = ref<OwnerWorkspace[]>([]);
 
@@ -275,6 +280,15 @@ async function handleDeleteConfirm(): Promise<void> {
           @click="router.forward()"
         >
           <ChevronRight :size="15" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Thu gọn sidebar"
+          title="Thu gọn sidebar"
+          @click="emit('close')"
+        >
+          <PanelLeftClose :size="15" />
         </Button>
       </span>
     </div>

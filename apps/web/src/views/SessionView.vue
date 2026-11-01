@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { AttachmentInfo, SessionMessage } from "@cc-web/protocol";
 import { Loader2 } from "@lucide/vue";
+import { useMediaQuery } from "@vueuse/core";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
@@ -27,6 +29,23 @@ import {
 
 const route = useRoute();
 const router = useRouter();
+
+// Tailwind's lg breakpoint: the inspection panel sits beside the journal on
+// wide screens and stacks under it on narrow ones. Both are the same splitter,
+// so the drag handle sizes it either way.
+const isWide = useMediaQuery("(min-width: 1024px)");
+const panelDirection = computed<"horizontal" | "vertical">(() =>
+  isWide.value ? "horizontal" : "vertical",
+);
+
+// Pixel widths keep the panel's default the same at every viewport width; the
+// chat column takes whatever remains. The narrow default is the old h-72
+// stack height, now resizable.
+const inspectSize = computed(() =>
+  isWide.value
+    ? { defaultSize: 420, minSize: 280, maxSize: 900 }
+    : { defaultSize: 288, minSize: 200, maxSize: 560 },
+);
 
 const routeSession = computed(() => {
   const id = route.params.sessionId;
@@ -239,70 +258,85 @@ async function refreshNow(): Promise<void> {
 </script>
 
 <template>
-  <section class="relative flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+  <section class="relative flex min-h-0 min-w-0 flex-1 flex-col">
     <template v-if="active">
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header
-          class="z-10 mx-auto flex w-full max-w-4xl items-baseline justify-between gap-4 px-4 pt-4 pb-3 md:px-6"
-        >
-          <div class="flex min-w-0 items-center gap-2 truncate">
-            <span
-              class="truncate text-sm"
-              :class="active.title ? 'font-medium font-sans text-foreground' : 'font-mono text-[13px] text-muted-foreground'"
-              :title="active.title || active.sessionId"
+      <ResizablePanelGroup
+        :key="panelDirection"
+        :direction="panelDirection"
+        class="min-h-0 flex-1"
+      >
+        <ResizablePanel :min-size="35" class="min-w-0">
+          <div class="flex h-full min-h-0 min-w-0 flex-col">
+            <header
+              class="z-10 mx-auto flex w-full max-w-4xl items-baseline justify-between gap-4 px-4 pt-4 pb-3 md:px-6"
             >
-              {{ active.title || active.sessionId }}
-            </span>
-            <span
-              v-if="active.title"
-              class="truncate font-mono text-xs text-muted-foreground"
-              :title="active.sessionId"
-            >
-              ({{ active.sessionId }})
-            </span>
+              <div class="flex min-w-0 items-center gap-2 truncate">
+                <span
+                  class="truncate text-sm"
+                  :class="active.title ? 'font-medium font-sans text-foreground' : 'font-mono text-[13px] text-muted-foreground'"
+                  :title="active.title || active.sessionId"
+                >
+                  {{ active.title || active.sessionId }}
+                </span>
+                <span
+                  v-if="active.title"
+                  class="truncate font-mono text-xs text-muted-foreground"
+                  :title="active.sessionId"
+                >
+                  ({{ active.sessionId }})
+                </span>
+              </div>
+              <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
+                <span>{{ active.watermark }}</span>
+                <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
+                  <i class="size-[7px] animate-pulse rounded-full bg-primary" />
+                  đang chạy
+                </span>
+              </span>
+            </header>
+
+            <EventJournal
+              v-if="sessions.stream !== null"
+              :key="active.sessionId"
+              class="z-10"
+              :events="sessions.stream.events"
+              :needs-resync="sessions.stream.needsResync"
+              :session-live="activeLive"
+              :historical-messages="historicalMessages"
+              :pending-run="activePendingRun"
+            />
+            <div v-else class="z-10 flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 class="size-4 animate-spin text-muted-foreground" />
+              <span>Đang tải nhật ký phiên…</span>
+            </div>
+
+            <div class="z-10 px-4 pt-2 pb-4.5 md:px-6">
+              <Composer
+                class="mx-auto max-w-4xl"
+                :session-id="routeSession"
+                :active-run-id="liveRunId"
+                @started="onStarted"
+              />
+            </div>
           </div>
-          <span class="flex shrink-0 items-baseline gap-3 font-mono text-xs text-muted-foreground">
-            <span>{{ active.watermark }}</span>
-            <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
-              <i class="size-[7px] animate-pulse rounded-full bg-primary" />
-              đang chạy
-            </span>
-          </span>
-        </header>
+        </ResizablePanel>
 
-        <EventJournal
-          v-if="sessions.stream !== null"
-          :key="active.sessionId"
-          class="z-10"
-          :events="sessions.stream.events"
-          :needs-resync="sessions.stream.needsResync"
-          :session-live="activeLive"
-          :historical-messages="historicalMessages"
-          :pending-run="activePendingRun"
-        />
-        <div v-else class="z-10 flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 class="size-4 animate-spin text-muted-foreground" />
-          <span>Đang tải nhật ký phiên…</span>
-        </div>
+        <ResizableHandle with-handle />
 
-        <div class="z-10 px-4 pt-2 pb-4.5 md:px-6">
-          <Composer
-            class="mx-auto max-w-4xl"
-            :session-id="routeSession"
-            :active-run-id="liveRunId"
-            @started="onStarted"
-          />
-        </div>
-      </div>
-
-      <!-- §16.1's secondary panel: read-only inspection beside the journal on
-           wide screens, stacked under it on narrow ones. It reads the pin from
-           the rail's list, so it costs no extra request of its own until a tab
-           is opened. -->
-      <InspectPanel
-        :session-id="active.sessionId"
-        class="z-10 h-72 shrink-0 border-t border-border/60 lg:h-auto lg:w-[420px] lg:border-t-0 lg:border-l"
-      />
+        <!-- §16.1's secondary panel: read-only inspection beside the journal on
+             wide screens, stacked under it on narrow ones. Drag the handle to
+             resize it. It reads the pin from the rail's list, so it costs no
+             extra request of its own until a tab is opened. -->
+        <ResizablePanel
+          :default-size="inspectSize.defaultSize"
+          :min-size="inspectSize.minSize"
+          :max-size="inspectSize.maxSize"
+          size-unit="px"
+          class="min-w-0"
+        >
+          <InspectPanel :session-id="active.sessionId" class="h-full w-full" />
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </template>
 
     <template v-else>

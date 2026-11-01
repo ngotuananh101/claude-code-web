@@ -874,7 +874,7 @@ Git diff không tự chứng minh “mọi thay đổi do agent”. Untracked/de
 ### 16.1. UX
 
 ```text
-Sidebar                  Main                       Secondary panel
+Sidebar                  Main                       Secondary panel (resizable)
 Runners / Workspaces     Conversation               Files / Changes
 Sessions                 Tool timeline              Code / Diff
 Connection health        Approval cards             Run configuration
@@ -883,7 +883,9 @@ Connection health        Approval cards             Run configuration
 
 User không cần hiểu topology để dùng: chọn workspace, UI tự hiển thị Runner và trạng thái. Khi cần chẩn đoán mới mở runner details.
 
-Mobile dùng tabs Chat / Changes / Workspaces, unified diff mặc định. Không ép desktop IDE layout lên điện thoại.
+Layout và responsiveness:
+- Desktop: `SessionRail` (trái, có nút thu gọn/mở lại cạnh trái màn hình), `Main` (giữa) và `InspectPanel` (phải) chia qua shadcn-vue `ResizablePanelGroup` / `ResizableHandle`, cho phép kéo phóng to/thu nhỏ khung inspect bên phải (mặc định 420px, min 280px, max 900px).
+- Mobile: `SessionRail` ẩn mặc định, mở dạng drawer (có backdrop, Escape và tự đóng khi chuyển route); `Main` và `InspectPanel` chia dọc (vertical splitter, mặc định 288px, min 200px, max 560px) giúp thao tác thuận tiện trên màn hình nhỏ. Không ép desktop IDE layout lên điện thoại.
 
 ### 16.2. State
 
