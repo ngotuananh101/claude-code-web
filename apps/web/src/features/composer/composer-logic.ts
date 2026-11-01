@@ -279,3 +279,21 @@ export function profileName(profile: ProfileSummary | null | undefined): string 
   if (!profile) return "Mặc định (Runner Host)";
   return profile.name || profile.profileId;
 }
+
+/**
+ * Files (including screenshots) carried by a paste.
+ *
+ * The platform accessor is `DataTransferItem.getAsFile()`; an earlier call to
+ * a phantom `asFile()` threw on every paste that included a screenshot. Kept
+ * here rather than in the SFC so the extraction can be unit-tested.
+ */
+export function filesFromPaste(items: DataTransferItemList): File[] {
+  const files: File[] = [];
+  for (const item of items) {
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  return files;
+}

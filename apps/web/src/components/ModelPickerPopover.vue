@@ -179,7 +179,7 @@ function percent(index: number): string {
         :disabled="disabled"
         class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
         aria-label="Chọn model, mức nỗ lực và profile"
-        :title="`Model: ${triggerLabel}${activeProfile.value ? ` · ${activeProfile.value.name}` : ''}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
+        :title="`Model: ${triggerLabel}${activeProfile ? ` · ${activeProfile.name}` : ''}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
       >
         <Cpu :size="13" class="shrink-0" />
         <span class="max-w-[110px] truncate">{{ triggerLabel }}</span>

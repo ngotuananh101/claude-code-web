@@ -34,6 +34,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   buildRunRequest,
+  filesFromPaste,
   loadWorkspaceSessions,
   NEW_SESSION,
   registerCustomWorkspace,
@@ -408,20 +409,6 @@ function onFilesPicked(event: Event): void {
   const input = event.target as HTMLInputElement;
   addFiles(Array.from(input.files ?? []));
   input.value = "";
-}
-
-/**
- * Extract files (including screenshots) from a clipboardData items list.
- */
-function filesFromPaste(items: DataTransferItemList): File[] {
-  const files: File[] = [];
-  for (const item of items) {
-    if (item.kind === "file") {
-      const file = item.asFile();
-      if (file) files.push(file);
-    }
-  }
-  return files;
 }
 
 function onPaste(event: ClipboardEvent): void {

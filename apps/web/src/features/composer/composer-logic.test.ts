@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildRunRequest, type RunPayloadInputs, resolveModelLabel } from "./composer-logic.ts";
+import {
+  buildRunRequest,
+  filesFromPaste,
+  type RunPayloadInputs,
+  resolveModelLabel,
+} from "./composer-logic.ts";
 
 /**
  * Testable surface of the Composer's send() (Task 12).
@@ -103,5 +108,26 @@ describe("resolveModelLabel", () => {
   test("falls back to the plain label when the profile is absent", () => {
     const label = resolveModelLabel({ model: "haiku" });
     expect(label).toBe("Haiku");
+  });
+});
+
+describe("filesFromPaste", () => {
+  test("collects file items through the platform's getAsFile", () => {
+    const screenshot = new File(["png"], "shot.png", { type: "image/png" });
+    const notes = new File(["txt"], "notes.txt", { type: "text/plain" });
+    const items = [
+      { kind: "string", getAsFile: () => null },
+      { kind: "file", getAsFile: () => screenshot },
+      { kind: "file", getAsFile: () => null },
+      { kind: "file", getAsFile: () => notes },
+    ] as unknown as DataTransferItemList;
+
+    const files = filesFromPaste(items);
+
+    // Identity, not deep equality: these are the exact File objects the
+    // DataTransferItemList handed back.
+    expect(files).toHaveLength(2);
+    expect(files[0]).toBe(screenshot);
+    expect(files[1]).toBe(notes);
   });
 });
