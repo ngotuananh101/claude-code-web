@@ -26,7 +26,7 @@ const props = defineProps<{
   historicalMessages?: SessionMessage[];
   needsResync: boolean;
   sessionLive: boolean;
-  pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] };
+  pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] } | undefined;
 }>();
 
 // Chat turns fuse the resumed session's historical `SessionMessage`s with the

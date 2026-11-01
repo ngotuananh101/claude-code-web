@@ -42,9 +42,20 @@ override sat below the protection one. After any `biome.json` edit, run
 
 ## Commands and environment
 
-Checks: `bun test`, `bun run typecheck` (tsc -b + apps/web), `bun run lint`
-(biome), `bun run test:integration` (probe scripts; `--docker` variant chains
-through `test:integration:docker`). Web build: `cd apps/web && bun run build`.
+Checks: `bun test`, `bun run typecheck` (tsc -b + apps/web + `typecheck:vue`),
+`bun run lint` (biome), `bun run test:integration` (probe scripts; `--docker`
+variant chains through `test:integration:docker`). Web build:
+`cd apps/web && bun run build`.
+
+`bun run typecheck:vue` (chained into `typecheck`) is the only gate that looks
+inside `.vue`: `tsc` never parses an SFC, so a template that reads
+`ref.value` (templates already unwrap refs) and a save path copying a field
+the protocol type does not have both shipped past a green typecheck. It runs
+`vue-tsgo` — the Vue type checker built on this repo's native TypeScript 7,
+which exposes no compiler API for `vue-tsc` to drive — and drops diagnostics
+under `apps/web/src/components/ui/**` and `apps/web/src/lib/utils.ts`:
+those files are generated and never hand-edited, so their diagnostics are
+printed and counted on every run but cannot fail the gate.
 
 Control Server (`bun apps/control-server/src/index.ts`) reads:
 

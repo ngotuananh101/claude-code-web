@@ -27,8 +27,8 @@ const props = defineProps<{
 
 type Question = {
   question: string;
-  header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  header?: string | undefined;
+  options?: Array<{ label: string; description?: string | undefined }> | undefined;
 };
 
 const payload = (props.event.payload ?? {}) as Record<string, unknown>;

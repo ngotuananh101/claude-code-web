@@ -27,10 +27,10 @@ import AgentToolStep from "./AgentToolStep.vue";
 const props = defineProps<{
   steps: AgentStep[];
   status: AgentTurn["status"];
-  durationText?: string;
-  terminalFor?: (
-    event: BrowserReplayEvent,
-  ) => { decision?: "allow" | "deny"; reason?: string } | undefined;
+  durationText?: string | undefined;
+  terminalFor?:
+    | ((event: BrowserReplayEvent) => { decision?: "allow" | "deny"; reason?: string } | undefined)
+    | undefined;
 }>();
 
 const summary = computed(() => summarizeProcessState(props.steps, props.status));

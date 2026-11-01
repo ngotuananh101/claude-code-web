@@ -157,7 +157,7 @@ export type RunPayloadInputs = {
    * when the operator dropped files in — an empty/absent value means "no
    * attachments" and travels as nothing on the wire.
    */
-  attachmentIds?: string[];
+  attachmentIds?: string[] | undefined;
   /**
    * The selected profile id (Task 7), or null when the "Runner Host" default is
    * active. Sent only when a real profile is chosen so the server applies the
@@ -247,7 +247,7 @@ export function buildRunRequest(inputs: RunPayloadInputs): StartRunRequest {
  */
 export function resolveModelLabel(input: {
   model: string;
-  profile?: { modelMapping?: ModelMapping } | null;
+  profile?: { modelMapping?: ModelMapping } | null | undefined;
 }): string {
   const role = input.model.toLowerCase();
   const mapping: ModelMapping | undefined = input.profile?.modelMapping;

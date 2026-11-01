@@ -11,7 +11,8 @@
     "doctor": "bun run scripts/doctor.ts",
     "postinstall": "bun run scripts/claude-asset.ts",
     "spike": "bun run scripts/spike/phase0.ts",
-    "typecheck": "tsc -b --pretty && tsc -p apps/web --noEmit",
+    "typecheck": "tsc -b --pretty && tsc -p apps/web --noEmit && bun run typecheck:vue",
+    "typecheck:vue": "bun run scripts/typecheck-vue.ts",
     "lint": "biome check .",
     "lint:fix": "biome check . --write",
     "format": "biome format . --write",
@@ -29,7 +30,8 @@
     "@vitejs/plugin-vue": "^6.0.10",
     "typescript": "^7.0.2",
     "typescript5": "npm:typescript@^5.9.0",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vue-tsgo": "^0.3.0"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

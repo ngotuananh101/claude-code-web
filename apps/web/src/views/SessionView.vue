@@ -52,7 +52,9 @@ const active = computed<SessionSummary | undefined>(() => {
   };
 });
 
-const activeLive = computed(() => resolveSessionLive(active.value?.live, sessions.stream?.live));
+const activeLive = computed(() =>
+  resolveSessionLive(active.value?.live, sessions.stream?.live ?? null),
+);
 
 /** Preloaded historical messages when resuming an existing session (§16.1, Task 13). */
 const historicalMessages = ref<SessionMessage[]>([]);
@@ -156,15 +158,17 @@ watch(
     const targetResume = active.value?.sdkSessionId ?? payloadResume;
     if (targetResume === undefined || targetResume === "") return;
     if (fetchedResume.value === targetResume) return;
-    if (!active.value?.runnerId || !active.value?.workspaceId) return;
+    // Capture the session and its ids for the continuation: the fetch must
+    // read the session this effect saw, and property narrowing does not
+    // survive into an async closure.
+    const targetSession = active.value;
+    if (!targetSession?.runnerId || !targetSession.workspaceId) return;
+    const workspaceId = targetSession.workspaceId;
+    const runnerId = targetSession.runnerId;
 
     fetchedResume.value = targetResume;
     void (async () => {
-      const result = await fetchSessionMessages(
-        active.value.workspaceId,
-        targetResume,
-        active.value.runnerId,
-      );
+      const result = await fetchSessionMessages(workspaceId, targetResume, runnerId);
       if (result.ok) {
         historicalMessages.value = result.messages;
       } else {

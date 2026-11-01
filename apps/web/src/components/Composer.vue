@@ -363,7 +363,7 @@ type Attachment = {
   name: string;
   size: number;
   mimeType: string;
-  previewUrl?: string;
+  previewUrl?: string | undefined;
 };
 const attachments = ref<Attachment[]>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
