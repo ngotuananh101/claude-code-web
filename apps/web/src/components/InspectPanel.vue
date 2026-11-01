@@ -9,6 +9,7 @@ import type {
   SnapshotEntry,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
+import { PanelRightClose } from "@lucide/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   editableReadNotice,
@@ -58,6 +59,9 @@ import { sessions } from "../stores/sessions.ts";
  */
 
 const props = defineProps<{ sessionId: string }>();
+
+// The shell owns whether this panel is shown; the panel only asks to be hidden.
+const emit = defineEmits<{ close: [] }>();
 
 type Tab = "files" | "changes" | "diagnostics" | "schedules";
 const TAB_LABELS: Record<Tab, string> = {
@@ -936,19 +940,32 @@ watch(source, (next) => {
 <template>
   <aside class="flex min-h-0 min-w-0 flex-col bg-card/40">
     <nav class="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-2">
+      <!-- The four tabs do not fit the panel's minimum width; the row scrolls
+           so the close button stays pinned and reachable. -->
+      <span class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <button
+          v-for="(label, key) in TAB_LABELS"
+          :key="key"
+          type="button"
+          class="shrink-0 rounded-md px-2.5 py-1 font-mono text-xs transition-colors"
+          :class="
+            tab === key
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground'
+          "
+          @click="tab = key"
+        >
+          {{ label }}
+        </button>
+      </span>
       <button
-        v-for="(label, key) in TAB_LABELS"
-        :key="key"
         type="button"
-        class="rounded-md px-2.5 py-1 font-mono text-xs transition-colors"
-        :class="
-          tab === key
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted-foreground hover:text-foreground'
-        "
-        @click="tab = key"
+        class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        aria-label="Ẩn thanh kiểm tra"
+        title="Ẩn thanh kiểm tra"
+        @click="emit('close')"
       >
-        {{ label }}
+        <PanelRightClose :size="15" />
       </button>
     </nav>
 

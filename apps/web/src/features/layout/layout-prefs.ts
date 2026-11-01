@@ -43,3 +43,37 @@ export function saveRailPreference(open: boolean, storage?: Pick<Storage, "setIt
 export function initialRailOpen(stored: boolean | null, isWide: boolean): boolean {
   return isWide ? (stored ?? true) : false;
 }
+
+/**
+ * The inspection panel beside the journal can be hidden outright. It is not a
+ * drawer — it docks beside the journal on wide screens and under it on narrow
+ * ones — so the operator's choice is stored at every viewport width. It starts
+ * open so the shell matches §16.1's default secondary panel.
+ */
+export const INSPECT_OPEN_KEY = "cc-web.inspect.open";
+
+export function loadInspectPreference(storage?: Pick<Storage, "getItem">): boolean | null {
+  const store = storage ?? (typeof window !== "undefined" ? window.localStorage : undefined);
+  if (!store) return null;
+  try {
+    return parseRailPreference(store.getItem(INSPECT_OPEN_KEY));
+  } catch {
+    // A blocked storage is not a broken shell — fall back to the default.
+    return null;
+  }
+}
+
+export function saveInspectPreference(open: boolean, storage?: Pick<Storage, "setItem">): void {
+  const store = storage ?? (typeof window !== "undefined" ? window.localStorage : undefined);
+  if (!store) return;
+  try {
+    store.setItem(INSPECT_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // A blocked storage is not a broken shell — the choice is per-visit.
+  }
+}
+
+/** The inspection panel starts open unless the operator hid it. */
+export function initialInspectOpen(stored: boolean | null): boolean {
+  return stored ?? true;
+}

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { AttachmentInfo, SessionMessage } from "@cc-web/protocol";
-import { Loader2 } from "@lucide/vue";
+import { Loader2, PanelRightOpen } from "@lucide/vue";
 import { useMediaQuery } from "@vueuse/core";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,11 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
+import {
+  initialInspectOpen,
+  loadInspectPreference,
+  saveInspectPreference,
+} from "../features/layout/layout-prefs.ts";
 import { fetchSessionMessages } from "../services/sessions-api.ts";
 import {
   closeSession,
@@ -46,6 +51,25 @@ const inspectSize = computed(() =>
     ? { defaultSize: 420, minSize: 280, maxSize: 900 }
     : { defaultSize: 288, minSize: 200, maxSize: 560 },
 );
+
+// The inspection panel can be hidden outright so the journal owns the full
+// width. The choice outlives a reload, like the rail's, and applies at every
+// viewport width because the panel docks in the splitter, not over it.
+const inspectOpen = ref(initialInspectOpen(loadInspectPreference()));
+const inspectOpenButton = ref<HTMLButtonElement | null>(null);
+
+watch(inspectOpen, (open) => saveInspectPreference(open));
+
+// Hiding unmounts the panel that held focus; focus follows the edge tab that
+// replaces it, so a keyboard operator is not dropped on the body.
+function closeInspect(): void {
+  inspectOpen.value = false;
+  void nextTick(() => inspectOpenButton.value?.focus());
+}
+
+function openInspect(): void {
+  inspectOpen.value = true;
+}
 
 const routeSession = computed(() => {
   const id = route.params.sessionId;
@@ -321,22 +345,43 @@ async function refreshNow(): Promise<void> {
           </div>
         </ResizablePanel>
 
-        <ResizableHandle with-handle />
+        <ResizableHandle v-if="inspectOpen" with-handle />
 
         <!-- §16.1's secondary panel: read-only inspection beside the journal on
              wide screens, stacked under it on narrow ones. Drag the handle to
              resize it. It reads the pin from the rail's list, so it costs no
-             extra request of its own until a tab is opened. -->
+             extra request of its own until a tab is opened. Hiding it leaves
+             the journal the full width and moves the way back to the edge tab
+             below. -->
         <ResizablePanel
+          v-if="inspectOpen"
           :default-size="inspectSize.defaultSize"
           :min-size="inspectSize.minSize"
           :max-size="inspectSize.maxSize"
           size-unit="px"
           class="min-w-0"
         >
-          <InspectPanel :session-id="active.sessionId" class="h-full w-full" />
+          <InspectPanel
+            :session-id="active.sessionId"
+            class="h-full w-full"
+            @close="closeInspect"
+          />
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <!-- Once hidden, the only way back is this edge tab, mirroring the
+           rail's left edge tab. -->
+      <button
+        v-if="!inspectOpen"
+        ref="inspectOpenButton"
+        type="button"
+        class="absolute top-1/2 right-0 z-30 -translate-y-1/2 cursor-pointer rounded-l-md border border-r-0 border-border bg-card py-2 pr-0.5 pl-1 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+        aria-label="Mở thanh kiểm tra"
+        title="Mở thanh kiểm tra"
+        @click="openInspect"
+      >
+        <PanelRightOpen :size="14" />
+      </button>
     </template>
 
     <template v-else>

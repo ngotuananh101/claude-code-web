@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  INSPECT_OPEN_KEY,
+  initialInspectOpen,
   initialRailOpen,
+  loadInspectPreference,
   loadRailPreference,
   parseRailPreference,
   RAIL_OPEN_KEY,
+  saveInspectPreference,
   saveRailPreference,
 } from "./layout-prefs.ts";
 
@@ -68,5 +72,46 @@ describe("layout-prefs", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  test("the inspection panel starts open unless the operator hid it", () => {
+    expect(initialInspectOpen(null)).toBe(true);
+    expect(initialInspectOpen(true)).toBe(true);
+    expect(initialInspectOpen(false)).toBe(false);
+  });
+
+  test("reads the stored inspect preference, surviving blocked storage", () => {
+    const storage = createMockStorage();
+    expect(loadInspectPreference(storage)).toBeNull();
+    storage.setItem(INSPECT_OPEN_KEY, "0");
+    expect(loadInspectPreference(storage)).toBe(false);
+    storage.setItem(INSPECT_OPEN_KEY, "1");
+    expect(loadInspectPreference(storage)).toBe(true);
+    expect(
+      loadInspectPreference({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBeNull();
+  });
+
+  test("writes the inspect preference and ignores a throwing storage", () => {
+    const storage = createMockStorage();
+    saveInspectPreference(false, storage);
+    expect(storage.getItem(INSPECT_OPEN_KEY)).toBe("0");
+    saveInspectPreference(true, storage);
+    expect(storage.getItem(INSPECT_OPEN_KEY)).toBe("1");
+    expect(() =>
+      saveInspectPreference(true, {
+        setItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  test("the rail and inspect preferences are stored under distinct keys", () => {
+    expect(RAIL_OPEN_KEY).not.toBe(INSPECT_OPEN_KEY);
   });
 });
