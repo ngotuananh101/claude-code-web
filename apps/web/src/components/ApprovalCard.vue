@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { computed, reactive } from "vue";
+import { useIntervalFn } from "@vueuse/core";
+import { computed, reactive, ref } from "vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,14 +88,26 @@ const allAnswered = computed(() =>
 /**
  * Display-side expiry fallback: the row outlived its window with no closing event.
  * A non-expiring gate is parked at `APPROVAL_NO_EXPIRY` by the runner, so it
- * never counts as expired here either.
+ * never counts as expired here either. The clock ticks so a card whose gate
+ * lapses while the tab sits open turns read-only without a reload (F5b).
  */
-const displayExpired = computed(() => isDisplayExpired(expiresAt));
+const now = ref(Date.now());
+// VueUse 15's `useNow` ticks every animation frame unless given a custom
+// scheduler; a 30 s interval is all this card needs.
+useIntervalFn(() => {
+  now.value = Date.now();
+}, 30_000);
+const displayExpired = computed(() => isDisplayExpired(expiresAt, now.value));
 
 /** Nothing decided yet, by journal or by this browser: the card takes input. */
 const interactive = computed(
   () =>
-    approvalNeedsDecision({ terminal: props.terminal, expiresAt, closed: ui?.closed }) &&
+    approvalNeedsDecision({
+      terminal: props.terminal,
+      expiresAt,
+      closed: ui?.closed,
+      now: now.value,
+    }) &&
     !ui?.deciding &&
     ui?.decision === undefined,
 );
