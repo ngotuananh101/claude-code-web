@@ -300,7 +300,7 @@ onUnmounted(() => {
             :class="cn(
               'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5',
               isReviewed
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                ? 'bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30'
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
             )"
             :title="isReviewed ? 'Đã duyệt' : 'Đánh dấu đã duyệt'"
