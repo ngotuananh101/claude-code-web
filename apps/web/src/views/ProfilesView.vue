@@ -12,6 +12,7 @@ import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -271,7 +272,7 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col">
+  <ScrollArea class="min-h-0 flex-1">
     <div class="w-full px-7 py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
         cc-web / profiles
@@ -325,7 +326,7 @@ async function confirmDelete(): Promise<void> {
       <template v-else>
         <!-- The page is full width now: the form column stays readable at a
              fixed maximum and the JSON editor takes every remaining pixel. -->
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
+        <div class="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,28rem)_minmax(0,1fr)]">
           <!-- LEFT: Visual form + model mapping table -->
           <section class="space-y-5">
             <div class="space-y-2">
@@ -475,7 +476,7 @@ async function confirmDelete(): Promise<void> {
                 id="profile-json"
                 v-model="json"
                 spellcheck="false"
-                class="h-full min-h-[460px] font-mono text-xs"
+                class="min-h-[420px] font-mono text-xs overflow-y-auto"
                 rows="18"
               />
               <div
@@ -506,17 +507,17 @@ async function confirmDelete(): Promise<void> {
         </div>
       </template>
     </div>
+  </ScrollArea>
 
-    <ConfirmDeleteDialog
-      v-model:open="deleteDialogOpen"
-      title="Xoá profile"
-      :description="`Bạn có chắc chắn muốn xoá profile “${deleteTarget?.name}”?`"
-      :warning="
-        'Toàn bộ cấu hình endpoint, key và ánh xạ model của profile này sẽ bị xoá vĩnh viễn.'
-      "
-      confirm-label="Xoá profile"
-      :busy="deleteBusy"
-      @confirm="confirmDelete"
-    />
-  </div>
+  <ConfirmDeleteDialog
+    v-model:open="deleteDialogOpen"
+    title="Xoá profile"
+    :description="`Bạn có chắc chắn muốn xoá profile “${deleteTarget?.name}”?`"
+    :warning="
+      'Toàn bộ cấu hình endpoint, key và ánh xạ model của profile này sẽ bị xoá vĩnh viễn.'
+    "
+    confirm-label="Xoá profile"
+    :busy="deleteBusy"
+    @confirm="confirmDelete"
+  />
 </template>
