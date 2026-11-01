@@ -11,7 +11,7 @@ import {
   Save,
   X,
 } from "@lucide/vue";
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import MonacoCodeEditor from "@/components/review/MonacoCodeEditor.vue";
 import MonacoDiffEditor from "@/components/review/MonacoDiffEditor.vue";
@@ -34,6 +34,7 @@ const props = defineProps<{
   content?: string;
   isReviewed?: boolean;
   dirty?: boolean;
+  isPathReviewed?: (path: string) => boolean;
 }>();
 
 const emit = defineEmits<{
@@ -97,17 +98,16 @@ const handleSave = () => {
 const handleToggleReviewed = () => {
   emit("toggleReviewed");
 
-  // Find next unreviewed path
-  const isReviewedFn = (checkPath: string) => {
-    // The parent component should track review state, we just call the function
-    // For now, we check if it's the current path that was just marked reviewed
-    return checkPath === props.path;
+  // Check if other paths are already reviewed
+  const isReviewedCheck = (checkPath: string) => {
+    if (checkPath === props.path) return true; // current file was just marked reviewed
+    return Boolean(props.isPathReviewed?.(checkPath));
   };
 
-  const nextUnreviewedPath = findNextUnreviewedPath(props.allPaths, props.path, isReviewedFn);
+  const nextPath = findNextUnreviewedPath(props.allPaths, props.path, isReviewedCheck);
 
-  if (nextUnreviewedPath) {
-    emit("selectPath", nextUnreviewedPath);
+  if (nextPath) {
+    emit("selectPath", nextPath);
   } else {
     // All reviewed
     toast.success("Đã duyệt toàn bộ thay đổi.");
@@ -122,7 +122,7 @@ const handleClose = () => {
 // Watch for escape key
 watch(
   () => props.open,
-  (newOpen) => {
+  (newOpen, _, onCleanup) => {
     if (newOpen) {
       const handleEscape = (e: KeyboardEvent) => {
         if (e.key === "Escape" && !isFullscreen.value) {
@@ -130,10 +130,18 @@ watch(
         }
       };
       document.addEventListener("keydown", handleEscape);
-      return () => document.removeEventListener("keydown", handleEscape);
+      onCleanup(() => {
+        document.removeEventListener("keydown", handleEscape);
+      });
     }
   },
+  { immediate: true },
 );
+
+// Cleanup on unmount
+onUnmounted(() => {
+  // Any remaining event listeners will be cleaned up
+});
 </script>
 
 <template>
@@ -255,7 +263,7 @@ watch(
       <div class="flex items-center justify-between border-t border-border px-4 py-3 bg-muted/20">
         <!-- Left: Dirty indicator -->
         <div class="flex items-center gap-2">
-          <span v-if="dirty" class="text-xs text-amber-500">
+          <span v-if="dirty" class="text-xs text-muted-foreground">
             Chưa lưu thay đổi
           </span>
         </div>
@@ -289,12 +297,17 @@ watch(
           <button
             v-if="mode === 'diff'"
             type="button"
-            class="px-3 py-1.5 text-sm bg-green-600 text-white hover:bg-green-700 rounded-md transition-colors flex items-center gap-1.5"
-            title="Đánh dấu đã duyệt"
+            :class="cn(
+              'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5',
+              isReviewed
+                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90'
+            )"
+            :title="isReviewed ? 'Đã duyệt' : 'Đánh dấu đã duyệt'"
             @click="handleToggleReviewed"
           >
             <Check class="h-3.5 w-3.5" />
-            Đã duyệt
+            {{ isReviewed ? '✓ Đã duyệt' : 'Đã duyệt' }}
           </button>
         </div>
       </div>
