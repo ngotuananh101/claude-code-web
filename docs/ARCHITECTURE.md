@@ -23,7 +23,7 @@
 13. [Approvals và user questions](#13-approvals-và-user-questions)
 14. [Cancel, disconnect, restart và reconciliation](#14-cancel-disconnect-restart-và-reconciliation)
 15. [Workspace, file API và Git](#15-workspace-file-api-và-git)
-16. [Frontend Vue và CodeMirror](#16-frontend-vue-và-codemirror)
+16. [Frontend Vue và Monaco](#16-frontend-vue-và-monaco)
 17. [HTTP API và wire protocol](#17-http-api-và-wire-protocol)
 18. [Persistence và database schema](#18-persistence-và-database-schema)
 19. [Security và trust boundaries](#19-security-và-trust-boundaries)
@@ -45,7 +45,7 @@ Xây một ứng dụng web chat-centric để điều khiển Claude coding age
 | Kiến trúc | Một Web, một Control Server ở MVP, nhiều Runner |
 | Vị trí chạy | Cùng máy hoặc khác máy; protocol không phụ thuộc topology |
 | Frontend | Vue 3 + TypeScript + Vite + Tailwind CSS + shadcn-vue |
-| Editor / diff | CodeMirror 6 + `@codemirror/merge` |
+| Editor / diff | Monaco Editor 0.57.0 — `create` / `createDiffEditor` trong review dialog |
 | Backend | Bun + Hono |
 | Runner | Bun, service riêng, dùng Claude Agent SDK TypeScript |
 | Claude executable | Binary đi kèm SDK; không bắt buộc CLI global |
@@ -109,7 +109,7 @@ Repo, model output, tool output và preview application vẫn có thể không �
 
 ```text
 Browser / điện thoại
-Vue + shadcn-vue + CodeMirror
+Vue + shadcn-vue + Monaco
         │ HTTPS commands / WSS events
         ▼
 Control Server — Bun + Hono
@@ -176,7 +176,7 @@ Một implementation đầu có thể dùng adapter trong daemon cho compatibili
 | --- | --- |
 | Web | Vue 3, TypeScript, Vue Router, Pinia |
 | UI/build | shadcn-vue, Tailwind CSS, Vite |
-| Code/diff | CodeMirror 6, `@codemirror/merge`, language packages lazy-loaded |
+| Code/diff | Monaco Editor 0.57.0, diff qua `createDiffEditor`; worker bundles lazy-loaded |
 | API/gateway | Bun, Hono, native WebSocket |
 | Runner runtime | Bun, Claude Agent SDK, Git |
 | Validation | Zod; schemas chia sẻ cho protocol/DTO |
@@ -193,8 +193,8 @@ Pin toolchain, SDK và lockfile. Không điền một version number chưa kiể
 apps/
   web/src/
     components/ui/
-    components/editor/
-    features/{auth,runners,workspaces,sessions,chat,approvals,changes,settings}/
+    components/review/
+    features/{auth,runners,workspaces,sessions,chat,approvals,inspect,review,monaco,settings}/
     composables/
     stores/
     router/
@@ -869,7 +869,7 @@ Git diff không tự chứng minh “mọi thay đổi do agent”. Untracked/de
 - Commit là action độc lập có explicit confirmation và scope file rõ.
 - Không auto-push hoặc auto-deploy từ việc bấm Reviewed.
 
-## 16. Frontend Vue và CodeMirror
+## 16. Frontend Vue và Monaco
 
 ### 16.1. UX
 
@@ -894,27 +894,29 @@ Mobile dùng tabs Chat / Changes / Workspaces, unified diff mặc định. Khôn
 - Batch streaming updates; không rerender full chat theo từng delta.
 - Sanitize markdown/links/tool outputs; không chạy raw HTML từ model.
 
-### 16.3. CodeMirror components
+### 16.3. Monaco components
 
 ```text
-CodeEditor.vue       — text editor/viewer
-SplitDiff.vue        — MergeView
-UnifiedDiff.vue      — unifiedMergeView
-ReviewToolbar.vue    — shadcn-vue controls
+InspectPanel.vue     — sidebar: danh sách Files / Changes, chỉ điều hướng
+ReviewDialog.vue     — dialog review (fullscreen được), chứa editor hoặc diff
+MonacoCodeEditor.vue — editor/viewer một document
+MonacoDiffEditor.vue — createDiffEditor, original vs modified
+features/monaco/     — worker wiring, theme, language mapping
 ```
 
-CodeMirror có mobile-oriented editing và extension model; merge package hỗ trợ split/unified, collapse unchanged và chunk controls. Không chốt bundle/performance tốt hơn lựa chọn khác khi chưa benchmark. [^https://codemirror.net/][^https://codemirror.net/docs/ref/]
+Sidebar không render editor inline: mọi thao tác đọc/sửa/so sánh mở trong `ReviewDialog`, nên vùng diff có đủ bề ngang trên desktop lẫn mobile.
 
-- `onMounted` tạo view, unmount gọi `destroy()`.
+- `initMonaco()` chạy một lần, gán `self.MonacoEnvironment.getWorker` cho từng worker bundle (editor, json, css, html, ts) import qua Vite `?worker`; theme `cc-web-dark` khớp biến CSS của shadcn-vue.
+- `onMounted` tạo editor (`create` hoặc `createDiffEditor`), unmount gọi `dispose()`.
 - `shallowRef`/non-reactive instance, không deep proxy editor state.
-- Update document bằng transaction, không recreate theo từng change.
-- Lazy-load editor và language packages; theme dùng CSS tokens phù hợp shadcn-vue.
-- Read-only baseline bằng editor extensions, không chỉ disable nút.
+- Update document qua `setValue`/`setModel`, không recreate editor theo từng change.
+- Custom theme và worker được lazy-load cùng editor; language contributions do Monaco tự đăng ký theo model.
+- Read-only baseline ở tầng editor option (`readOnly`), không chỉ disable nút.
 - Agent/external file update khi có local draft → conflict UI, không ghi đè draft.
 
 ### 16.4. Review semantics
 
-Agent đã sửa workspace trước khi user xem diff. Default accept/reject của merge chỉ thay state/documents trong editor; không tự ghi file lên Runner hay tạo commit. [^https://codemirror.net/docs/ref/]
+Agent đã sửa workspace trước khi user xem diff. Diff trong dialog chỉ hiển thị; review không tự ghi file lên Runner hay tạo commit. [^https://microsoft.github.io/monaco-editor/]
 
 MVP tắt controls gây hiểu nhầm hoặc wrap thành app actions:
 
@@ -1314,7 +1316,7 @@ Vue shell, owner auth, workspaces/sessions, streaming projections, approvals/que
 
 ### Phase 3 — Config và code review
 
-Diagnostics RPC, profiles/overrides, CodeMirror, file/Git RPC, revision checks, snapshots, explicit revert và retention.
+Diagnostics RPC, profiles/overrides, Monaco review dialog, file/Git RPC, revision checks, snapshots, explicit revert và retention.
 
 ### Phase 4 — Hardening/release
 
@@ -1341,7 +1343,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | ADR-007 | Durable outbox/inbox/journals | Reconnect/crash recovery có state bền vững |
 | ADR-008 | At-least-once + dedup | Không hứa exactly-once side effects |
 | ADR-009 | No automatic ambiguous failover | Ưu tiên safety hơn availability khi không xác minh |
-| ADR-010 | Vue + CodeMirror review-first | Không xây IDE đầy đủ ở MVP |
+| ADR-010 | Vue + Monaco review-first (ban đầu CodeMirror; thay bằng Monaco trong review dialog 2026-11-01) | Không xây IDE đầy đủ ở MVP |
 | ADR-011 | SQLite MVP, PostgreSQL scale-out | Không chạy SQLite shared trên nhiều servers |
 | ADR-012 | No mandatory broker/Temporal | Giữ vận hành gọn, có điểm mở rộng rõ |
 | ADR-013 | One Runner owner/workspace | Tránh shared-filesystem split-brain |
@@ -1377,8 +1379,8 @@ Tuyên bố về SDK, Bun và editor dựa trên nguồn bên dưới. Schema, e
 - [Secure deployment](https://code.claude.com/docs/en/agent-sdk/secure-deployment)
 - [Quickstart và authentication](https://code.claude.com/docs/en/agent-sdk/quickstart)
 - [Bun WebSockets](https://bun.com/docs/runtime/http/websockets)
-- [CodeMirror](https://codemirror.net/)
-- [CodeMirror reference / merge](https://codemirror.net/docs/ref/)
+- [Monaco Editor](https://microsoft.github.io/monaco-editor/)
+- [Monaco Editor API / diff editor](https://microsoft.github.io/monaco-editor/docs.html)
 - [AWS transactional outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
 - [NATS delivery và acknowledgement](https://docs.nats.io/learn/jetstream/delivery-and-acknowledgment)
 - [Temporal Activity execution và cancellation](https://docs.temporal.io/activity-execution)

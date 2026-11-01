@@ -219,10 +219,8 @@ const partialContextDiff = [
   "",
 ].join("\n");
 
-const originalA =
-  ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n") + "\n";
-const modifiedA =
-  ["a1", "a2", "a3", "a4", "a5", "M6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n") + "\n";
+const originalA = `${["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n")}\n`;
+const modifiedA = `${["a1", "a2", "a3", "a4", "a5", "M6", "a7", "a8", "a9", "a10", "a11", "a12"].join("\n")}\n`;
 
 describe("spliceOriginal", () => {
   test("rebuilds the full original from the read document and the hunk ranges", () => {

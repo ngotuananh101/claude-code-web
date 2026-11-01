@@ -9,22 +9,23 @@ import type {
   SnapshotEntry,
   SnapshotStatusResult,
 } from "@cc-web/protocol";
-import { Maximize2 } from "@lucide/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { classifyDiffLines } from "../features/inspect/diff";
-import { isDirty, viewerAfterSave } from "../features/inspect/edit";
+import {
+  editableReadNotice,
+  isDirty,
+  isEditableRead,
+  viewerAfterSave,
+} from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
 import { draftAfterNavigation, rememberDraft } from "../features/review/diff-drafts";
 import {
-  defaultDiffMode,
   isReviewed,
   isReviewedByPath,
   resolveIncoming,
   reviewKey,
 } from "../features/review/review-state";
-import type { ParsedUnifiedDiff } from "../features/review/unified-diff";
 import { parseUnifiedDiff, spliceOriginal } from "../features/review/unified-diff";
 import { toScheduleRow } from "../features/schedules/schedule-rows";
 import {
@@ -43,12 +44,13 @@ import { cancelSchedule, listSchedules } from "../services/schedules-api";
 import { sessions } from "../stores/sessions.ts";
 
 /**
- * Read-only inspection beside the conversation (§16.1's secondary panel,
- * P3-A ruling 12).
+ * Inspection beside the conversation (§16.1's secondary panel, P3-A ruling 12).
  *
- * Files / Changes / Diagnostics, all answered through the bounded RPC channel:
- * one directory per call, plain text in a `<pre>`, and no controls that would
- * imply a mutation — save, revert and accept/reject are P3-B/P3-D (§16.4).
+ * The sidebar is navigation only: Files lists directories and opens a file in
+ * the review dialog, Changes lists the working tree and opens a diff there.
+ * Everything that renders code — the editor, the diff, review marks, save and
+ * revert — lives in `ReviewDialog`, so the diff gets the full dialog width
+ * instead of the sidebar's few hundred pixels.
  *
  * The composite workspace id comes from the session's pin, which the rail's
  * own list already carries (T10) — a pre-pin session answers null and the
@@ -93,7 +95,8 @@ const saveError = ref<string | null>(null);
 // Draft conflict handling (P3-D): a file changed on the runner between open
 // and write, while the operator still had an unsaved draft.
 const conflictIncoming = ref<FileReadResult | null>(null);
-const conflictNote = ref<string | null>(null);
+// Why a clicked file cannot open the dialog editor (binary / truncated).
+const fileNotice = ref<string | null>(null);
 
 /** True when the open viewer has unsaved edits in the draft. */
 function isDraftDirty(): boolean {
@@ -104,27 +107,18 @@ function isDraftDirty(): boolean {
   );
 }
 
-/** Text/editable predicate mirrored from `openEntry` for conflict adoption. */
-function isEditableRead(outcome: FileReadResult): boolean {
-  return !outcome.binary && !outcome.truncated && outcome.content !== null;
-}
-
 // Changes
 const changes = ref<GitChangesResult | null>(null);
 const changesError = ref<string | null>(null);
 const changesLoading = ref(false);
-const diff = ref<GitDiffResult | null>(null);
 const diffPath = ref<string | null>(null);
 const diffError = ref<string | null>(null);
 const diffLoading = ref(false);
 
-// Changes — review merge-view state (P3-D)
-const diffParsed = ref<ParsedUnifiedDiff | null>(null);
+// Changes — review-dialog state
 const diffOriginal = ref<string>(""); // HEAD side: read document with hunks spliced
 const diffRead = ref<FileReadResult | null>(null); // authoritative working side
 const diffModified = ref<string>(""); // merged document the reviewer settles on
-const diffModeOverride = ref<"unified" | "split" | null>(null);
-const diffWidth = ref(0);
 const reviewed = ref<Set<string>>(new Set());
 // Reviewed keys are (path, content hash) pairs. Navigation only knows paths,
 // so every read/save records the hash it observed; a path never opened here
@@ -132,61 +126,18 @@ const reviewed = ref<Set<string>>(new Set());
 const reviewedPathHashes = ref<Map<string, string>>(new Map());
 // Unsaved diff edits survive navigating to another file and back.
 const diffDrafts = ref<Map<string, string>>(new Map());
-const reviewConfirmRevert = ref(false);
 const reviewSnapshotEntry = ref<SnapshotEntry | null>(null);
 const diffSaving = ref(false);
 const diffReverting = ref(false);
 const diffSaveError = ref<string | null>(null);
 
-// Lazy-loaded merge-view components (P3-D)
-const UnifiedDiff = defineAsyncComponent(() => import("./review/UnifiedDiff.vue"));
-const SplitDiff = defineAsyncComponent(() => import("./review/SplitDiff.vue"));
-const ReviewToolbar = defineAsyncComponent(() => import("./review/ReviewToolbar.vue"));
+// The dialog owns both the diff view and the file editor; the sidebar is
+// navigation only.
 const ReviewDialog = defineAsyncComponent(() => import("./review/ReviewDialog.vue"));
-
-// Layout measurement for the diff mode auto-select (P3-D)
-const diffContainer = ref<HTMLElement | null>(null);
-let diffResizeObserver: ResizeObserver | null = null;
 
 // ReviewDialog integration state
 const reviewDialogOpen = ref(false);
 const reviewDialogMode = ref<"diff" | "file">("diff");
-
-onMounted(() => {
-  if (typeof ResizeObserver !== "undefined") {
-    diffResizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const cr = entry.contentRect;
-        if (cr.width > 0) diffWidth.value = cr.width;
-      }
-    });
-  }
-});
-
-// Attach/detach the ResizeObserver on the diff container only when the
-// merge-view branch renders (diffParsed !== null). Guard null refs. The
-// watcher must run after the DOM patch ("post"): at "pre" time the container
-// for a freshly opened diff has not been mounted yet, so the observer would
-// never attach and the width-derived split default would never apply.
-watch(
-  () => diffParsed.value,
-  (parsed) => {
-    if (diffResizeObserver === null) return;
-    if (parsed !== null && diffContainer.value !== null) {
-      diffResizeObserver.observe(diffContainer.value);
-    } else {
-      diffResizeObserver.disconnect();
-    }
-  },
-  { immediate: true, flush: "post" },
-);
-
-onBeforeUnmount(() => {
-  if (diffResizeObserver !== null) {
-    diffResizeObserver.disconnect();
-    diffResizeObserver = null;
-  }
-});
 
 // Changes — source toggle (Git diff by default, snapshot baseline for revert)
 const source = ref<"git" | "snapshot">("git");
@@ -236,10 +187,6 @@ let epoch = 0;
 
 const crumbs = computed(() => breadcrumbs(directory.value));
 
-// CodeMirror editor (P3-D): lazy-loaded so the Files tab never pays the
-// parse/compile cost until an editable file is opened.
-const CodeEditor = defineAsyncComponent(() => import("./review/CodeEditor.vue"));
-
 // The runner is trusted to be well-behaved, not to be bug-free: a wrongly typed
 // result must not tear down the whole panel's render.
 const entries = computed(() => {
@@ -252,45 +199,9 @@ const changeEntries = computed(() => {
   return Array.isArray(value) ? value : [];
 });
 
-const diffLines = computed(() => {
-  const text = diff.value?.diff;
-  return typeof text === "string" ? classifyDiffLines(text) : [];
-});
-
-// Diff review merge-view computeds (P3-D)
-const diffEditable = computed(() => {
-  const read = diffRead.value;
-  return read !== null && !read.binary && !read.truncated && read.content !== null;
-});
-
 const diffDirty = computed(() => {
   const read = diffRead.value;
   return read !== null && read.content !== null && read.content !== diffModified.value;
-});
-
-const diffMode = computed(() => diffModeOverride.value ?? defaultDiffMode(diffWidth.value));
-
-const isDiffReviewed = computed(() => {
-  if (diffPath.value === null || diffRead.value === null) return false;
-  return isReviewed(reviewed.value, diffPath.value, diffRead.value.hash);
-});
-
-const diffReviewKey = computed(() => {
-  if (diffPath.value === null || diffRead.value === null) return null;
-  return reviewKey(diffPath.value, diffRead.value.hash);
-});
-
-const canRevertDiff = computed(() => {
-  const entry = reviewSnapshotEntry.value;
-  return entry !== null && entry.revertable === true;
-});
-
-const revertHintText = computed(() => {
-  const entry = reviewSnapshotEntry.value;
-  if (entry !== null && entry.currentHash !== null) {
-    return `Khôi phục tệp về bản chụp lúc bắt đầu chạy (hash ${entry.currentHash.slice(0, 8)}).`;
-  }
-  return "Khôi phục tệp về bản chụp lúc bắt đầu chạy.";
 });
 
 function isPathReviewed(path: string): boolean {
@@ -332,6 +243,7 @@ async function loadFiles(dir: string, options: { keepViewer?: boolean } = {}): P
   const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
+  fileNotice.value = null;
   // Navigating to a directory closes the open file; a listing refresh behind
   // an open file keeps it (and its draft) in place.
   if (options.keepViewer !== true) viewer.value = null;
@@ -353,7 +265,6 @@ async function loadChanges(): Promise<void> {
   const current = ++epoch;
   changesLoading.value = true;
   changesError.value = null;
-  diff.value = null;
   diffPath.value = null;
   diffError.value = null;
   const outcome = await fetchChanges(id);
@@ -435,6 +346,7 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
   const current = ++epoch;
   filesLoading.value = true;
   filesError.value = null;
+  fileNotice.value = null;
   saving.value = false;
   saveError.value = null;
   const outcome = await readFile(id, path);
@@ -444,6 +356,8 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
     filesError.value = outcome.message;
     viewer.value = null;
     draft.value = null;
+    // Nothing left to edit: an open dialog would sit on an empty document.
+    reviewDialogOpen.value = false;
     return;
   }
 
@@ -460,7 +374,7 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
     if (resolution === "conflict") {
       // Keep viewer + draft, keep the operator's work; surface the new bytes.
       conflictIncoming.value = outcome.value;
-      conflictNote.value = null;
+      openFileDialog();
       return;
     }
     if (resolution === "adopt-keep-draft") {
@@ -468,22 +382,35 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
       // size) but keep the unsaved draft.
       viewer.value = outcome.value;
       conflictIncoming.value = null;
-      conflictNote.value = null;
+      openFileDialog();
       return;
     }
   }
 
   // Different path or a clean resolution: drop any stale conflict state.
   conflictIncoming.value = null;
-  conflictNote.value = null;
+
+  // Only text, untruncated reads open in the dialog editor; anything else
+  // explains itself in the sidebar instead of rendering a stale viewer.
+  const notice = editableReadNotice(outcome.value);
+  if (notice !== null) {
+    viewer.value = null;
+    draft.value = null;
+    fileNotice.value = notice;
+    // The sidebar explains the refusal; do not leave a dialog on an empty file.
+    reviewDialogOpen.value = false;
+    return;
+  }
 
   viewer.value = outcome.value;
-  // Editable only for text, untruncated files with content available.
-  if (!outcome.value.binary && !outcome.value.truncated && outcome.value.content !== null) {
-    draft.value = outcome.value.content;
-  } else {
-    draft.value = null;
-  }
+  draft.value = outcome.value.content ?? "";
+  openFileDialog();
+}
+
+/** Show the Files tab's viewer in the dialog (a mode switch keeps the diff draft). */
+function openFileDialog(): void {
+  reviewDialogMode.value = "file";
+  reviewDialogOpen.value = true;
 }
 
 async function openDiff(path: string): Promise<void> {
@@ -513,10 +440,13 @@ async function openDiff(path: string): Promise<void> {
     return;
   }
 
-  diff.value = diffOutcome.value;
   diffPath.value = path;
 
-  // A truncated diff never becomes a merge view.
+  // A truncated diff never becomes a merge view. Track the reason so the
+  // sidebar can explain why no dialog opened.
+  let unavailable: string | null = diffOutcome.value.truncated
+    ? "Diff đã được rút gọn — không mở được trình so sánh."
+    : null;
   let parsed = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
 
   // Authoritative working side: the file read as it stands on the runner.
@@ -539,6 +469,7 @@ async function openDiff(path: string): Promise<void> {
       const spliced = spliceOriginal(parsed, read.content);
       if (spliced === null) {
         parsed = null;
+        unavailable = "Không dựng được chế độ so sánh cho tệp này.";
       } else {
         original = spliced;
         // Restore any preserved draft instead of the freshly read content.
@@ -553,26 +484,25 @@ async function openDiff(path: string): Promise<void> {
       // Binary or truncated read: there is no authoritative full document to
       // edit or diff against.
       parsed = null;
+      unavailable = "Tệp nhị phân hoặc rút gọn — không mở được trình so sánh.";
     }
   }
 
-  diffParsed.value = parsed;
   diffOriginal.value = original;
   diffModified.value = parsed === null ? "" : modified;
 
-  // Only a file with a comparable diff opens the dialog; binary, truncated or
-  // unparseable diffs stay in the sidebar's plain-text fallback instead of
-  // rendering two empty editors.
+  // Only a file with a comparable diff opens the dialog; the sidebar explains
+  // the rest instead of rendering an editor it cannot drive.
   if (parsed !== null) {
     reviewDialogMode.value = "diff";
     reviewDialogOpen.value = true;
   } else {
+    diffError.value = unavailable ?? "Không dựng được chế độ so sánh cho tệp này.";
     reviewDialogOpen.value = false;
   }
 
   // Review state resets for the newly opened diff. Reviewed keys stay: the set
   // is session-scoped (path + hash), not diff-open-scoped.
-  reviewConfirmRevert.value = false;
   diffSaveError.value = null;
 
   // Lazily fetch snapshot status so we can know the revertable entry for this
@@ -612,18 +542,9 @@ watch(reviewDialogMode, (mode, previous) => {
   if (previous === "diff" && mode === "file") rememberOpenDiffDraft();
 });
 
-function toggleReviewed(path?: string, hash?: string): void {
-  // If path and hash are provided (from ReviewDialog), use them
-  // Otherwise use the current diff's key
-  let key: string | null = null;
-  if (path !== undefined && hash !== undefined) {
-    key = reviewKey(path, hash);
-    reviewedPathHashes.value.set(path, hash);
-  } else {
-    key = diffReviewKey.value;
-  }
-
-  if (key === null) return;
+function toggleReviewed(path: string, hash: string): void {
+  const key = reviewKey(path, hash);
+  reviewedPathHashes.value.set(path, hash);
   const next = new Set(reviewed.value);
   if (next.has(key)) {
     next.delete(key);
@@ -669,9 +590,7 @@ async function saveDiff(): Promise<void> {
   if (stillPresent) {
     void openDiff(path);
   } else {
-    diff.value = null;
     diffPath.value = null;
-    diffParsed.value = null;
     diffRead.value = null;
     diffModified.value = "";
     // Nothing left to compare: keep the dialog from sitting on an empty path.
@@ -702,6 +621,9 @@ async function confirmRevert(path: string): Promise<void> {
   }
 
   await revertOneFile(entry);
+  // The revert reloads bump the epoch; a session switch during them means this
+  // continuation belongs to the previous panel.
+  if (workspace.value !== id) return;
   if (snapshotError.value !== null) {
     saveError.value = snapshotError.value;
     return;
@@ -709,6 +631,7 @@ async function confirmRevert(path: string): Promise<void> {
 
   // Reflect the reverted bytes in the still-open dialog.
   const fresh = await readFile(id, path);
+  if (workspace.value !== id) return;
   if (!fresh.ok) {
     saveError.value = fresh.message;
     return;
@@ -716,7 +639,6 @@ async function confirmRevert(path: string): Promise<void> {
   viewer.value = fresh.value;
   draft.value = isEditableRead(fresh.value) ? fresh.value.content : null;
   conflictIncoming.value = null;
-  conflictNote.value = null;
   saveError.value = null;
 }
 
@@ -732,7 +654,6 @@ async function revertDiff(): Promise<void> {
 
   const current = ++epoch;
   diffReverting.value = true;
-  reviewConfirmRevert.value = false;
 
   try {
     const outcome = await revertFile(id, path, entry.currentHash);
@@ -752,7 +673,9 @@ async function revertDiff(): Promise<void> {
     // post-revert baseline.
     await loadSnapshot();
     if (source.value === "git") await loadChanges();
-    await openDiff(path);
+    // The session watcher closes the dialog on a session switch; reopening here
+    // would pull the previous session's path into the new panel.
+    if (workspace.value === id) await openDiff(path);
   } finally {
     diffReverting.value = false;
   }
@@ -808,7 +731,6 @@ async function saveFile(): Promise<void> {
       if (current !== epoch) return;
       if (fresh.ok) {
         conflictIncoming.value = fresh.value;
-        conflictNote.value = outcome.message;
       } else {
         // Network/parse failure fetching the fresh bytes: fall back to the
         // translated save error so the operator still sees a reason.
@@ -824,9 +746,10 @@ async function saveFile(): Promise<void> {
   // carries the written draft and the fresh hash, so the draft needs no
   // reassignment — and `FileWriteResult` has no `content` field to copy from.
   conflictIncoming.value = null;
-  conflictNote.value = null;
   viewer.value = viewerAfterSave(viewer.value, draft.value, outcome.value);
-  void loadFiles(directory.value);
+  // Keep the viewer: the dialog is still open on this file and its header,
+  // review state and revert target all read from it.
+  void loadFiles(directory.value, { keepViewer: true });
 }
 
 /** Adopt the runner's version of the file, discarding the unsaved draft. */
@@ -844,7 +767,6 @@ async function adoptConflict(): Promise<void> {
   }
   viewer.value = fresh;
   conflictIncoming.value = null;
-  conflictNote.value = null;
   saveError.value = null;
 }
 
@@ -876,7 +798,6 @@ async function overwriteConflict(): Promise<void> {
       const fresh = await readFile(id, path);
       if (current !== epoch) return;
       if (fresh.ok) conflictIncoming.value = fresh.value;
-      conflictNote.value = outcome.message;
     } else {
       saveError.value = outcome.message;
     }
@@ -884,12 +805,11 @@ async function overwriteConflict(): Promise<void> {
   }
 
   conflictIncoming.value = null;
-  conflictNote.value = null;
   saveError.value = null;
   // As in `saveFile`: the viewer carries the written draft, and the write
   // result has no `content` field.
   viewer.value = viewerAfterSave(latest.value, draft.value, outcome.value);
-  void loadFiles(directory.value);
+  void loadFiles(directory.value, { keepViewer: true });
 }
 
 async function revertOneFile(entry: { path: string; currentHash: string | null }): Promise<void> {
@@ -930,14 +850,6 @@ async function doRevertWorkspace(): Promise<void> {
   if (source.value === "git") await loadChanges();
 }
 
-async function reloadFile(name: string): Promise<void> {
-  // Re-read first, with the open viewer still in place: a dirty draft must be
-  // resolved against the fresh read (adopt / keep draft / conflict) instead of
-  // being silently replaced. Only then refresh the listing behind it.
-  await openEntry(name, "file");
-  await loadFiles(directory.value, { keepViewer: true });
-}
-
 function goUp(): void {
   const parent = parentPath(directory.value);
   if (parent !== undefined) void loadFiles(parent);
@@ -958,34 +870,28 @@ watch(
     viewer.value = null;
     filesError.value = null;
     filesLoading.value = false;
+    fileNotice.value = null;
     draft.value = null;
     saving.value = false;
     saveError.value = null;
     conflictIncoming.value = null;
-    conflictNote.value = null;
     changes.value = null;
     changesError.value = null;
     changesLoading.value = false;
-    diff.value = null;
     diffPath.value = null;
     diffError.value = null;
     diffLoading.value = false;
-    diffParsed.value = null;
     diffOriginal.value = "";
     diffRead.value = null;
     diffModified.value = "";
-    diffModeOverride.value = null;
-    diffWidth.value = 0;
     reviewed.value = new Set();
     reviewedPathHashes.value = new Map();
     diffDrafts.value = new Map();
     reviewDialogOpen.value = false;
-    reviewConfirmRevert.value = false;
     reviewSnapshotEntry.value = null;
     diffSaving.value = false;
     diffReverting.value = false;
     diffSaveError.value = null;
-    if (diffResizeObserver !== null) diffResizeObserver.disconnect();
     snapshotStatus.value = null;
     snapshotError.value = null;
     snapshotLoading.value = false;
@@ -1071,118 +977,13 @@ watch(source, (next) => {
         <p v-if="filesLoading" class="text-muted-foreground">Đang tải…</p>
         <p v-else-if="filesError !== null" class="text-destructive">{{ filesError }}</p>
 
-        <template v-else-if="viewer !== null">
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="viewer.path">
-              {{ viewer.path }}
-            </span>
-            <div class="flex shrink-0 items-center gap-2">
-              <button
-                v-if="isEditableRead(viewer)"
-                type="button"
-                class="text-muted-foreground hover:text-foreground"
-                title="Toàn màn hình / Mở rộng"
-                @click="reviewDialogMode = 'file'; reviewDialogOpen = true"
-              >
-                <Maximize2 class="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                class="text-primary hover:underline"
-                @click="viewer = null"
-              >
-                đóng
-              </button>
-            </div>
-          </div>
-          <p
-            v-if="viewer.binary"
-            class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
-          >
-            Tệp nhị phân — không hiển thị nội dung.
-          </p>
-          <p
-            v-if="viewer.truncated"
-            class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
-          >
-            Nội dung đã được rút gọn — chỉ hiển thị phần đầu của tệp.
-          </p>
-
-          <!-- Editor (P3-B save / P3-D): CodeMirror only for text, untruncated files. -->
-          <template v-if="draft !== null">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <span class="text-muted-foreground">bản nháp</span>
-              <button
-                type="button"
-                class="shrink-0 text-primary hover:underline disabled:opacity-50"
-                :disabled="
-                  draft === null ||
-                  saving ||
-                  !isDirty(viewer.content ?? '', draft)
-                "
-                @click="saveFile"
-              >
-                {{ saving ? "đang lưu…" : "lưu" }}
-              </button>
-            </div>
-            <!-- Conflict banner (P3-D): the file changed on the runner while the
-                 draft was open with unsaved edits. Appears above the editor;
-                 the save-error line below still shows when saveError !== null. -->
-            <div
-              v-if="conflictIncoming !== null"
-              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-foreground"
-            >
-              <p class="mb-1">
-                Tệp đã bị thay đổi trên Runner kể từ khi mở. Bản nháp của bạn được giữ nguyên.
-              </p>
-              <p v-if="conflictNote !== null" class="mb-1 text-muted-foreground">
-                {{ conflictNote }}
-              </p>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="text-primary hover:underline disabled:opacity-50"
-                  :disabled="saving"
-                  @click="adoptConflict"
-                >
-                  Tải bản mới (bỏ bản nháp)
-                </button>
-                <button
-                  type="button"
-                  class="rounded-md bg-destructive px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50"
-                  :disabled="saving"
-                  @click="overwriteConflict"
-                >
-                  Ghi đè bằng bản nháp
-                </button>
-              </div>
-            </div>
-            <p
-              v-if="saveError !== null"
-              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-destructive"
-            >
-              {{ saveError }}
-              <button
-                v-if="viewer !== null"
-                type="button"
-                class="ml-2 text-primary hover:underline"
-                @click="reloadFile(viewer.path.split('/').pop() ?? viewer.path)"
-              >
-                tải lại
-              </button>
-            </p>
-            <CodeEditor v-model="draft" :path="viewer.path" class="max-h-80" />
-          </template>
-
-          <pre
-            v-else-if="viewer.content !== null"
-            class="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-background/60 p-2"
-            >{{ viewer.content }}</pre
-          >
-          <p v-else class="text-muted-foreground">Không có nội dung để hiển thị.</p>
-        </template>
-
         <template v-else-if="listing !== null">
+          <p
+            v-if="fileNotice !== null"
+            class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
+          >
+            {{ fileNotice }}
+          </p>
           <div class="mb-1.5 flex items-center justify-between gap-2 text-muted-foreground">
             <span>{{ entries.length }} mục</span>
             <button
@@ -1280,147 +1081,6 @@ watch(source, (next) => {
         <template v-if="source === 'git'">
           <p v-if="changesLoading" class="text-muted-foreground">Đang tải…</p>
           <p v-else-if="changesError !== null" class="text-destructive">{{ changesError }}</p>
-
-          <template v-else-if="diff !== null">
-            <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
-              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                <span class="min-w-0 truncate text-muted-foreground" :title="diffPath ?? ''">
-                  {{ diffPath }}
-                </span>
-                <!-- Mode toggle -->
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
-                  :class="
-                    diffMode === 'unified'
-                      ? 'bg-primary/10 text-primary'
-                      : 'hover:text-foreground'
-                  "
-                  :aria-pressed="diffMode === 'unified'"
-                  @click="diffModeOverride = 'unified'"
-                >
-                  Một cột
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
-                  :class="
-                    diffMode === 'split'
-                      ? 'bg-primary/10 text-primary'
-                      : 'hover:text-foreground'
-                  "
-                  :aria-pressed="diffMode === 'split'"
-                  @click="diffModeOverride = 'split'"
-                >
-                  Hai cột
-                </button>
-                <!-- Reviewed badge -->
-                <span
-                  v-if="isDiffReviewed"
-                  class="shrink-0 text-emerald-600 dark:text-emerald-400"
-                >
-                  đã duyệt
-                </span>
-              </div>
-              <button
-                type="button"
-                class="shrink-0 text-primary hover:underline"
-                @click="diff = null"
-              >
-                đóng
-              </button>
-            </div>
-
-            <p
-              v-if="diff.truncated"
-              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
-            >
-              Diff đã được rút gọn.
-            </p>
-
-            <!-- Merge view when the diff parsed into full documents -->
-            <div
-              v-if="diffParsed !== null"
-              ref="diffContainer"
-              class="relative"
-            >
-              <component
-                :is="diffMode === 'split' ? SplitDiff : UnifiedDiff"
-                :original="diffOriginal"
-                :modified="diffModified"
-                :editable="diffEditable"
-                :path="diffPath ?? undefined"
-                @update:modified="diffModified = $event"
-              />
-            </div>
-
-            <!-- Fallback: classifyDiffLines <pre> with a notice -->
-            <div v-else>
-              <p class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground">
-                Không dựng được chế độ so sánh cho tệp này — hiển thị diff dạng văn bản.
-              </p>
-              <pre class="overflow-x-auto whitespace-pre rounded-md bg-background/60 p-2"><code>
-<span
-  v-for="(line, index) in diffLines"
-  :key="index"
-  :class="{
-    'text-emerald-600 dark:text-emerald-400': line.kind === 'add',
-    'text-red-600 dark:text-red-400': line.kind === 'remove',
-    'text-muted-foreground': line.kind === 'meta',
-  }"
->{{ line.text }}
-</span></code></pre>
-              <p v-if="diffLines.length === 0" class="text-muted-foreground">Không có diff.</p>
-            </div>
-
-            <!-- Review toolbar -->
-            <ReviewToolbar
-              v-if="diffParsed !== null"
-              :reviewed="isDiffReviewed"
-              :can-review="diffReviewKey !== null"
-              :can-save="diffEditable && diffDirty"
-              :can-revert="canRevertDiff"
-              :saving="diffSaving"
-              :dirty="diffDirty"
-              :revert-hint="revertHintText"
-              @toggle-reviewed="toggleReviewed"
-              @save="saveDiff"
-              @revert="reviewConfirmRevert = true"
-            />
-
-            <!-- Save error -->
-            <p
-              v-if="diffSaveError !== null"
-              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-destructive"
-            >
-              {{ diffSaveError }}
-            </p>
-
-            <!-- Inline revert confirm -->
-            <div
-              v-if="reviewConfirmRevert && diffParsed !== null"
-              class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-foreground"
-            >
-              <p class="mb-1">Khôi phục về bản chụp lúc bắt đầu chạy?</p>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="shrink-0 text-primary hover:underline"
-                  @click="reviewConfirmRevert = false"
-                >
-                  Huỷ
-                </button>
-                <button
-                  type="button"
-                  class="rounded-md bg-destructive px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50"
-                  :disabled="diffReverting"
-                  @click="revertDiff"
-                >
-                  Xác nhận
-                </button>
-              </div>
-            </div>
-          </template>
 
           <template v-else-if="changes !== null">
             <!-- A failed diff keeps the list: only the diff failed, and the
@@ -1765,7 +1425,7 @@ watch(source, (next) => {
       @select-path="openDiff($event)"
       @save="reviewDialogMode === 'diff' ? saveDiff() : saveDraft()"
       @revert="reviewDialogMode === 'diff' ? (diffPath ? confirmRevert(diffPath) : undefined) : (viewer ? confirmRevert(viewer.path) : undefined)"
-      @toggle-reviewed="diffPath && toggleReviewed(diffPath, diffRead?.hash ?? '')"
+      @toggle-reviewed="diffPath && diffRead ? toggleReviewed(diffPath, diffRead.hash) : undefined"
       @adopt-conflict="adoptConflict"
       @overwrite-conflict="overwriteConflict"
     />

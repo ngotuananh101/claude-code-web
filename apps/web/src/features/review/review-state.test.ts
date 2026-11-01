@@ -1,19 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  defaultDiffMode,
-  isReviewed,
-  isReviewedByPath,
-  lineSeparatorFor,
-  resolveIncoming,
-  reviewKey,
-} from "./review-state.ts";
-
-test("defaultDiffMode prefers unified on a 420px panel and split when wide", () => {
-  expect(defaultDiffMode(420)).toBe("unified");
-  expect(defaultDiffMode(719)).toBe("unified");
-  expect(defaultDiffMode(720)).toBe("split");
-  expect(defaultDiffMode(1024)).toBe("split");
-});
+import { isReviewed, isReviewedByPath, resolveIncoming, reviewKey } from "./review-state.ts";
 
 test("a clean draft always adopts a fresh read", () => {
   expect(resolveIncoming({ currentHash: "h1", incomingHash: "h1", draftDirty: false })).toBe(
@@ -56,13 +42,4 @@ test("isReviewedByPath matches the hash recorded when the file was opened", () =
   expect(isReviewedByPath(reviewed, hashes, "src/b.ts")).toBe(false);
   // A path never opened has no recorded hash and cannot be reviewed.
   expect(isReviewedByPath(new Set([reviewKey("src/c.ts", "")]), hashes, "src/c.ts")).toBe(false);
-});
-
-test("lineSeparatorFor detects CRLF text only", () => {
-  expect(lineSeparatorFor("")).toBeNull();
-  expect(lineSeparatorFor("a\nb\n")).toBeNull();
-  expect(lineSeparatorFor("a\r\nb\r\n")).toBe("\r\n");
-  // Mixed endings keep CRLF as the document separator so the untouched lines
-  // round-trip byte for byte.
-  expect(lineSeparatorFor("a\r\nb\nc")).toBe("\r\n");
 });

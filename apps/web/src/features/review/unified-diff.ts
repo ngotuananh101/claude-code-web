@@ -4,7 +4,7 @@
  * original and modified full documents. Returns `null` when the input is not
  * exactly one complete single-file text diff.
  *
- * No CodeMirror runtime imports: this module is pure and safe under `bun test`
+ * No editor runtime imports: this module is pure and safe under `bun test`
  * without a DOM.
  */
 
