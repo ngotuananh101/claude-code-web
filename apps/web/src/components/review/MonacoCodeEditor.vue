@@ -22,6 +22,9 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLDivElement | null>(null);
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let model: monaco.editor.ITextModel | null = null;
+// `setValue` below also fires `onDidChangeContent`; without this flag the
+// editor would echo the parent's own content back as a user edit.
+let applyingExternal = false;
 
 onMounted(() => {
   if (!containerRef.value) return;
@@ -41,7 +44,7 @@ onMounted(() => {
 
   if (model) {
     model.onDidChangeContent(() => {
-      if (model) {
+      if (model && !applyingExternal) {
         emit("update:content", model.getValue());
       }
     });
@@ -52,7 +55,9 @@ watch(
   () => props.content,
   (newContent) => {
     if (model && model.getValue() !== newContent) {
+      applyingExternal = true;
       model.setValue(newContent);
+      applyingExternal = false;
     }
   },
 );
@@ -67,8 +72,8 @@ watch(
 );
 
 onUnmounted(() => {
-  model?.dispose();
   editor?.dispose();
+  model?.dispose();
 });
 </script>
 

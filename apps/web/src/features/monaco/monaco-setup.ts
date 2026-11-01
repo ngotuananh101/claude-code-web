@@ -1,9 +1,12 @@
 import * as monaco from "monaco-editor";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
-import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+// monaco-editor 0.57 maps `"./*": "./esm/vs/*.js"` in its exports map, so the
+// `esm/vs/` prefix must be dropped from subpath specifiers — spelling it out
+// resolves to `esm/vs/esm/vs/...` and the build fails.
+import editorWorker from "monaco-editor/editor/editor.worker?worker";
+import cssWorker from "monaco-editor/language/css/css.worker?worker";
+import htmlWorker from "monaco-editor/language/html/html.worker?worker";
+import jsonWorker from "monaco-editor/language/json/json.worker?worker";
+import tsWorker from "monaco-editor/language/typescript/ts.worker?worker";
 import { defineCcWebThemes } from "./monaco-theme.ts";
 
 let initialized = false;

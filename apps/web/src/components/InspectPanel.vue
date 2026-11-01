@@ -16,9 +16,11 @@ import { isDirty, viewerAfterSave } from "../features/inspect/edit";
 import { formatSize } from "../features/inspect/format";
 import { breadcrumbs, joinPath, parentPath } from "../features/inspect/paths";
 import { canApplyPlan, summarisePlan } from "../features/inspect/revert";
+import { draftAfterNavigation, rememberDraft } from "../features/review/diff-drafts";
 import {
   defaultDiffMode,
   isReviewed,
+  isReviewedByPath,
   resolveIncoming,
   reviewKey,
 } from "../features/review/review-state";
@@ -124,6 +126,12 @@ const diffModified = ref<string>(""); // merged document the reviewer settles on
 const diffModeOverride = ref<"unified" | "split" | null>(null);
 const diffWidth = ref(0);
 const reviewed = ref<Set<string>>(new Set());
+// Reviewed keys are (path, content hash) pairs. Navigation only knows paths,
+// so every read/save records the hash it observed; a path never opened here
+// has no hash and therefore cannot be reviewed.
+const reviewedPathHashes = ref<Map<string, string>>(new Map());
+// Unsaved diff edits survive navigating to another file and back.
+const diffDrafts = ref<Map<string, string>>(new Map());
 const reviewConfirmRevert = ref(false);
 const reviewSnapshotEntry = ref<SnapshotEntry | null>(null);
 const diffSaving = ref(false);
@@ -286,22 +294,9 @@ const revertHintText = computed(() => {
 });
 
 function isPathReviewed(path: string): boolean {
-  // For ReviewDialog navigation: check if a path is reviewed
-  // We need to find the hash for this path from changes or snapshot
-  if (changes.value) {
-    const entry = changes.value.entries.find((e) => e.path === path);
-    if (entry) {
-      // For git changes, we don't have a direct hash, use empty string
-      return isReviewed(reviewed.value, path, "");
-    }
-  }
-  if (snapshotStatus.value) {
-    const entry = snapshotStatus.value.entries.find((e) => e.path === path);
-    if (entry?.currentHash) {
-      return isReviewed(reviewed.value, path, entry.currentHash);
-    }
-  }
-  return false;
+  // ReviewDialog navigation: the reviewed set is keyed by (path, hash); use
+  // the hash observed when this path was last read or saved.
+  return isReviewedByPath(reviewed.value, reviewedPathHashes.value, path);
 }
 
 const scheduleRows = computed(() => {
@@ -494,6 +489,14 @@ async function openEntry(name: string, kind: "file" | "directory" | "other"): Pr
 async function openDiff(path: string): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
+
+  // Navigating away from a dirty diff keeps the operator's edits: remember
+  // them under the previous path and restore them when that path reopens.
+  const previousPath = diffPath.value;
+  if (previousPath !== null && previousPath !== path && diffRead.value !== null) {
+    rememberDraft(diffDrafts.value, previousPath, diffModified.value, diffRead.value.content ?? "");
+  }
+
   const current = ++epoch;
   diffLoading.value = true;
   diffError.value = null;
@@ -513,16 +516,16 @@ async function openDiff(path: string): Promise<void> {
   diff.value = diffOutcome.value;
   diffPath.value = path;
 
-  // Open ReviewDialog in diff mode
-  reviewDialogMode.value = "diff";
-  reviewDialogOpen.value = true;
-
   // A truncated diff never becomes a merge view.
   let parsed = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
 
   // Authoritative working side: the file read as it stands on the runner.
   const read = readOutcome.ok ? readOutcome.value : null;
   diffRead.value = read;
+  if (read !== null) {
+    // Remember which revision this path was reviewed against.
+    reviewedPathHashes.value.set(path, read.hash);
+  }
 
   let original = "";
   let modified = "";
@@ -538,7 +541,8 @@ async function openDiff(path: string): Promise<void> {
         parsed = null;
       } else {
         original = spliced;
-        modified = read.content;
+        // Restore any preserved draft instead of the freshly read content.
+        modified = draftAfterNavigation(diffDrafts.value, path, read.content);
       }
     } else if (read === null) {
       // Deleted file (or a failed read): the diff carries the whole old
@@ -555,6 +559,16 @@ async function openDiff(path: string): Promise<void> {
   diffParsed.value = parsed;
   diffOriginal.value = original;
   diffModified.value = parsed === null ? "" : modified;
+
+  // Only a file with a comparable diff opens the dialog; binary, truncated or
+  // unparseable diffs stay in the sidebar's plain-text fallback instead of
+  // rendering two empty editors.
+  if (parsed !== null) {
+    reviewDialogMode.value = "diff";
+    reviewDialogOpen.value = true;
+  } else {
+    reviewDialogOpen.value = false;
+  }
 
   // Review state resets for the newly opened diff. Reviewed keys stay: the set
   // is session-scoped (path + hash), not diff-open-scoped.
@@ -581,12 +595,30 @@ async function openDiff(path: string): Promise<void> {
   reviewSnapshotEntry.value = entry ?? null;
 }
 
+/**
+ * Closing the dialog (or switching it to file mode) is a navigation away from
+ * the open diff: preserve unsaved edits so reopening the file restores them.
+ */
+function rememberOpenDiffDraft(): void {
+  if (diffPath.value === null || diffRead.value === null) return;
+  rememberDraft(diffDrafts.value, diffPath.value, diffModified.value, diffRead.value.content ?? "");
+}
+
+watch(reviewDialogOpen, (open) => {
+  if (!open && reviewDialogMode.value === "diff") rememberOpenDiffDraft();
+});
+
+watch(reviewDialogMode, (mode, previous) => {
+  if (previous === "diff" && mode === "file") rememberOpenDiffDraft();
+});
+
 function toggleReviewed(path?: string, hash?: string): void {
   // If path and hash are provided (from ReviewDialog), use them
   // Otherwise use the current diff's key
   let key: string | null = null;
   if (path !== undefined && hash !== undefined) {
     key = reviewKey(path, hash);
+    reviewedPathHashes.value.set(path, hash);
   } else {
     key = diffReviewKey.value;
   }
@@ -624,6 +656,9 @@ async function saveDiff(): Promise<void> {
 
   // Success: mark reviewed under the new hash, then refresh the change list.
   reviewed.value = new Set([...reviewed.value, reviewKey(path, outcome.value.hash)]);
+  reviewedPathHashes.value.set(path, outcome.value.hash);
+  // The saved content is the new baseline: no draft left to preserve.
+  diffDrafts.value.delete(path);
 
   await loadChanges();
 
@@ -639,22 +674,50 @@ async function saveDiff(): Promise<void> {
     diffParsed.value = null;
     diffRead.value = null;
     diffModified.value = "";
+    // Nothing left to compare: keep the dialog from sitting on an empty path.
+    reviewDialogOpen.value = false;
   }
 }
 
 async function confirmRevert(path: string): Promise<void> {
-  // Wrapper for revert called from ReviewDialog
+  // Wrapper for revert called from ReviewDialog. The dialog renders its own
+  // inline confirmation, so this runs only after the operator confirmed.
   if (reviewDialogMode.value === "diff") {
     await revertDiff();
-  } else {
-    // File mode: find the snapshot entry and revert
-    if (snapshotStatus.value) {
-      const entry = snapshotStatus.value.entries.find((e) => e.path === path);
-      if (entry) {
-        await revertOneFile(entry);
-      }
-    }
+    return;
   }
+
+  const id = workspace.value;
+  if (id === null) return;
+  // The Files tab does not load the snapshot status; fetch it on demand.
+  if (snapshotStatus.value === null) await loadSnapshot();
+  const entry = snapshotStatus.value?.entries.find((e) => e.path === path) ?? null;
+  if (entry === null) {
+    saveError.value = "Không tìm thấy bản chụp cho tệp này.";
+    return;
+  }
+  if (!entry.revertable) {
+    saveError.value = "Tệp này không thể khôi phục từ bản chụp.";
+    return;
+  }
+
+  await revertOneFile(entry);
+  if (snapshotError.value !== null) {
+    saveError.value = snapshotError.value;
+    return;
+  }
+
+  // Reflect the reverted bytes in the still-open dialog.
+  const fresh = await readFile(id, path);
+  if (!fresh.ok) {
+    saveError.value = fresh.message;
+    return;
+  }
+  viewer.value = fresh.value;
+  draft.value = isEditableRead(fresh.value) ? fresh.value.content : null;
+  conflictIncoming.value = null;
+  conflictNote.value = null;
+  saveError.value = null;
 }
 
 async function revertDiff(): Promise<void> {
@@ -679,6 +742,9 @@ async function revertDiff(): Promise<void> {
       diffSaveError.value = outcome.message;
       return;
     }
+
+    // The reverted bytes are the new baseline: drop any preserved draft.
+    diffDrafts.value.delete(path);
 
     // Refresh the snapshot status and the git changes sequentially (each bumps
     // the epoch; firing them concurrently would make one loader drop its own
@@ -718,6 +784,10 @@ async function saveFile(): Promise<void> {
   const id = workspace.value;
   if (id === null) return;
   if (viewer.value === null || draft.value === null) return;
+  // Only text, untruncated reads are editable. Guarding here as well keeps a
+  // stray Save from overwriting a binary or truncated file with the empty
+  // string the dialog was handed.
+  if (!isEditableRead(viewer.value)) return;
 
   // Capture the current epoch without bumping it: the save belongs to the
   // epoch that opened the file, and a stale epoch drops the response.
@@ -907,6 +977,9 @@ watch(
     diffModeOverride.value = null;
     diffWidth.value = 0;
     reviewed.value = new Set();
+    reviewedPathHashes.value = new Map();
+    diffDrafts.value = new Map();
+    reviewDialogOpen.value = false;
     reviewConfirmRevert.value = false;
     reviewSnapshotEntry.value = null;
     diffSaving.value = false;
@@ -1005,6 +1078,7 @@ watch(source, (next) => {
             </span>
             <div class="flex shrink-0 items-center gap-2">
               <button
+                v-if="isEditableRead(viewer)"
                 type="button"
                 class="text-muted-foreground hover:text-foreground"
                 title="Toàn màn hình / Mở rộng"
@@ -1678,16 +1752,22 @@ watch(source, (next) => {
       :all-paths="reviewDialogMode === 'diff' ? changedPaths : (viewer ? [viewer.path] : [])"
       :original="diffOriginal ?? ''"
       :modified="diffModified ?? ''"
-      :content="draft"
+      :content="draft ?? ''"
       :is-reviewed="diffPath ? isReviewed(reviewed, diffPath, diffRead?.hash ?? '') : false"
       :is-path-reviewed="isPathReviewed"
       :dirty="reviewDialogMode === 'diff' ? diffDirty : (draft !== null && viewer !== null && draft !== viewer.content)"
+      :error="reviewDialogMode === 'diff' ? diffSaveError : saveError"
+      :conflict="reviewDialogMode === 'file' && conflictIncoming !== null"
+      :saving="reviewDialogMode === 'diff' ? diffSaving : saving"
+      :reverting="reviewDialogMode === 'diff' ? diffReverting : false"
       @update:modified="diffModified = $event"
       @update:content="draft = $event"
       @select-path="openDiff($event)"
       @save="reviewDialogMode === 'diff' ? saveDiff() : saveDraft()"
       @revert="reviewDialogMode === 'diff' ? (diffPath ? confirmRevert(diffPath) : undefined) : (viewer ? confirmRevert(viewer.path) : undefined)"
       @toggle-reviewed="diffPath && toggleReviewed(diffPath, diffRead?.hash ?? '')"
+      @adopt-conflict="adoptConflict"
+      @overwrite-conflict="overwriteConflict"
     />
   </aside>
 </template>

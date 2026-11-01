@@ -37,6 +37,32 @@ export function findNextUnreviewedPath(
 }
 
 /**
+ * Decides where the dialog goes after the "Đã duyệt" toggle.
+ *
+ * Marking a file reviewed advances to the next unreviewed file, treating the
+ * current file as reviewed (the parent flips it in the same event). Unmarking
+ * a reviewed file never advances: the operator must see the mark disappear.
+ *
+ * @returns Next path to select, or null when the dialog should stay put
+ *          (unmarking) or close (every file is reviewed).
+ */
+export function nextPathAfterToggleReview(input: {
+  paths: string[];
+  currentPath: string;
+  alreadyReviewed: boolean;
+  isPathReviewed: (path: string) => boolean;
+}): string | null {
+  if (input.alreadyReviewed) {
+    return null;
+  }
+  return findNextUnreviewedPath(
+    input.paths,
+    input.currentPath,
+    (path) => path === input.currentPath || input.isPathReviewed(path),
+  );
+}
+
+/**
  * Finds the previous path in the list (wraps around).
  * @param paths - Array of file paths
  * @param currentPath - Current active path

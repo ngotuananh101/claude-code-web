@@ -4,6 +4,7 @@ import {
   findNextUnreviewedPath,
   findPrevPath,
   formatFileCounter,
+  nextPathAfterToggleReview,
 } from "./review-navigation.ts";
 
 describe("review-navigation", () => {
@@ -46,5 +47,48 @@ describe("review-navigation", () => {
     expect(formatFileCounter(paths, "fileB.ts")).toBe("2 / 3");
     expect(formatFileCounter(paths, "unknown.ts")).toBe("0 / 3");
     expect(formatFileCounter([], "fileA.ts")).toBe("0 / 0");
+  });
+
+  test("nextPathAfterToggleReview advances past reviewed files, treating current as reviewed", () => {
+    const reviewed = new Set(["fileB.ts"]);
+    const isPathReviewed = (path: string) => reviewed.has(path);
+
+    // Current fileA is being marked reviewed; fileB is already reviewed, so
+    // the dialog must skip it and land on fileC.
+    expect(
+      nextPathAfterToggleReview({
+        paths,
+        currentPath: "fileA.ts",
+        alreadyReviewed: false,
+        isPathReviewed,
+      }),
+    ).toBe("fileC.ts");
+  });
+
+  test("nextPathAfterToggleReview returns null when unmarking a reviewed file", () => {
+    const isPathReviewed = () => false;
+    // Toggling a reviewed file removes the mark; navigating away would hide
+    // the unmark from the operator.
+    expect(
+      nextPathAfterToggleReview({
+        paths,
+        currentPath: "fileA.ts",
+        alreadyReviewed: true,
+        isPathReviewed,
+      }),
+    ).toBeNull();
+  });
+
+  test("nextPathAfterToggleReview closes the dialog once every other file is reviewed", () => {
+    const reviewed = new Set(["fileB.ts", "fileC.ts"]);
+    const isPathReviewed = (path: string) => reviewed.has(path);
+    expect(
+      nextPathAfterToggleReview({
+        paths,
+        currentPath: "fileA.ts",
+        alreadyReviewed: false,
+        isPathReviewed,
+      }),
+    ).toBeNull();
   });
 });

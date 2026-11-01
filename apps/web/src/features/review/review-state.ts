@@ -40,3 +40,21 @@ export function reviewKey(path: string, hash: string): string {
 export function isReviewed(reviewed: ReadonlySet<string>, path: string, hash: string): boolean {
   return reviewed.has(reviewKey(path, hash));
 }
+
+/**
+ * Whether `path` is reviewed at the revision the panel last read for it.
+ *
+ * The reviewed set is keyed by (path, content hash), so a caller that only has
+ * a path cannot ask `isReviewed` directly — an empty hash matches nothing. The
+ * hash map is populated whenever a file is read or saved, which covers every
+ * path an operator could have reviewed: reviewing happens only after the diff
+ * has been opened.
+ */
+export function isReviewedByPath(
+  reviewed: ReadonlySet<string>,
+  hashes: ReadonlyMap<string, string>,
+  path: string,
+): boolean {
+  const hash = hashes.get(path);
+  return hash !== undefined && reviewed.has(reviewKey(path, hash));
+}

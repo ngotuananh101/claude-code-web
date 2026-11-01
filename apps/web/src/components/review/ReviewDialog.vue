@@ -11,16 +11,16 @@ import {
   Save,
   X,
 } from "@lucide/vue";
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import MonacoCodeEditor from "@/components/review/MonacoCodeEditor.vue";
 import MonacoDiffEditor from "@/components/review/MonacoDiffEditor.vue";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   findNextPath,
-  findNextUnreviewedPath,
   findPrevPath,
   formatFileCounter,
+  nextPathAfterToggleReview,
 } from "@/features/review/review-navigation";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +35,12 @@ const props = defineProps<{
   isReviewed?: boolean;
   dirty?: boolean;
   isPathReviewed?: (path: string) => boolean;
+  /** Save/revert failure surfaced by the parent; rendered in the footer. */
+  error?: string | null;
+  /** The file changed on the runner while a draft was open (file mode). */
+  conflict?: boolean;
+  saving?: boolean;
+  reverting?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -45,10 +51,13 @@ const emit = defineEmits<{
   save: [];
   revert: [];
   toggleReviewed: [];
+  adoptConflict: [];
+  overwriteConflict: [];
 }>();
 
 const isFullscreen = ref(false);
 const renderSideBySide = ref(window.innerWidth >= 1024);
+const confirmingRevert = ref(false);
 
 const fileName = computed(() => {
   const parts = props.path.split("/");
@@ -69,10 +78,6 @@ const toggleFullscreen = () => {
   isFullscreen.value = !isFullscreen.value;
 };
 
-const toggleSplitMode = () => {
-  renderSideBySide.value = !renderSideBySide.value;
-};
-
 const handlePrevious = () => {
   const prevPath = findPrevPath(props.allPaths, props.path);
   if (prevPath) {
@@ -87,8 +92,17 @@ const handleNext = () => {
   }
 };
 
-const handleRevert = () => {
+const handleRevertRequest = () => {
+  confirmingRevert.value = true;
+};
+
+const handleRevertConfirm = () => {
+  confirmingRevert.value = false;
   emit("revert");
+};
+
+const handleRevertCancel = () => {
+  confirmingRevert.value = false;
 };
 
 const handleSave = () => {
@@ -96,20 +110,24 @@ const handleSave = () => {
 };
 
 const handleToggleReviewed = () => {
+  const wasReviewed = props.isReviewed === true;
   emit("toggleReviewed");
 
-  // Check if other paths are already reviewed
-  const isReviewedCheck = (checkPath: string) => {
-    if (checkPath === props.path) return true; // current file was just marked reviewed
-    return Boolean(props.isPathReviewed?.(checkPath));
-  };
+  const nextPath = nextPathAfterToggleReview({
+    paths: props.allPaths,
+    currentPath: props.path,
+    alreadyReviewed: wasReviewed,
+    isPathReviewed: (checkPath) => props.isPathReviewed?.(checkPath) === true,
+  });
 
-  const nextPath = findNextUnreviewedPath(props.allPaths, props.path, isReviewedCheck);
-
-  if (nextPath) {
+  if (nextPath !== null) {
     emit("selectPath", nextPath);
-  } else {
-    // All reviewed
+    return;
+  }
+
+  // Unmarking a reviewed file stays on it; marking the last unreviewed file
+  // closes the dialog.
+  if (!wasReviewed) {
     toast.success("Đã duyệt toàn bộ thay đổi.");
     emit("update:open", false);
   }
@@ -119,29 +137,44 @@ const handleClose = () => {
   emit("update:open", false);
 };
 
-// Watch for escape key
+// Navigating to another file resets the inline revert confirmation.
+watch(
+  () => props.path,
+  () => {
+    confirmingRevert.value = false;
+  },
+);
+
+// Escape restores a fullscreen dialog before the dialog dismisses it. The
+// listener runs in the capture phase so it wins over reka-ui's
+// DismissableLayer, which closes on Escape independently of our state.
 watch(
   () => props.open,
   (newOpen, _, onCleanup) => {
     if (newOpen) {
       const handleEscape = (e: KeyboardEvent) => {
-        if (e.key === "Escape" && !isFullscreen.value) {
-          handleClose();
+        if (e.key !== "Escape") return;
+        if (isFullscreen.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          isFullscreen.value = false;
+          return;
         }
+        handleClose();
       };
-      document.addEventListener("keydown", handleEscape);
+      document.addEventListener("keydown", handleEscape, true);
       onCleanup(() => {
-        document.removeEventListener("keydown", handleEscape);
+        document.removeEventListener("keydown", handleEscape, true);
       });
+    }
+    if (!newOpen) {
+      // Reopening starts windowed with no confirmation in flight (M18).
+      isFullscreen.value = false;
+      confirmingRevert.value = false;
     }
   },
   { immediate: true },
 );
-
-// Cleanup on unmount
-onUnmounted(() => {
-  // Any remaining event listeners will be cleaned up
-});
 </script>
 
 <template>
@@ -150,8 +183,8 @@ onUnmounted(() => {
       :class="cn(
         'flex flex-col p-0 gap-0 overflow-hidden border border-border bg-background',
         isFullscreen
-          ? 'fixed inset-0 z-50 w-screen h-screen max-w-none rounded-none'
-          : 'w-[92vw] h-[88vh] max-w-7xl rounded-xl'
+          ? 'fixed inset-0 z-50 w-screen h-screen max-w-none rounded-none translate-x-0 translate-y-0 sm:max-w-none'
+          : 'w-[92vw] h-[88vh] max-w-7xl sm:max-w-7xl rounded-xl'
       )"
       :show-close-button="false"
     >
@@ -171,8 +204,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Center: Navigation -->
-        <div class="flex items-center gap-1 mx-4">
+        <!-- Center: Navigation (only when there is more than one file) -->
+        <div v-if="allPaths.length > 1" class="flex items-center gap-1 mx-4">
           <button
             type="button"
             class="p-1.5 hover:bg-muted rounded-md transition-colors"
@@ -260,28 +293,71 @@ onUnmounted(() => {
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-between border-t border-border px-4 py-3 bg-muted/20">
-        <!-- Left: Dirty indicator -->
-        <div class="flex items-center gap-2">
-          <span v-if="dirty" class="text-xs text-muted-foreground">
+      <div class="flex items-center justify-between gap-3 border-t border-border px-4 py-3 bg-muted/20">
+        <!-- Left: error / conflict / dirty status -->
+        <div class="flex min-w-0 items-center gap-2">
+          <template v-if="conflict">
+            <span class="truncate text-xs text-foreground">
+              Tệp đã bị thay đổi trên Runner kể từ khi mở.
+            </span>
+            <button
+              type="button"
+              class="shrink-0 text-xs text-primary hover:underline disabled:opacity-50"
+              :disabled="saving"
+              @click="emit('adoptConflict')"
+            >
+              Tải bản mới (bỏ bản nháp)
+            </button>
+            <button
+              type="button"
+              class="shrink-0 rounded-md bg-destructive px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+              :disabled="saving"
+              @click="emit('overwriteConflict')"
+            >
+              Ghi đè
+            </button>
+          </template>
+          <span v-else-if="error" class="truncate text-xs text-destructive" :title="error">
+            {{ error }}
+          </span>
+          <span v-else-if="dirty" class="text-xs text-muted-foreground">
             Chưa lưu thay đổi
           </span>
         </div>
 
         <!-- Right: Actions -->
-        <div class="flex items-center gap-2">
+        <div v-if="confirmingRevert" class="flex shrink-0 items-center gap-2">
+          <span class="text-xs text-muted-foreground">Khôi phục tệp về bản chụp?</span>
           <button
             type="button"
-            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors flex items-center gap-1.5"
+            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors"
+            @click="handleRevertCancel"
+          >
+            Huỷ
+          </button>
+          <button
+            type="button"
+            class="rounded-md bg-destructive px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-destructive/90 disabled:opacity-50"
+            :disabled="reverting"
+            @click="handleRevertConfirm"
+          >
+            Xác nhận
+          </button>
+        </div>
+        <div v-else class="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
             title="Khôi phục thay đổi"
-            @click="handleRevert"
+            :disabled="reverting"
+            @click="handleRevertRequest"
           >
             <RotateCcw class="h-3.5 w-3.5" />
             Khôi phục
           </button>
           <button
             type="button"
-            :disabled="!dirty"
+            :disabled="!dirty || saving"
             :class="cn(
               'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5',
               dirty

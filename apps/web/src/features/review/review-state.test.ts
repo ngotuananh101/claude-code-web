@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   defaultDiffMode,
   isReviewed,
+  isReviewedByPath,
   lineSeparatorFor,
   resolveIncoming,
   reviewKey,
@@ -40,6 +41,21 @@ test("reviewed keys are path- and hash-scoped", () => {
   expect(isReviewed(reviewed, "src/a.ts", "h1")).toBe(true);
   expect(isReviewed(reviewed, "src/a.ts", "h2")).toBe(false);
   expect(isReviewed(reviewed, "src/b.ts", "h1")).toBe(false);
+});
+
+test("isReviewedByPath matches the hash recorded when the file was opened", () => {
+  const hashes = new Map([
+    ["src/a.ts", "h1"],
+    ["src/b.ts", "h2"],
+  ]);
+  const reviewed = new Set([reviewKey("src/a.ts", "h1")]);
+
+  expect(isReviewedByPath(reviewed, hashes, "src/a.ts")).toBe(true);
+  // A path whose content hash changed is no longer the reviewed revision.
+  reviewed.add(reviewKey("src/b.ts", "old"));
+  expect(isReviewedByPath(reviewed, hashes, "src/b.ts")).toBe(false);
+  // A path never opened has no recorded hash and cannot be reviewed.
+  expect(isReviewedByPath(new Set([reviewKey("src/c.ts", "")]), hashes, "src/c.ts")).toBe(false);
 });
 
 test("lineSeparatorFor detects CRLF text only", () => {
