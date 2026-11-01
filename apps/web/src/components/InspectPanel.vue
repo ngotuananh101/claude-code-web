@@ -174,8 +174,8 @@ onBeforeUnmount(() => {
   }
 });
 
-// Changes — snapshot source (P3-B baseline)
-const source = ref<"git" | "snapshot">("snapshot");
+// Changes — source toggle (Git diff by default, snapshot baseline for revert)
+const source = ref<"git" | "snapshot">("git");
 const snapshotStatus = ref<SnapshotStatusResult | null>(null);
 const snapshotError = ref<string | null>(null);
 const snapshotLoading = ref(false);
@@ -879,6 +879,12 @@ watch(tab, (next) => {
   if (next === "diagnostics" && diagnostics.value === null) void loadDiagnostics();
   if (next === "schedules" && schedules.value === null) void loadSchedules();
 });
+
+watch(source, (next) => {
+  if (workspace.value === null) return;
+  if (next === "git" && changes.value === null) void loadChanges();
+  if (next === "snapshot" && snapshotStatus.value === null) void loadSnapshot();
+});
 </script>
 
 <template>
@@ -1358,15 +1364,17 @@ watch(tab, (next) => {
                   :key="entry.path"
                   class="flex min-w-0 w-full items-center justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
                 >
-                  <span
-                    class="min-w-0 flex-1 truncate"
+                  <button
+                    type="button"
+                    class="min-w-0 flex-1 truncate text-left hover:text-primary"
                     :title="entry.reason ? `${entry.path} — ${entry.reason}` : entry.path"
+                    @click="source = 'git'; openDiff(entry.path)"
                   >
                     {{ entry.path }}
                     <span v-if="entry.reason" class="text-muted-foreground">
                       — {{ entry.reason }}
                     </span>
-                  </span>
+                  </button>
                   <span class="flex shrink-0 items-center gap-1.5">
                     <span v-if="entry.status === 'modified'" class="text-muted-foreground">
                       sửa
