@@ -1,6 +1,6 @@
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, highlightActiveLine } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
 /**
@@ -71,6 +71,6 @@ const reviewHighlighting: Extension = syntaxHighlighting(
   ]),
 );
 
-const reviewBaseExtensions: Extension[] = [reviewTheme, reviewHighlighting];
+const reviewBaseExtensions: Extension[] = [reviewTheme, reviewHighlighting, highlightActiveLine()];
 
 export { reviewBaseExtensions, reviewHighlighting, reviewTheme };

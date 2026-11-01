@@ -12,7 +12,9 @@ const props = defineProps<{
   original: string;
   modified: string;
   editable: boolean;
-  path?: string;
+  // Explicit `undefined` is allowed: the caller binds `diffPath ?? undefined`
+  // under `exactOptionalPropertyTypes`.
+  path?: string | undefined;
 }>();
 const emit = defineEmits<{
   "update:modified": [value: string];
@@ -40,16 +42,12 @@ async function applyLanguage(path: string | undefined): Promise<void> {
     return;
   }
   const ext = await loadLanguage(id);
-  // Skip if the view was torn down while we waited, or if the path changed
-  // to one that maps to a different language.
+  // Skip if the view was torn down while we waited, or if the path drifted to
+  // a different file (whose own load will apply its language).
   if (view.value === null) {
     return;
   }
   if (props.path !== path) {
-    return;
-  }
-  const currentId = props.path ? languageForPath(props.path) : null;
-  if (currentId !== id) {
     return;
   }
   view.value.b.dispatch({ effects: languageCompartment.reconfigure(ext) });

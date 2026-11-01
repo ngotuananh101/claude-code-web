@@ -132,16 +132,12 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
       const prefix = body[0]!;
       const content = body.slice(1);
 
-      // Once both counters are exhausted, no further content line may appear
-      // (that would be over-delivery → null per §5.2). The only valid line
-      // after exhaustion is the "\ No newline" marker, which does not consume a
-      // counter.
-      const exhausted = oldCount <= 0 && newCount <= 0;
-      if (exhausted && prefix !== "\\") {
-        return null; // over-delivery past the claimed counts
-      }
-
+      // Each body line consumes its own side's declared count. A line whose
+      // side is already exhausted means the hunk header and body disagree → a
+      // malformed diff → null. The "\ No newline" marker consumes no count and
+      // is allowed after the last content line.
       if (prefix === " ") {
+        if (oldCount <= 0 || newCount <= 0) return null;
         original.push(content);
         modified.push(content);
         hunkOld.push(content);
@@ -150,11 +146,13 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff | null {
         newCount--;
         lastPushedSide = "both";
       } else if (prefix === "-") {
+        if (oldCount <= 0) return null;
         original.push(content);
         hunkOld.push(content);
         oldCount--;
         lastPushedSide = "original";
       } else if (prefix === "+") {
+        if (newCount <= 0) return null;
         modified.push(content);
         hunkNew.push(content);
         newCount--;

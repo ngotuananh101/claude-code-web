@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 
 const props = defineProps<{
   reviewed: boolean;
+  canReview: boolean;
   canSave: boolean;
   canRevert: boolean;
   saving: boolean;
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   save: [];
   revert: [];
 }>();
+
+const iconSize = 15;
 </script>
 
 <template>
@@ -25,10 +28,15 @@ const emit = defineEmits<{
       size="sm"
       :aria-pressed="reviewed"
       :class="reviewed ? 'border-primary text-primary' : ''"
-      title="Chỉ đánh dấu trong phiên này — không ghi gì lên Runner."
+      :disabled="!canReview"
+      :title="
+        canReview
+          ? 'Chỉ đánh dấu trong phiên này — không ghi gì lên Runner.'
+          : 'Cần một tệp có nội dung đọc được để đánh dấu đã duyệt.'
+      "
       @click="emit('toggle-reviewed')"
     >
-      <Check :size="15" />
+      <Check :size="iconSize" />
       Đã duyệt
     </Button>
 
@@ -39,7 +47,7 @@ const emit = defineEmits<{
       :title="dirty ? 'Lưu thay đổi đã duyệt.' : 'Không có thay đổi để lưu.'"
       @click="emit('save')"
     >
-      <Save :size="15" />
+      <Save :size="iconSize" />
       {{ saving ? "Đang lưu…" : "Lưu" }}
     </Button>
 
@@ -51,7 +59,7 @@ const emit = defineEmits<{
       :title="revertHint ?? 'Khôi phục tệp về bản chụp lúc bắt đầu chạy.'"
       @click="emit('revert')"
     >
-      <RotateCcw :size="15" />
+      <RotateCcw :size="iconSize" />
       Khôi phục
     </Button>
   </div>

@@ -12,7 +12,9 @@ const props = defineProps<{
   original: string;
   modified: string;
   editable: boolean;
-  path?: string;
+  // Explicit `undefined` is allowed: the caller binds `diffPath ?? undefined`
+  // under `exactOptionalPropertyTypes`.
+  path?: string | undefined;
 }>();
 const emit = defineEmits<{
   "update:modified": [value: string];
@@ -23,6 +25,7 @@ const view = shallowRef<EditorView | null>(null);
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 const lineSeparatorCompartment = new Compartment();
+const mergeControlsCompartment = new Compartment();
 let activeLineSeparator = lineSeparatorFor(props.modified);
 
 function readOnlyExtensions(readOnly: boolean): Extension[] {
@@ -33,6 +36,16 @@ function lineSeparatorExtensions(separator: "\r\n" | null): Extension[] {
   return separator === null ? [] : [EditorState.lineSeparator.of(separator)];
 }
 
+function mergeViewExtensions(editable: boolean): Extension {
+  return unifiedMergeView({
+    original: props.original,
+    mergeControls: editable,
+    gutter: true,
+    collapseUnchanged: { margin: 3, minSize: 4 },
+    syntaxHighlightDeletions: false,
+  });
+}
+
 async function applyLanguage(path: string | undefined): Promise<void> {
   const id = path ? languageForPath(path) : null;
   if (id === null) {
@@ -40,16 +53,12 @@ async function applyLanguage(path: string | undefined): Promise<void> {
     return;
   }
   const ext = await loadLanguage(id);
-  // Skip if the view was torn down while we waited, or if the path changed
-  // to one that maps to a different language.
+  // Skip if the view was torn down while we waited, or if the path drifted to
+  // a different file (whose own load will apply its language).
   if (view.value === null) {
     return;
   }
   if (props.path !== path) {
-    return;
-  }
-  const currentId = props.path ? languageForPath(props.path) : null;
-  if (currentId !== id) {
     return;
   }
   view.value.dispatch({ effects: languageCompartment.reconfigure(ext) });
@@ -65,13 +74,7 @@ function buildView(): EditorView | null {
       lineNumbers(),
       keymap.of(defaultKeymap),
       ...reviewBaseExtensions,
-      unifiedMergeView({
-        original: props.original,
-        mergeControls: props.editable,
-        gutter: true,
-        collapseUnchanged: { margin: 3, minSize: 4 },
-        syntaxHighlightDeletions: false,
-      }),
+      mergeControlsCompartment.of(mergeViewExtensions(props.editable)),
       lineSeparatorCompartment.of(lineSeparatorExtensions(activeLineSeparator)),
       readOnlyCompartment.of(readOnlyExtensions(!props.editable)),
       languageCompartment.of([]),
@@ -128,8 +131,14 @@ watch(
 watch(
   () => props.editable,
   (editable) => {
+    // The accept/reject controls are part of the merge-view extension, so the
+    // whole extension is reconfigured when editability flips — not only the
+    // read-only compartment.
     view.value?.dispatch({
-      effects: readOnlyCompartment.reconfigure(readOnlyExtensions(!editable)),
+      effects: [
+        readOnlyCompartment.reconfigure(readOnlyExtensions(!editable)),
+        mergeControlsCompartment.reconfigure(mergeViewExtensions(editable)),
+      ],
     });
   },
 );

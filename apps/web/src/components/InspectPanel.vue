@@ -126,6 +126,7 @@ const reviewed = ref<Set<string>>(new Set());
 const reviewConfirmRevert = ref(false);
 const reviewSnapshotEntry = ref<SnapshotEntry | null>(null);
 const diffSaving = ref(false);
+const diffReverting = ref(false);
 const diffSaveError = ref<string | null>(null);
 
 // Lazy-loaded merge-view components (P3-D)
@@ -595,6 +596,7 @@ async function saveDiff(): Promise<void> {
 }
 
 async function revertDiff(): Promise<void> {
+  if (diffReverting.value) return;
   const id = workspace.value;
   if (id === null) return;
   // Capture the path before the refreshes below clear it.
@@ -604,23 +606,28 @@ async function revertDiff(): Promise<void> {
   if (entry === null) return;
 
   const current = ++epoch;
+  diffReverting.value = true;
   reviewConfirmRevert.value = false;
 
-  const outcome = await revertFile(id, path, entry.currentHash);
-  if (current !== epoch) return;
+  try {
+    const outcome = await revertFile(id, path, entry.currentHash);
+    if (current !== epoch) return;
 
-  if (!outcome.ok) {
-    diffSaveError.value = outcome.message;
-    return;
+    if (!outcome.ok) {
+      diffSaveError.value = outcome.message;
+      return;
+    }
+
+    // Refresh the snapshot status and the git changes sequentially (each bumps
+    // the epoch; firing them concurrently would make one loader drop its own
+    // response and leave its spinner stuck), then re-open the diff against the
+    // post-revert baseline.
+    await loadSnapshot();
+    if (source.value === "git") await loadChanges();
+    await openDiff(path);
+  } finally {
+    diffReverting.value = false;
   }
-
-  // Refresh the snapshot status and the git changes sequentially (each bumps
-  // the epoch; firing them concurrently would make one loader drop its own
-  // response and leave its spinner stuck), then re-open the diff against the
-  // post-revert baseline.
-  await loadSnapshot();
-  if (source.value === "git") await loadChanges();
-  await openDiff(path);
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -676,12 +683,12 @@ async function saveFile(): Promise<void> {
     return;
   }
 
-  // A clean write clears any in-flight conflict; the draft is now the source
-  // of truth for the freshly written hash.
+  // A clean write clears any in-flight conflict. `viewerAfterSave` already
+  // carries the written draft and the fresh hash, so the draft needs no
+  // reassignment — and `FileWriteResult` has no `content` field to copy from.
   conflictIncoming.value = null;
   conflictNote.value = null;
   viewer.value = viewerAfterSave(viewer.value, draft.value, outcome.value);
-  draft.value = outcome.value.content;
   void loadFiles(directory.value);
 }
 
@@ -742,8 +749,9 @@ async function overwriteConflict(): Promise<void> {
   conflictIncoming.value = null;
   conflictNote.value = null;
   saveError.value = null;
+  // As in `saveFile`: the viewer carries the written draft, and the write
+  // result has no `content` field.
   viewer.value = viewerAfterSave(latest.value, draft.value, outcome.value);
-  draft.value = outcome.value.content;
   void loadFiles(directory.value);
 }
 
@@ -835,6 +843,7 @@ watch(
     reviewConfirmRevert.value = false;
     reviewSnapshotEntry.value = null;
     diffSaving.value = false;
+    diffReverting.value = false;
     diffSaveError.value = null;
     if (diffResizeObserver !== null) diffResizeObserver.disconnect();
     snapshotStatus.value = null;
@@ -969,10 +978,14 @@ watch(tab, (next) => {
               <p class="mb-1">
                 Tệp đã bị thay đổi trên Runner kể từ khi mở. Bản nháp của bạn được giữ nguyên.
               </p>
+              <p v-if="conflictNote !== null" class="mb-1 text-muted-foreground">
+                {{ conflictNote }}
+              </p>
               <div class="flex items-center gap-2">
                 <button
                   type="button"
-                  class="text-primary hover:underline"
+                  class="text-primary hover:underline disabled:opacity-50"
+                  :disabled="saving"
                   @click="adoptConflict"
                 >
                   Tải bản mới (bỏ bản nháp)
@@ -1126,6 +1139,7 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
+                  :aria-pressed="diffMode === 'unified'"
                   @click="diffModeOverride = 'unified'"
                 >
                   Một cột
@@ -1138,6 +1152,7 @@ watch(tab, (next) => {
                       ? 'bg-primary/10 text-primary'
                       : 'hover:text-foreground'
                   "
+                  :aria-pressed="diffMode === 'split'"
                   @click="diffModeOverride = 'split'"
                 >
                   Hai cột
@@ -1205,6 +1220,7 @@ watch(tab, (next) => {
             <ReviewToolbar
               v-if="diffParsed !== null"
               :reviewed="isDiffReviewed"
+              :can-review="diffReviewKey !== null"
               :can-save="diffEditable && diffDirty"
               :can-revert="canRevertDiff"
               :saving="diffSaving"
@@ -1240,7 +1256,7 @@ watch(tab, (next) => {
                 <button
                   type="button"
                   class="rounded-md bg-destructive px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50"
-                  :disabled="diffSaving"
+                  :disabled="diffReverting"
                   @click="revertDiff"
                 >
                   Xác nhận

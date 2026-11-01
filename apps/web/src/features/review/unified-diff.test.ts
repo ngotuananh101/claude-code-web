@@ -149,6 +149,59 @@ test("over-delivery past exhausted counts returns null", () => {
   expect(parsed).toBeNull();
 });
 
+test("rejects a context line after only the old side is exhausted", () => {
+  // old=1, new=2: the second context line over-delivers the old side only.
+  const parsed = parseUnifiedDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,1 +1,2 @@",
+      " a",
+      " b",
+      "",
+    ].join("\n"),
+  );
+  expect(parsed).toBeNull();
+});
+
+test("rejects a deletion after the old side is exhausted", () => {
+  // old=1 but the body deletes twice; the additions still balance the new
+  // side, so only the per-side check can catch the over-delivery.
+  const parsed = parseUnifiedDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,1 +1,2 @@",
+      "-x",
+      "-y",
+      "+a",
+      "+b",
+      "",
+    ].join("\n"),
+  );
+  expect(parsed).toBeNull();
+});
+
+test("rejects an addition after the new side is exhausted", () => {
+  // new=1 but the body adds twice; the deletions still balance the old side.
+  const parsed = parseUnifiedDiff(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,2 +1,1 @@",
+      "+a",
+      "+b",
+      "-x",
+      "-y",
+      "",
+    ].join("\n"),
+  );
+  expect(parsed).toBeNull();
+});
+
 const partialContextDiff = [
   "diff --git a/a.ts b/a.ts",
   "index 1111111..2222222 100644",

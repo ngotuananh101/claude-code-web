@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { languageForPath } from "./languages.ts";
+import { createLanguageLoader, languageForPath } from "./languages.ts";
+
+const notUnderTest = () => Promise.reject(new Error("loader not under test"));
 
 describe("languageForPath", () => {
   test("maps the supported extensions case-insensitively", () => {
@@ -19,5 +21,49 @@ describe("languageForPath", () => {
     expect(languageForPath("src/notes.txt")).toBeNull();
     expect(languageForPath(".gitignore")).toBeNull();
     expect(languageForPath("src/widget.yaml")).toBeNull();
+  });
+});
+
+describe("createLanguageLoader", () => {
+  test("caches a successful load and shares the in-flight promise", async () => {
+    let calls = 0;
+    const load = createLanguageLoader({
+      javascript: async () => {
+        calls++;
+        return [];
+      },
+      json: notUnderTest,
+      markdown: notUnderTest,
+      python: notUnderTest,
+      html: notUnderTest,
+      css: notUnderTest,
+    });
+
+    const first = load("javascript");
+    const second = load("javascript");
+    expect(second).toBe(first);
+    await first;
+    await load("javascript");
+    expect(calls).toBe(1);
+  });
+
+  test("evicts a rejected load so a later call retries", async () => {
+    let calls = 0;
+    const load = createLanguageLoader({
+      javascript: async () => {
+        calls++;
+        if (calls === 1) throw new Error("chunk failed");
+        return [];
+      },
+      json: notUnderTest,
+      markdown: notUnderTest,
+      python: notUnderTest,
+      html: notUnderTest,
+      css: notUnderTest,
+    });
+
+    await expect(load("javascript")).rejects.toThrow("chunk failed");
+    await load("javascript");
+    expect(calls).toBe(2);
   });
 });

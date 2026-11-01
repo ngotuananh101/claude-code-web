@@ -11,7 +11,6 @@ const EXTENSION_MAP: Record<string, LanguageId> = {
   cjs: "javascript",
   mts: "javascript",
   cts: "javascript",
-  "d.ts": "javascript",
   json: "json",
   jsonc: "json",
   md: "markdown",
@@ -48,14 +47,27 @@ const loaders: Record<LanguageId, () => Promise<Extension>> = {
   css: async () => (await import("@codemirror/lang-css")).css(),
 };
 
-const cache = new Map<LanguageId, Promise<Extension>>();
-
-export function loadLanguage(id: LanguageId): Promise<Extension> {
-  const cached = cache.get(id);
-  if (cached) {
-    return cached;
-  }
-  const promise = loaders[id]();
-  cache.set(id, promise);
-  return promise;
+/**
+ * One promise per language id, shared by every editor that asks for it.
+ * A rejected load is evicted instead of cached: a transient chunk failure must
+ * be retried on the next request, not disable highlighting until reload.
+ */
+export function createLanguageLoader(
+  loaderMap: Record<LanguageId, () => Promise<Extension>>,
+): (id: LanguageId) => Promise<Extension> {
+  const cache = new Map<LanguageId, Promise<Extension>>();
+  return (id) => {
+    const cached = cache.get(id);
+    if (cached) {
+      return cached;
+    }
+    const promise = loaderMap[id]().catch((error: unknown) => {
+      cache.delete(id);
+      throw error;
+    });
+    cache.set(id, promise);
+    return promise;
+  };
 }
+
+export const loadLanguage = createLanguageLoader(loaders);
