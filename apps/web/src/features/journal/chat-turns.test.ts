@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
-import type { AgentStep, AgentTurn, ToolStep } from "./chat-turns.ts";
+import type {
+  AgentStep,
+  AgentTurn,
+  AgentTurnSegment,
+  ProcessSegment,
+  TextSegment,
+  ToolStep,
+} from "./chat-turns.ts";
 import {
   cleanUserPrompt,
   deriveChatTurns,
@@ -440,6 +447,165 @@ describe("deriveChatTurns — historical messages", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({ kind: "thinking", text: "hmm" });
     expect((turns[0] as { text: string }).text).toBe("");
+  });
+
+  test("segments an assistant turn containing tools, interim text, more tools, and final text", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "Do some tasks" }, "u-1"),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [
+              toolUseBlock("t1", "Read", { file_path: "a.ts" }),
+              toolUseBlock("t2", "Grep", { pattern: "foo" }),
+            ],
+          },
+          "a-1",
+        ),
+        userMsg(
+          {
+            type: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "t1", content: "file content" },
+              { type: "tool_result", tool_use_id: "t2", content: "grep hits" },
+            ],
+          },
+          "u-2",
+        ),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [
+              { type: "text", text: "Found the bug in a.ts, modifying now." },
+              toolUseBlock("t3", "Edit", { file_path: "a.ts" }),
+            ],
+          },
+          "a-2",
+        ),
+        userMsg(
+          {
+            type: "user",
+            content: [{ type: "tool_result", tool_use_id: "t3", content: "edited" }],
+          },
+          "u-3",
+        ),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [{ type: "text", text: "All done!" }],
+          },
+          "a-3",
+        ),
+      ],
+      [],
+    );
+
+    expect(turns).toHaveLength(2); // 1 user turn, 1 agent turn
+    const agent = turns[1] as AgentTurn;
+    expect(agent.kind).toBe("agent");
+    expect(agent.segments).toBeDefined();
+    expect(agent.segments).toHaveLength(4);
+
+    expect(agent.segments[0].kind).toBe("process");
+    expect((agent.segments[0] as ProcessSegment).steps).toHaveLength(2);
+    expect((agent.segments[0] as ProcessSegment).steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Read",
+    });
+    expect((agent.segments[0] as ProcessSegment).steps[1]).toMatchObject({
+      kind: "tool",
+      toolName: "Grep",
+    });
+
+    expect(agent.segments[1].kind).toBe("text");
+    expect((agent.segments[1] as TextSegment).text).toBe(
+      "Found the bug in a.ts, modifying now.",
+    );
+
+    expect(agent.segments[2].kind).toBe("process");
+    expect((agent.segments[2] as ProcessSegment).steps).toHaveLength(1);
+    expect((agent.segments[2] as ProcessSegment).steps[0]).toMatchObject({
+      kind: "tool",
+      toolName: "Edit",
+    });
+
+    expect(agent.segments[3].kind).toBe("text");
+    expect((agent.segments[3] as TextSegment).text).toBe("All done!");
+
+    // Backward compatibility
+    expect(agent.steps).toHaveLength(3);
+    expect(agent.text).toBe("Found the bug in a.ts, modifying now.\n\nAll done!");
+  });
+
+  test("pure text turn yields exactly one text segment", () => {
+    const turns = deriveChatTurns(
+      [assistantMsg({ type: "assistant", content: [{ type: "text", text: "Just chatting" }] })],
+      [],
+    );
+    expect(turns).toHaveLength(1);
+    const agent = turns[0] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect(agent.segments[0]).toMatchObject({
+      kind: "text",
+      text: "Just chatting",
+    });
+    expect(agent.steps).toHaveLength(0);
+    expect(agent.text).toBe("Just chatting");
+  });
+
+  test("pure tool turn yields exactly one process segment", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [toolUseBlock("t1", "Read", { file_path: "x.ts" })],
+        }),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(1);
+    const agent = turns[0] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect(agent.segments[0].kind).toBe("process");
+    expect((agent.segments[0] as ProcessSegment).steps).toHaveLength(1);
+    expect(agent.steps).toHaveLength(1);
+    expect(agent.text).toBe("");
+  });
+
+  test("consecutive tools across messages without text merge into a single process segment", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [toolUseBlock("t1", "Read", { file_path: "x.ts" })],
+          },
+          "a-1",
+        ),
+        userMsg(
+          {
+            type: "user",
+            content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }],
+          },
+          "u-2",
+        ),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [toolUseBlock("t2", "Bash", { command: "ls" })],
+          },
+          "a-2",
+        ),
+      ],
+      [],
+    );
+    expect(turns).toHaveLength(1);
+    const agent = turns[0] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect(agent.segments[0].kind).toBe("process");
+    expect((agent.segments[0] as ProcessSegment).steps).toHaveLength(2);
+    expect(agent.steps).toHaveLength(2);
   });
 });
 

@@ -65,6 +65,20 @@ export type ApprovalStep = {
   event: BrowserReplayEvent;
 };
 
+export type ProcessSegment = {
+  kind: "process";
+  key: string;
+  steps: AgentStep[];
+};
+
+export type TextSegment = {
+  kind: "text";
+  key: string;
+  text: string;
+};
+
+export type AgentTurnSegment = ProcessSegment | TextSegment;
+
 export type AgentTurn = {
   kind: "agent";
   key: string;
@@ -74,9 +88,37 @@ export type AgentTurn = {
   startedAt?: string;
   steps: AgentStep[];
   text: string;
+  segments: AgentTurnSegment[];
   isStreaming?: boolean;
   rawPayload?: unknown;
 };
+
+function appendStepToSegments(agent: AgentTurn, step: AgentStep): void {
+  const last = agent.segments[agent.segments.length - 1];
+  if (last !== undefined && last.kind === "process") {
+    last.steps.push(step);
+  } else {
+    agent.segments.push({
+      kind: "process",
+      key: `${agent.key}-process-${agent.segments.length}`,
+      steps: [step],
+    });
+  }
+}
+
+function appendTextToSegments(agent: AgentTurn, text: string): void {
+  if (text.trim() === "") return;
+  const last = agent.segments[agent.segments.length - 1];
+  if (last !== undefined && last.kind === "text") {
+    last.text = last.text === "" ? text : `${last.text}\n\n${text}`;
+  } else {
+    agent.segments.push({
+      kind: "text",
+      key: `${agent.key}-text-${agent.segments.length}`,
+      text,
+    });
+  }
+}
 
 /**
  * Strip Claude Code system wrappers (<command-*>, <local-command-*>, <system-reminder>, etc.)
@@ -701,10 +743,6 @@ export function deriveChatTurns(
     }
 
     // assistant
-    const prose = assistantProse(message);
-    const thinkingBlocks = thinkingBlocksOf(message);
-    const toolUses = toolUseBlocksOf(message);
-
     let agent: AgentTurn | null = currentAgentTurn;
     if (agent === null) {
       agent = {
@@ -712,56 +750,88 @@ export function deriveChatTurns(
         key: `history-${message.uuid}`,
         status: "done",
         steps: [],
-        text: prose,
+        text: "",
+        segments: [],
         isStreaming: false,
         rawPayload: message.message,
       };
       currentAgentTurn = agent;
-    } else {
-      // Append to the open agent turn (consecutive assistant messages).
-      if (prose !== "") {
-        agent.text = agent.text === "" ? prose : `${agent.text}\n\n${prose}`;
-      }
     }
 
-    for (const block of thinkingBlocks) {
-      agent.steps.push({
-        kind: "thinking",
-        key: `${agent.key}-thinking-${agent.steps.length}`,
-        text: block,
-      });
-    }
+    const msg = asRecord(message.message);
+    const content = msg?.["content"];
 
-    for (const toolUse of toolUses) {
-      const stepKey = `${agent.key}-tool-${agent.steps.length}`;
-      const toolStep: ToolStep = {
-        kind: "tool",
-        key: stepKey,
-        toolCallId: toolUse.id,
-        toolName: toolUse.name,
-        state: "running",
-        inputSummary: summarizeToolInput(toolUse.name, [toolUse.input ?? {}]),
-        outputSummary: null,
-        rawPayload: toolUse.input,
-      };
-      const filePath = extractToolField(toolUse.name, toolUse.input);
-      if (filePath !== undefined) {
-        if (toolUse.name === "Bash") toolStep.command = filePath;
-        else toolStep.filePath = filePath;
+    if (typeof content === "string") {
+      if (content.trim() !== "") {
+        agent.text = agent.text === "" ? content : `${agent.text}\n\n${content}`;
+        appendTextToSegments(agent, content);
       }
-      const diffStats = extractDiffStats(toolUse.name, toolUse.input);
-      if (diffStats !== null) toolStep.diffStats = diffStats;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (typeof block === "string") {
+          if (block.trim() !== "") {
+            agent.text = agent.text === "" ? block : `${agent.text}\n\n${block}`;
+            appendTextToSegments(agent, block);
+          }
+          continue;
+        }
+        if (typeof block !== "object" || block === null) continue;
+        const record = block as Record<string, unknown>;
+        if (record["type"] === "thinking") {
+          const thinking = asString(record["thinking"]);
+          if (thinking !== undefined && thinking !== "") {
+            const step: ThinkingStep = {
+              kind: "thinking",
+              key: `${agent.key}-thinking-${agent.steps.length}`,
+              text: thinking,
+            };
+            agent.steps.push(step);
+            appendStepToSegments(agent, step);
+          }
+        } else if (record["type"] === "tool_use") {
+          const id = asString(record["id"]);
+          const name = asString(record["name"]);
+          if (id !== undefined && name !== undefined) {
+            const input = asRecord(record["input"]) ?? undefined;
+            const stepKey = `${agent.key}-tool-${agent.steps.length}`;
+            const toolStep: ToolStep = {
+              kind: "tool",
+              key: stepKey,
+              toolCallId: id,
+              toolName: name,
+              state: "running",
+              inputSummary: summarizeToolInput(name, [input ?? {}]),
+              outputSummary: null,
+              rawPayload: input,
+            };
+            const filePath = extractToolField(name, input);
+            if (filePath !== undefined) {
+              if (name === "Bash") toolStep.command = filePath;
+              else toolStep.filePath = filePath;
+            }
+            const diffStats = extractDiffStats(name, input);
+            if (diffStats !== null) toolStep.diffStats = diffStats;
 
-      agent.steps.push(toolStep);
-      pendingTools.set(toolUse.id, {
-        toolCallId: toolUse.id,
-        toolName: toolUse.name,
-        input: toolUse.input,
-        inputUpdated: false,
-        outputSummary: null,
-        isError: false,
-        completed: false,
-      });
+            agent.steps.push(toolStep);
+            pendingTools.set(id, {
+              toolCallId: id,
+              toolName: name,
+              input,
+              inputUpdated: false,
+              outputSummary: null,
+              isError: false,
+              completed: false,
+            });
+            appendStepToSegments(agent, toolStep);
+          }
+        } else if (record["type"] === "text") {
+          const text = asString(record["text"]);
+          if (text !== undefined && text.trim() !== "") {
+            agent.text = agent.text === "" ? text : `${agent.text}\n\n${text}`;
+            appendTextToSegments(agent, text);
+          }
+        }
+      }
     }
   }
 
@@ -849,6 +919,7 @@ export function deriveChatTurns(
         startedAt: event.occurredAt,
         steps: [],
         text: "",
+        segments: [],
         isStreaming: true,
         rawPayload: event.payload,
       };
@@ -894,6 +965,7 @@ export function deriveChatTurns(
           startedAt: event.occurredAt,
           steps: [],
           text: "",
+          segments: [],
           isStreaming: true,
           rawPayload: event.payload,
         };
@@ -1034,6 +1106,7 @@ export function deriveChatTurns(
       isStreaming: true,
       steps: [],
       text: "",
+      segments: [],
     });
   }
 
