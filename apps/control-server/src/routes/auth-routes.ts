@@ -11,8 +11,8 @@ import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 
 export const COOKIE_NAME = "cc_session";
 export const REFRESH_COOKIE_NAME = "cc_refresh";
-const ACCESS_TTL_SECONDS = 15 * 60;
-const REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const ACCESS_TTL_SECONDS = 15 * 60;
+export const REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function readCookie(cookie: string | undefined, name: string): string | undefined {
   if (cookie === undefined) return undefined;
