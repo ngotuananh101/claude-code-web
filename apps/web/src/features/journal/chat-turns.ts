@@ -930,16 +930,21 @@ export function deriveChatTurns(
     if (event.type === "message.delta") {
       const text = asString(payload["text"]);
       if (text !== undefined && text !== "") {
-        liveAgentTurn.text += text;
+        // A delta only lands where it renders. A whitespace-only chunk that
+        // would open a new text segment is dropped from both the segment and
+        // the flattened text, so turn.text stays the concatenation of the
+        // text segments (the copy-response button reads it).
         const last = liveAgentTurn.segments[liveAgentTurn.segments.length - 1];
         if (last !== undefined && last.kind === "text") {
           last.text += text;
+          liveAgentTurn.text += text;
         } else if (text.trim() !== "") {
           liveAgentTurn.segments.push({
             kind: "text",
             key: `${liveAgentTurn.key}-text-${liveAgentTurn.segments.length}`,
             text,
           });
+          liveAgentTurn.text += text;
         }
       }
       continue;

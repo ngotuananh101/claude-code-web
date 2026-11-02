@@ -868,6 +868,45 @@ describe("deriveChatTurns — live events", () => {
     expect(agent.segments[0]!.kind).toBe("process");
   });
 
+  test("live prose-only run yields exactly one text segment and no process segment", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "r1", prompt: "Say hello" }),
+        liveEvent("message.delta", { text: "Hello" }, "r1"),
+        liveEvent("message.delta", { text: " world" }, "r1"),
+        liveEvent("run.finished", {}, "r1"),
+      ],
+    );
+
+    const agent = turns[1] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect(agent.segments[0]!.kind).toBe("text");
+    expect((agent.segments[0] as TextSegment).text).toBe("Hello world");
+    expect(agent.text).toBe("Hello world");
+  });
+
+  test("whitespace-only delta outside a text segment keeps turn.text equal to the text segments", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "r1", prompt: "Say hello" }),
+        liveEvent("message.delta", { text: "   " }, "r1"),
+        liveEvent("message.delta", { text: "Hello" }, "r1"),
+        liveEvent("run.finished", {}, "r1"),
+      ],
+    );
+
+    const agent = turns[1] as AgentTurn;
+    expect(agent.segments).toHaveLength(1);
+    expect((agent.segments[0] as TextSegment).text).toBe("Hello");
+    // The copy-response button reads turn.text, so it must not carry
+    // whitespace that no text segment shows.
+    expect(agent.text).toBe("Hello");
+  });
+
   test("live approval.requested attaches to current process segment or starts a new one", () => {
     resetSeq();
     const turns = deriveChatTurns(
@@ -1311,6 +1350,10 @@ describe("deriveChatTurns — merging historical and live", () => {
       state: "done",
       outputSummary: "/mnt/Data",
     });
+    // The superseding live turn must rebuild the same interleaved shape.
+    expect(agent.segments.map((seg) => seg.kind)).toEqual(["process", "text"]);
+    expect(new Set(agent.segments.map((seg) => seg.key)).size).toBe(agent.segments.length);
+    expect((agent.segments[1] as TextSegment).text).toBe("Tôi hiện đang ở thư mục /mnt/Data");
   });
 
   test("renders optimistic pending user turn and agent spinner before liveEvents arrive", () => {
