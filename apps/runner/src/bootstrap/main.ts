@@ -14,6 +14,7 @@
 import { Database } from "bun:sqlite";
 import { execSync } from "node:child_process";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
@@ -28,6 +29,13 @@ import {
   type UnitScope,
   writeUnitAndEnable,
 } from "../service/systemd.ts";
+import {
+  installWindowsTask,
+  renderWindowsTaskXml,
+  uninstallWindowsTask,
+  TASK_NAME as WINDOWS_TASK_NAME,
+  type WindowsTaskIo,
+} from "../service/windows.ts";
 import { resolveServerUrl, runSetup } from "../setup/setup.ts";
 import { createWorkspaceRegistry } from "../workspaces/registry.ts";
 
@@ -54,7 +62,11 @@ usage:
 const command = process.argv[2] ?? "connect";
 
 function identityDir(): string {
-  return process.env["CC_WEB_RUNNER_HOME"] ?? `${process.env["HOME"]}/.cc-web-runner`;
+  if (process.env["CC_WEB_RUNNER_HOME"]) {
+    return process.env["CC_WEB_RUNNER_HOME"];
+  }
+  const home = process.env["HOME"] ?? homedir();
+  return `${home}/.cc-web-runner`;
 }
 
 /**
@@ -88,6 +100,9 @@ function resolveTargetUser(options: Record<string, string>): string | undefined 
  * Resolves a username's home directory across standard Linux environments.
  */
 function resolveUserHome(username: string): string | undefined {
+  if (process.platform === "win32") {
+    return process.env["USERPROFILE"] ?? homedir();
+  }
   try {
     const entry = execSync(`getent passwd ${username}`, {
       encoding: "utf8",
@@ -133,8 +148,8 @@ function openRunnerDb(dir: string): Database {
   return db;
 }
 
-/** The real io for the service subcommands; systemd is actually run. */
-function realSystemdIo(): SystemdIo {
+/** The real io for the service subcommands; systemd or schtasks is actually run. */
+function realServiceIo(): SystemdIo & WindowsTaskIo {
   return {
     writeFile,
     removeFile: (path) => rm(path, { force: true }),
@@ -143,12 +158,21 @@ function realSystemdIo(): SystemdIo {
     },
     runCommand: (command, args) =>
       new Promise((resolve, reject) => {
-        const proc = Bun.spawnSync([command, ...args]);
-        if (proc.exitCode !== 0) {
-          reject(new Error(`${command} ${args.join(" ")} failed (exit ${proc.exitCode})`));
-          return;
+        try {
+          const proc = Bun.spawnSync([command, ...args]);
+          if (proc.exitCode !== 0) {
+            const stderr = proc.stderr ? new TextDecoder().decode(proc.stderr).trim() : "";
+            reject(
+              new Error(
+                `${command} ${args.join(" ")} failed (exit ${proc.exitCode})${stderr ? `: ${stderr}` : ""}`,
+              ),
+            );
+            return;
+          }
+          resolve();
+        } catch (err) {
+          reject(err);
         }
-        resolve();
       }),
   };
 }
@@ -203,8 +227,8 @@ function executablePath(): string {
   return script.endsWith(".ts") ? `${process.execPath} ${script}` : process.execPath;
 }
 
-async function start(): Promise<void> {
-  const dir = identityDir();
+async function start(options?: Record<string, string>): Promise<void> {
+  const dir = options?.["home"] ?? identityDir();
   const defaultWorkspaceEnv = process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"];
 
   // §11.1 / §18.2: discover all workspaces — the default env dir, any persisted
@@ -224,14 +248,14 @@ async function start(): Promise<void> {
   const registry = createWorkspaceRegistry({
     ...(defaultWorkspaceEnv === undefined ? {} : { defaultEnv: defaultWorkspaceEnv }),
     db,
-    ...(process.env["HOME"] === undefined ? {} : { homeDir: process.env["HOME"] }),
+    homeDir: process.env["HOME"] ?? homedir(),
   });
 
   // §5.2: ask this host's Claude Code which models it offers — custom names
   // included. Bounded and best-effort (never rejects): a probe that cannot
   // answer just means the composer falls back to the protocol's own list.
   const models = await discoverModels({
-    cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? process.cwd(),
+    cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? homedir(),
   });
   console.log(
     `discovered ${models.length} model${models.length === 1 ? "" : "s"}: ${models
@@ -289,7 +313,11 @@ switch (command) {
 
   case "connect":
   case "run": {
-    await start();
+    const options = parseOptions(process.argv.slice(3));
+    if (options["home"]) {
+      process.env["CC_WEB_RUNNER_HOME"] = options["home"];
+    }
+    await start(options);
     break;
   }
 
@@ -342,6 +370,57 @@ switch (command) {
     const targetUser = scope === "user" ? undefined : resolveTargetUser(options);
     const home = resolveServiceHome(targetUser, options);
 
+    if (process.platform === "win32") {
+      const environmentFile = process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"];
+
+      if (sub === "print") {
+        process.stdout.write(
+          renderWindowsTaskXml({
+            executablePath: executablePath(),
+            homeDir: home,
+            scope,
+            ...(environmentFile === undefined ? {} : { environmentFile }),
+          }),
+        );
+        break;
+      }
+
+      if (sub === "install") {
+        const installedPath = await installWindowsTask(
+          {
+            executablePath: executablePath(),
+            homeDir: home,
+            scope,
+            ...(environmentFile === undefined ? {} : { environmentFile }),
+          },
+          realServiceIo(),
+        );
+
+        const scopeNote = scope === "system" ? " (system startup)" : " (user logon)";
+        console.log(
+          `installed and started scheduled task ${WINDOWS_TASK_NAME}${scopeNote} (definition: ${installedPath})`,
+        );
+        console.log(`next: schtasks /query /tn ${WINDOWS_TASK_NAME} /fo list /v`);
+        break;
+      }
+
+      if (sub === "uninstall") {
+        await uninstallWindowsTask(realServiceIo(), { homeDir: home });
+        console.log(`stopped and deleted scheduled task ${WINDOWS_TASK_NAME}`);
+        break;
+      }
+
+      console.error(`service: unknown subcommand ${sub ?? "(none)"} (install | uninstall | print)`);
+      process.exit(1);
+      break;
+    }
+
+    if (process.platform !== "linux") {
+      console.error(`service management is not supported directly on ${process.platform}.`);
+      console.error("  On macOS, use launchd or run 'cc-web-runner connect' directly.");
+      process.exit(1);
+    }
+
     if (sub === "print") {
       process.stdout.write(
         renderSystemdUnit({
@@ -390,7 +469,7 @@ switch (command) {
           scope,
           ...(environmentFile === undefined ? {} : { environmentFile }),
         },
-        realSystemdIo(),
+        realServiceIo(),
       );
 
       const userNote = targetUser ? ` (user: ${targetUser})` : "";
@@ -414,7 +493,7 @@ switch (command) {
         process.exit(1);
       }
 
-      const uninstalledPath = await stopAndDisable(realSystemdIo(), {
+      const uninstalledPath = await stopAndDisable(realServiceIo(), {
         scope,
         homeDir: home,
       });
