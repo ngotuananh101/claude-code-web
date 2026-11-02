@@ -25,14 +25,74 @@ const props = defineProps<{
 /** Whether the raw payload panel is open. */
 const showRaw = ref(false);
 
+type SegmentRow =
+  | { key: string; kind: "process"; steps: AgentStep[]; text: ""; isLastProcess: boolean }
+  | { key: string; kind: "text"; steps: AgentStep[]; text: string; isLastProcess: false };
+
 /**
- * The accordion's summary row already carries the duration once it has any
- * execution step to show, so the header omits it there instead of printing it
- * twice.
+ * Render rows for the interleaved segments, computed once per dependency
+ * change: process rows carry only the steps the accordion shows (in-flight
+ * tools stay with AgentLiveStatus), text rows their prose. The trailing
+ * process frame is the active one and every earlier frame renders collapsed.
  */
-const headerDuration = computed(() =>
-  props.turn.steps?.some((step) => step.kind !== "approval") ? undefined : props.turn.durationText,
+const segmentRows = computed<SegmentRow[]>(() => {
+  const segments = props.turn.segments ?? [];
+  let lastProcessIdx = -1;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i]?.kind === "process") {
+      lastProcessIdx = i;
+      break;
+    }
+  }
+  return segments.map((seg, idx) => {
+    if (seg.kind === "text") {
+      return {
+        key: seg.key,
+        kind: "text" as const,
+        steps: [],
+        text: seg.text,
+        isLastProcess: false as const,
+      };
+    }
+    const steps =
+      props.turn.status === "running"
+        ? seg.steps.filter((step) => step.kind !== "tool" || step.state !== "running")
+        : seg.steps;
+    return {
+      key: seg.key,
+      kind: "process" as const,
+      steps,
+      text: "" as const,
+      isLastProcess: idx === lastProcessIdx,
+    };
+  });
+});
+
+/** Number of process frames that render their own accordion. */
+const processFrameCount = computed(
+  () => segmentRows.value.filter((row) => row.kind === "process" && row.steps.length > 0).length,
 );
+
+/**
+ * A turn with exactly one process frame carries the run's duration in that
+ * frame's summary row. With several frames that total would read as the last
+ * frame's own duration, so it moves to the header instead.
+ */
+const segmentDurationText = computed(() =>
+  processFrameCount.value === 1 ? props.turn.durationText : undefined,
+);
+
+/**
+ * The header shows the duration unless a single process frame carries it.
+ * Legacy turns without segments keep the old rule: any execution step means
+ * the accordion shows it.
+ */
+const headerDuration = computed(() => {
+  const hasExecutionSteps = props.turn.steps?.some((step) => step.kind !== "approval") ?? false;
+  if (!hasExecutionSteps) return props.turn.durationText;
+  const segmented = (props.turn.segments?.length ?? 0) > 0;
+  return segmented && processFrameCount.value !== 1 ? props.turn.durationText : undefined;
+});
 
 /**
  * While a turn is running, any in-flight tool step is highlighted by AgentLiveStatus
@@ -45,23 +105,6 @@ const completedSteps = computed(() => {
     (step) => step.kind !== "tool" || step.state !== "running",
   );
 });
-
-/** Filter steps for a process segment, holding back running tools for AgentLiveStatus. */
-function segmentSteps(steps: AgentStep[]): AgentStep[] {
-  if (props.turn.status !== "running") return steps ?? [];
-  return (steps ?? []).filter((step) => step.kind !== "tool" || step.state !== "running");
-}
-
-/** Check if the segment at idx is the last process segment in the turn. */
-function isLastProcessSegment(idx: number): boolean {
-  const segments = props.turn.segments ?? [];
-  for (let i = segments.length - 1; i >= 0; i--) {
-    if (segments[i]?.kind === "process") {
-      return i === idx;
-    }
-  }
-  return false;
-}
 
 /** Number of pending approvals that require operator decision. */
 const pendingApprovalCount = computed(() => {
@@ -136,22 +179,22 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
     </div>
 
     <!-- Interleaved Segments (Process frames and Prose text in chronological order) -->
-    <template v-if="turn.segments && turn.segments.length > 0">
-      <template v-for="(seg, idx) in turn.segments" :key="seg.key">
+    <template v-if="segmentRows.length > 0">
+      <template v-for="row in segmentRows" :key="row.key">
         <AgentProcessAccordion
-          v-if="seg.kind === 'process' && segmentSteps(seg.steps).length > 0"
-          :steps="segmentSteps(seg.steps)"
-          :status="isLastProcessSegment(idx) ? turn.status : 'done'"
-          :duration-text="isLastProcessSegment(idx) ? turn.durationText : undefined"
+          v-if="row.kind === 'process' && row.steps.length > 0"
+          :steps="row.steps"
+          :status="row.isLastProcess ? turn.status : 'done'"
+          :duration-text="row.isLastProcess ? segmentDurationText : undefined"
           :terminal-for="terminalFor"
           :task-for="taskFor"
         />
 
         <div
-          v-else-if="seg.kind === 'text' && seg.text"
+          v-else-if="row.kind === 'text' && row.text"
           :class="proseClasses"
           class="min-w-0 max-w-full break-words"
-          v-html="renderMarkdown(seg.text)"
+          v-html="renderMarkdown(row.text)"
         />
       </template>
     </template>
