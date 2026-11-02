@@ -3,15 +3,27 @@
  * - Trimmed length must be 2-32 characters
  * - Must match regex /^[a-zA-Z0-9_.-]{2,32}$/
  */
-export function validateUsername(username: string): { valid: boolean; error?: string } {
+export function validateUsername(username: string): {
+  valid: boolean;
+  error?: string;
+  errorKey?: string;
+} {
   const trimmed = username.trim();
 
   if (trimmed.length < 2) {
-    return { valid: false, error: "Username must be at least 2 characters." };
+    return {
+      valid: false,
+      error: "Username must be at least 2 characters.",
+      errorKey: "user.usernameTooShort",
+    };
   }
 
   if (trimmed.length > 32) {
-    return { valid: false, error: "Username must be at most 32 characters." };
+    return {
+      valid: false,
+      error: "Username must be at most 32 characters.",
+      errorKey: "user.usernameTooLong",
+    };
   }
 
   const usernameRegex = /^[a-zA-Z0-9_.-]+$/;
@@ -19,6 +31,7 @@ export function validateUsername(username: string): { valid: boolean; error?: st
     return {
       valid: false,
       error: "Username can only contain letters, numbers, dots, underscores, and hyphens.",
+      errorKey: "user.usernameInvalidChars",
     };
   }
 
@@ -34,7 +47,7 @@ export function validatePasswordChange(
   current: string,
   next: string,
   confirm: string,
-): { valid: boolean; error?: string } {
+): { valid: boolean; error?: string; errorKey?: string } {
   const trimmedCurrent = current.trim();
   const trimmedNext = next.trim();
   const trimmedConfirm = confirm.trim();
@@ -46,17 +59,29 @@ export function validatePasswordChange(
 
   // If any field is entered, current password is required
   if (!trimmedCurrent) {
-    return { valid: false, error: "Current password is required." };
+    return {
+      valid: false,
+      error: "Current password is required.",
+      errorKey: "user.currentPasswordRequired",
+    };
   }
 
   // Next password must be at least 8 characters
   if (trimmedNext.length < 8) {
-    return { valid: false, error: "New password must be at least 8 characters." };
+    return {
+      valid: false,
+      error: "New password must be at least 8 characters.",
+      errorKey: "user.newPasswordTooShort",
+    };
   }
 
   // Next and confirm must match
   if (trimmedNext !== trimmedConfirm) {
-    return { valid: false, error: "New passwords do not match." };
+    return {
+      valid: false,
+      error: "New passwords do not match.",
+      errorKey: "user.newPasswordsDoNotMatch",
+    };
   }
 
   return { valid: true };

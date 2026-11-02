@@ -29,4 +29,18 @@ describe("i18n module", () => {
   test("returns raw key string when missing in all locales", () => {
     expect(t("nonexistent.key")).toBe("nonexistent.key");
   });
+
+  test("translates user profile dialog keys in vi and en", () => {
+    setLocale("vi");
+    expect(t("user.dialogTitle")).toBe("Hồ sơ người dùng");
+    expect(t("user.uploadBtn")).toBe("Tải ảnh lên");
+    expect(t("user.usernameLabel")).toBe("Tên đăng nhập");
+    expect(t("profiles.profileDeletedSuccess")).toBe("Đã xóa profile.");
+
+    setLocale("en");
+    expect(t("user.dialogTitle")).toBe("User Profile");
+    expect(t("user.uploadBtn")).toBe("Upload avatar");
+    expect(t("user.usernameLabel")).toBe("Username");
+    expect(t("profiles.profileDeletedSuccess")).toBe("Profile deleted.");
+  });
 });
