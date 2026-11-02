@@ -2,9 +2,10 @@ import type { RunnerCapabilities, RunnerCommand } from '@cc-web/protocol';
 
 export type SlashCommandItem = {
   name: string;
+  displayName: string;
   description: string;
   argumentHint?: string;
-  category: string;
+  category: 'skill' | 'builtin' | 'plugin' | 'agent';
   pluginName?: string;
 };
 

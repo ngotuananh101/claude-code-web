@@ -29,7 +29,7 @@ describe('slash-commands', () => {
       const commands = getAvailableCommands(mockCapabilities);
       expect(commands).toContainEqual({
         name: 'test-command',
-        displayName: 'Test Command',
+        displayName: 'test-command',
         description: 'A test command',
         category: 'plugin',
       });
