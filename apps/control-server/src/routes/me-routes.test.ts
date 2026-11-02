@@ -81,7 +81,9 @@ describe("me route", () => {
 
     const body = (await response.json()) as { username: string; avatar: string | null };
     expect(body.username).toBe("ngotuananh2101");
-    expect(body.avatar).toBe("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    expect(body.avatar).toBe(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    );
   });
 
   test("refuses a request without a session cookie", async () => {
@@ -138,13 +140,19 @@ describe("me route", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("cache-control")).toBe("no-store");
 
-      const body = (await response.json()) as { ok: boolean; username: string; avatar: string | null };
+      const body = (await response.json()) as {
+        ok: boolean;
+        username: string;
+        avatar: string | null;
+      };
       expect(body.ok).toBe(true);
       expect(body.username).toBe("newusername");
       expect(body.avatar).toBeNull();
 
       // Verify DB update
-      const row = db.query("SELECT username FROM users WHERE id = 'user-1'").get() as { username: string } | null;
+      const row = db.query("SELECT username FROM users WHERE id = 'user-1'").get() as {
+        username: string;
+      } | null;
       expect(row?.username).toBe("newusername");
     });
 
@@ -174,7 +182,8 @@ describe("me route", () => {
     test("updates avatar data URI", async () => {
       const { db, url, cookie } = await start();
 
-      const avatarData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      const avatarData =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       db.query("UPDATE users SET avatar = ? WHERE id = ?").run(avatarData, "user-1");
 
       const response = await fetch(`${url}/api/me`, {
@@ -189,7 +198,11 @@ describe("me route", () => {
 
       expect(response.status).toBe(200);
 
-      const body = (await response.json()) as { ok: boolean; username: string; avatar: string | null };
+      const body = (await response.json()) as {
+        ok: boolean;
+        username: string;
+        avatar: string | null;
+      };
       expect(body.ok).toBe(true);
       expect(body.avatar).toBe(avatarData);
 
@@ -220,12 +233,18 @@ describe("me route", () => {
 
       expect(response.status).toBe(200);
 
-      const body = (await response.json()) as { ok: boolean; username: string; avatar: string | null };
+      const body = (await response.json()) as {
+        ok: boolean;
+        username: string;
+        avatar: string | null;
+      };
       expect(body.ok).toBe(true);
       expect(body.avatar).toBeNull();
 
       // Verify DB update
-      const row = db.query("SELECT avatar FROM users WHERE id = 'user-1'").get() as { avatar: string | null };
+      const row = db.query("SELECT avatar FROM users WHERE id = 'user-1'").get() as {
+        avatar: string | null;
+      };
       expect(row.avatar).toBeNull();
     });
 
@@ -248,7 +267,11 @@ describe("me route", () => {
 
       expect(response.status).toBe(200);
 
-      const body = (await response.json()) as { ok: boolean; username: string; avatar: string | null };
+      const body = (await response.json()) as {
+        ok: boolean;
+        username: string;
+        avatar: string | null;
+      };
       expect(body.ok).toBe(true);
       expect(body.avatar).toBeNull();
     });
@@ -276,12 +299,18 @@ describe("me route", () => {
       expect(cookies.some((c) => c.includes("cc_session="))).toBe(true);
       expect(cookies.some((c) => c.includes("cc_refresh="))).toBe(true);
 
-      const body = (await response.json()) as { ok: boolean; username: string; avatar: string | null };
+      const body = (await response.json()) as {
+        ok: boolean;
+        username: string;
+        avatar: string | null;
+      };
       expect(body.ok).toBe(true);
       expect(body.username).toBe("ngotuananh2101");
 
       // Verify password changed and token_version bumped
-      const user = db.query("SELECT id, token_version, password_hash FROM users WHERE id = 'user-1'").get() as { id: string; token_version: number; password_hash: string };
+      const user = db
+        .query("SELECT id, token_version, password_hash FROM users WHERE id = 'user-1'")
+        .get() as { id: string; token_version: number; password_hash: string };
       expect(user.token_version).toBe(2);
       // New password should hash to "hash:newpassword456" (using the test hashPassword function)
       expect(user.password_hash).toBe("hash:newpassword456");
@@ -355,7 +384,14 @@ describe("me route", () => {
     test("validates username format (alphanumeric, underscore, dot, hyphen, 2-32 chars)", async () => {
       const { url, cookie } = await start();
 
-      const invalidUsernames = ["a", "user@name", "user name", "user!name", "user#name", "user$name"];
+      const invalidUsernames = [
+        "a",
+        "user@name",
+        "user name",
+        "user!name",
+        "user#name",
+        "user$name",
+      ];
       for (const username of invalidUsernames) {
         const response = await fetch(`${url}/api/me`, {
           method: "PATCH",
@@ -401,7 +437,7 @@ describe("me route", () => {
 
       // Need ~262144+ base64 chars to exceed 256KB after decode
       // 262144 bytes raw = 349526 base64 chars (262144 * 4/3)
-      const largeAvatar = "data:image/png;base64," + "a".repeat(349526);
+      const largeAvatar = `data:image/png;base64,${"a".repeat(349526)}`;
 
       const response = await fetch(`${url}/api/me`, {
         method: "PATCH",

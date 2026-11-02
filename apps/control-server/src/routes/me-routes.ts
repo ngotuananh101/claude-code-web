@@ -1,6 +1,11 @@
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
-import { COOKIE_NAME, REFRESH_COOKIE_NAME, ACCESS_TTL_SECONDS, REFRESH_TTL_SECONDS } from "./auth-routes.ts";
+import {
+  ACCESS_TTL_SECONDS,
+  COOKIE_NAME,
+  REFRESH_COOKIE_NAME,
+  REFRESH_TTL_SECONDS,
+} from "./auth-routes.ts";
 
 /**
  * The signed-in account's own name for the rail's footer (§16.2). The footer
@@ -51,7 +56,7 @@ function parseBase64Size(base64: string): number {
   // Remove any padding and calculate raw size
   const paddedLen = base64.length;
   const padding = base64.endsWith("=") ? (base64.endsWith("==") ? 2 : 1) : 0;
-  return (paddedLen - padding) * 3 / 4;
+  return ((paddedLen - padding) * 3) / 4;
 }
 
 export async function handleUpdateMe(
@@ -135,7 +140,7 @@ export async function handleUpdateMe(
         return new Response("invalid avatar format", { status: 400 });
       }
 
-      const base64Data = match[2];
+      const base64Data = match[2]!;
       const size = parseBase64Size(base64Data);
       if (size > 256 * 1024) {
         return new Response("avatar too large", { status: 400 });
@@ -171,10 +176,13 @@ export async function handleUpdateMe(
     }
 
     if (newPassword.length < 8) {
-      return new Response(JSON.stringify({ ok: false, error: "Mật khẩu mới phải có ít nhất 8 ký tự" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ ok: false, error: "Mật khẩu mới phải có ít nhất 8 ký tự" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
 
     if (!hashPassword) {
@@ -182,7 +190,9 @@ export async function handleUpdateMe(
     }
 
     const newHash = await hashPassword(newPassword);
-    options.db.query("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, authorized.userId);
+    options.db
+      .query("UPDATE users SET password_hash = ? WHERE id = ?")
+      .run(newHash, authorized.userId);
 
     // Bump token_version and re-mint tokens
     options.auth.revokeAllSessions(authorized.userId);
