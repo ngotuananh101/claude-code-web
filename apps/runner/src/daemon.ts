@@ -23,6 +23,7 @@ import {
   type DeclaredWorkspace,
   PROTOCOL_VERSION,
   type RpcResultFrame,
+  type RunnerCapabilities,
   type RunnerModel,
 } from "@cc-web/protocol";
 import { migrateRunnerDb } from "@cc-web/runner-db";
@@ -144,6 +145,12 @@ export function helloFrame(input: {
   declaredWorkspaces?: DeclaredWorkspace[];
   /** What this boot's Claude Code offers (§5.2); absent means pre-discovery. */
   models?: RunnerModel[];
+  /**
+   * What this boot's Claude Code offers beyond models (§4.1): the slash
+   * commands, plugins, MCP servers and subagents discovered at boot. Absent
+   * means discovery never ran.
+   */
+  runnerCapabilities?: RunnerCapabilities;
 }): Record<string, unknown> {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -165,6 +172,13 @@ export function helloFrame(input: {
     // than empty when discovery never ran, so the server can tell "old runner"
     // from "asked and found none" the same way it does for workspaces.
     ...(input.models === undefined ? {} : { models: input.models }),
+    // §4.1: the discovered catalogue, serialized as-is. The parsers on the
+    // server side whitelist the fields that survive, so an MCP server's `env`
+    // block — the one place a catalogue record can carry a credential — never
+    // reaches the wire journal even if this runner failed to redact it.
+    ...(input.runnerCapabilities === undefined
+      ? {}
+      : { runnerCapabilities: input.runnerCapabilities }),
   };
 }
 
@@ -181,6 +195,12 @@ export type DaemonOptions = {
    * — a config change needs a restart, exactly like the deployed binary.
    */
   models?: RunnerModel[];
+  /**
+   * The capabilities this boot discovered (§4.1): commands, plugins, MCP
+   * servers and agents. Discovered once at boot and advertised in the hello;
+   * absent means discovery never ran.
+   */
+  runnerCapabilities?: RunnerCapabilities;
   /**
    * Resolves a workspace id to its canonical path. A command naming a workspace
    * this runner does not know is refused rather than run in an arbitrary
@@ -434,6 +454,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         bootId: bootId(),
         ...(declared === undefined ? {} : { declaredWorkspaces: declared }),
         ...(options.models === undefined ? {} : { models: options.models }),
+        ...(options.runnerCapabilities === undefined
+          ? {}
+          : { runnerCapabilities: options.runnerCapabilities }),
       });
     },
     inventory: options.inventory ?? (() => runs.inventory()),

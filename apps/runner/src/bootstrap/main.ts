@@ -17,6 +17,7 @@ import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
+import { discoverCapabilities } from "../execution/capability-catalog.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
@@ -264,11 +265,23 @@ async function start(options?: Record<string, string>): Promise<void> {
       .join(", ")}`,
   );
 
+  // §4.1: discover what this host's Claude Code offers — commands, plugins,
+  // agents and MCP servers. Bounded and best-effort (never rejects): a source
+  // that cannot answer just means that part of the catalogue is empty.
+  const capabilities = await discoverCapabilities({
+    cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? homedir(),
+    homeDir: process.env["HOME"] ?? homedir(),
+  });
+  console.log(
+    `discovered ${capabilities.commands.length} command${capabilities.commands.length === 1 ? "" : "s"}, ${capabilities.plugins.length} plugin${capabilities.plugins.length === 1 ? "" : "s"}, ${capabilities.agents.length} agent${capabilities.agents.length === 1 ? "" : "s"}, ${capabilities.mcpServers.length} MCP server${capabilities.mcpServers.length === 1 ? "" : "s"}`,
+  );
+
   const daemon = await startDaemon({
     identityDir: dir,
     runnerVersion: "0.0.0",
     sdkVersion: "0.3.309",
     models,
+    runnerCapabilities: capabilities,
     workspacePathFor: (workspaceId) => registry.pathFor(workspaceId),
     declaredWorkspaces: () =>
       registry.list().map((workspace) => {

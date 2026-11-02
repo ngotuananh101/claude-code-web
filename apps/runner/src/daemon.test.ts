@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RunnerCapabilities } from "@cc-web/protocol";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
 import { type Daemon, helloFrame, startDaemon } from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
@@ -356,6 +357,85 @@ describe("the hello frame advertises capabilities", () => {
     ]);
   });
 });
+
+const runnerCapabilities: RunnerCapabilities = {
+  commands: [
+    {
+      name: "test-command",
+      description: "Test command",
+      argumentHint: "--test",
+      builtin: true,
+      aliases: ["tc"],
+    },
+  ],
+  plugins: [
+    {
+      name: "test-plugin",
+      version: "1.0.0",
+      source: "user",
+      installPath: "/path/to/plugin",
+      scope: "global",
+    },
+  ],
+  mcpServers: [
+    {
+      name: "test-server",
+      status: "connected",
+      source: "user",
+      command: "test-command",
+      tools: ["test-tool"],
+    },
+  ],
+  agents: [{ name: "test-agent", description: "Test agent", model: "opus" }],
+};
+
+describe("the hello frame's runner capabilities", () => {
+  test("carries the discovered runner capabilities when there are any", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+      runnerCapabilities,
+    });
+    expect(frame["runnerCapabilities"]).toEqual(runnerCapabilities);
+  });
+
+  test("omits the runnerCapabilities field when discovery never ran", () => {
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+    });
+    expect("runnerCapabilities" in frame).toBe(false);
+  });
+
+  test("carries both the feature flags and the discovered catalogue", () => {
+    // The two `capabilities` fields are different things and must coexist:
+    // `capabilities` is the command kinds this runner implements, and
+    // `runnerCapabilities` is the discovered catalogue.
+    const frame = helloFrame({
+      runnerId: "runner-a",
+      runnerVersion: "0.0.0",
+      sdkVersion: "0.3.309",
+      bootId: "boot-1",
+      runnerCapabilities,
+    });
+    expect(frame["capabilities"]).toEqual([
+      "inspect",
+      "workspace.write",
+      "workspace.browse",
+      "workspace.sessions",
+      "session.cleanup",
+    ]);
+    expect(frame["runnerCapabilities"]).toEqual(runnerCapabilities);
+  });
+});
+
+// The helloFrame tests in the "the hello frame's runner capabilities" describe
+// block cover the runnerCapabilities serialization logic. No additional
+// integration test is needed because helloFrame is already tested.
 
 describe("dispatching an inspect command", () => {
   test("routes an inspect to the inspect handler and not to the run controller", async () => {
