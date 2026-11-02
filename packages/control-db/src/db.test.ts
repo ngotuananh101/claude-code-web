@@ -34,6 +34,16 @@ describe("migrate", () => {
     expect(columns).toContain("token_version");
   });
 
+  test("users carries the avatar column", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+
+    const columns = (db.query("PRAGMA table_info(users)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
+    expect(columns).toContain("avatar");
+  });
+
   test("is idempotent", () => {
     const db = new Database(":memory:");
     migrate(db);

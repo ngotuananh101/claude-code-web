@@ -37,9 +37,11 @@ export function migrate(db: Database): void {
       -- A maintained library's output, never hand-rolled (§19.1).
       password_hash TEXT NOT NULL,
       token_version INTEGER NOT NULL DEFAULT 1,
-      created_at    INTEGER NOT NULL
+      created_at    INTEGER NOT NULL,
+      avatar        TEXT
     );
   `);
+  addColumnIfMissing(db, "users", "avatar", "TEXT");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS runners (
