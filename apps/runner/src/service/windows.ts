@@ -20,6 +20,7 @@ export type WindowsTaskOptions = {
   homeDir: string;
   environmentFile?: string | undefined;
   scope?: "system" | "user" | undefined;
+  logDir?: string | undefined;
   logFile?: string | undefined;
 };
 
@@ -28,6 +29,7 @@ export type WindowsTaskPaths = {
   cmdPath: string;
   vbsPath: string;
   xmlPath: string;
+  logDir: string;
   logPath: string;
 };
 
@@ -49,14 +51,14 @@ function escapeXml(unsafe: string): string {
 
 export function windowsTaskPaths(opts: WindowsTaskOptions): WindowsTaskPaths {
   const normHome = opts.homeDir.replaceAll("/", "\\");
-  const normLog = opts.logFile
-    ? opts.logFile.replaceAll("/", "\\")
-    : `${normHome}\\cc-web-runner.log`;
+  const normLogDir = opts.logDir ? opts.logDir.replaceAll("/", "\\") : `${normHome}\\logs`;
+  const normLog = opts.logFile ? opts.logFile.replaceAll("/", "\\") : `${normLogDir}\\runner.log`;
   return {
     homeDir: normHome,
     cmdPath: `${normHome}\\run-runner.cmd`,
     vbsPath: `${normHome}\\run-runner.vbs`,
     xmlPath: `${normHome}\\cc-web-runner-task.xml`,
+    logDir: normLogDir,
     logPath: normLog,
   };
 }
@@ -67,13 +69,13 @@ export function windowsTaskPaths(opts: WindowsTaskOptions): WindowsTaskPaths {
  */
 export function renderRunnerCmd(opts: WindowsTaskOptions): string {
   const paths = windowsTaskPaths(opts);
-  const argsList = ["connect", `--home "${paths.homeDir}"`];
+  const argsList = ["connect", `--home "${paths.homeDir}"`, `--log-dir "${paths.logDir}"`];
   if (opts.environmentFile) {
     argsList.push(`--env-file "${opts.environmentFile.replaceAll("/", "\\")}"`);
   }
   const argsString = argsList.join(" ");
 
-  return `@echo off\r\n"${opts.executablePath.replaceAll("/", "\\")}" ${argsString} >> "${paths.logPath}" 2>&1\r\n`;
+  return `@echo off\r\nif not exist "${paths.logDir}" mkdir "${paths.logDir}"\r\n"${opts.executablePath.replaceAll("/", "\\")}" ${argsString} >> "${paths.logPath}" 2>&1\r\n`;
 }
 
 /**
@@ -160,6 +162,7 @@ export async function installWindowsTask(
 
   if (io.mkdir) {
     await io.mkdir(paths.homeDir);
+    await io.mkdir(paths.logDir);
   }
 
   // 1. Write the runner batch script redirecting output to the log file

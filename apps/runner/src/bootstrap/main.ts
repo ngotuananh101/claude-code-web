@@ -13,16 +13,15 @@
 
 import { Database } from "bun:sqlite";
 import { execSync } from "node:child_process";
-import { mkdirSync, openSync, writeSync } from "node:fs";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
 import { runnerInfo } from "../index.ts";
+import { DailyRotatingLogger } from "../logging/rotating-logger.ts";
 import {
   renderSystemdUnit,
   type SystemdIo,
@@ -298,45 +297,6 @@ async function start(options?: Record<string, string>): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
-function setupFileLogging(filePath: string): void {
-  try {
-    mkdirSync(dirname(filePath), { recursive: true });
-    const fd = openSync(filePath, "a");
-    const origStdout = process.stdout.write.bind(process.stdout);
-    const origStderr = process.stderr.write.bind(process.stderr);
-
-    process.stdout.write = (chunk: unknown, ...args: unknown[]) => {
-      try {
-        if (typeof chunk === "string") {
-          writeSync(fd, chunk);
-        } else if (Buffer.isBuffer(chunk)) {
-          writeSync(fd, chunk);
-        } else {
-          writeSync(fd, String(chunk));
-        }
-      } catch {}
-      // @ts-expect-error Node/Bun write stream signature compatibility
-      return origStdout(chunk, ...args);
-    };
-
-    process.stderr.write = (chunk: unknown, ...args: unknown[]) => {
-      try {
-        if (typeof chunk === "string") {
-          writeSync(fd, chunk);
-        } else if (Buffer.isBuffer(chunk)) {
-          writeSync(fd, chunk);
-        } else {
-          writeSync(fd, String(chunk));
-        }
-      } catch {}
-      // @ts-expect-error Node/Bun write stream signature compatibility
-      return origStderr(chunk, ...args);
-    };
-  } catch (err) {
-    console.warn(`warning: could not open log file ${filePath}: ${err}`);
-  }
-}
-
 switch (command) {
   case "-h":
   case "--help":
@@ -358,9 +318,17 @@ switch (command) {
     if (options["home"]) {
       process.env["CC_WEB_RUNNER_HOME"] = options["home"];
     }
-    const logFile = options["log-file"] ?? process.env["CC_WEB_RUNNER_LOG_FILE"];
-    if (logFile) {
-      setupFileLogging(logFile);
+    const home = options["home"] ?? identityDir();
+    const logDir = options["log-dir"] ?? process.env["CC_WEB_RUNNER_LOG_DIR"];
+
+    // Automatically rotate daily logs in logDir (defaulting to <home>/logs on Windows or when specified)
+    const targetLogDir = logDir ?? (process.platform === "win32" ? `${home}/logs` : undefined);
+    if (targetLogDir) {
+      const logger = new DailyRotatingLogger({
+        logDir: targetLogDir,
+        maxDays: 14,
+      });
+      logger.install();
     }
     await start(options);
     break;
@@ -444,7 +412,9 @@ switch (command) {
         const scopeNote = scope === "system" ? " (system startup)" : " (user logon)";
         console.log(`installed and started scheduled task ${WINDOWS_TASK_NAME}${scopeNote}`);
         console.log(`  task definition: ${paths.xmlPath}`);
-        console.log(`  log file:        ${paths.logPath}`);
+        console.log(`  log folder:      ${paths.logDir}`);
+        console.log(`  runner log:      ${paths.logPath}`);
+        console.log(`  daily log:       ${paths.logDir}\\runner-YYYY-MM-DD.log`);
         console.log(`next: schtasks /query /tn ${WINDOWS_TASK_NAME} /fo list /v`);
         console.log(
           `logs: type "${paths.logPath}"   (or in PowerShell: Get-Content -Wait "${paths.logPath}")`,

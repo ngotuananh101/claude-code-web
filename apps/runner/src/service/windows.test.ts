@@ -17,7 +17,7 @@ const sampleOpts = {
 const userTask = renderWindowsTaskXml(sampleOpts);
 
 describe("windowsTaskPaths", () => {
-  test("normalizes backslashes and derives cmd, vbs, xml, and log paths", () => {
+  test("normalizes backslashes and derives cmd, vbs, xml, logDir, and log paths", () => {
     const paths = windowsTaskPaths({
       executablePath: "C:/bin/runner.exe",
       homeDir: "C:/Users/User/.cc-web-runner",
@@ -27,26 +27,32 @@ describe("windowsTaskPaths", () => {
     expect(paths.cmdPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.cmd");
     expect(paths.vbsPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.vbs");
     expect(paths.xmlPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml");
-    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log");
+    expect(paths.logDir).toBe("C:\\Users\\User\\.cc-web-runner\\logs");
+    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\logs\\runner.log");
   });
 
-  test("uses custom log file path when specified", () => {
+  test("uses custom log dir and log file path when specified", () => {
     const paths = windowsTaskPaths({
       executablePath: "C:\\runner.exe",
       homeDir: "C:\\home",
-      logFile: "D:/logs/custom.log",
+      logDir: "D:/runner-logs",
+      logFile: "D:/runner-logs/custom.log",
     });
 
-    expect(paths.logPath).toBe("D:\\logs\\custom.log");
+    expect(paths.logDir).toBe("D:\\runner-logs");
+    expect(paths.logPath).toBe("D:\\runner-logs\\custom.log");
   });
 });
 
 describe("renderRunnerCmd", () => {
-  test("generates batch script redirecting all output to log file", () => {
+  test("generates batch script creating log dir and redirecting output to log file", () => {
     const cmd = renderRunnerCmd(sampleOpts);
     expect(cmd).toContain("@echo off");
     expect(cmd).toContain(
-      '"C:\\Program Files\\cc-web-runner\\cc-web-runner-windows-x64.exe" connect --home "C:\\Users\\User\\.cc-web-runner" >> "C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log" 2>&1',
+      'if not exist "C:\\Users\\User\\.cc-web-runner\\logs" mkdir "C:\\Users\\User\\.cc-web-runner\\logs"',
+    );
+    expect(cmd).toContain(
+      '"C:\\Program Files\\cc-web-runner\\cc-web-runner-windows-x64.exe" connect --home "C:\\Users\\User\\.cc-web-runner" --log-dir "C:\\Users\\User\\.cc-web-runner\\logs" >> "C:\\Users\\User\\.cc-web-runner\\logs\\runner.log" 2>&1',
     );
   });
 
@@ -151,30 +157,35 @@ describe("installWindowsTask", () => {
     expect(paths.xmlPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml");
     expect(paths.cmdPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.cmd");
     expect(paths.vbsPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.vbs");
-    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log");
+    expect(paths.logDir).toBe("C:\\Users\\User\\.cc-web-runner\\logs");
+    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\logs\\runner.log");
 
     expect(calls[0]).toEqual({
       kind: "mkdir",
       target: "C:\\Users\\User\\.cc-web-runner",
     });
     expect(calls[1]).toEqual({
-      kind: "write",
-      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.cmd",
+      kind: "mkdir",
+      target: "C:\\Users\\User\\.cc-web-runner\\logs",
     });
     expect(calls[2]).toEqual({
       kind: "write",
-      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.vbs",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.cmd",
     });
     expect(calls[3]).toEqual({
       kind: "write",
-      target: "C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.vbs",
     });
     expect(calls[4]).toEqual({
+      kind: "write",
+      target: "C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml",
+    });
+    expect(calls[5]).toEqual({
       kind: "run",
       target: "schtasks",
       args: ["/end", "/tn", TASK_NAME],
     });
-    expect(calls[5]).toEqual({
+    expect(calls[6]).toEqual({
       kind: "run",
       target: "schtasks",
       args: [
@@ -186,7 +197,7 @@ describe("installWindowsTask", () => {
         "/f",
       ],
     });
-    expect(calls[6]).toEqual({
+    expect(calls[7]).toEqual({
       kind: "run",
       target: "schtasks",
       args: ["/run", "/tn", TASK_NAME],
