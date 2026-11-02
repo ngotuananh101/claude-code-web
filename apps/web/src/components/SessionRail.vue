@@ -5,6 +5,7 @@ import {
   ArrowUpWideNarrow,
   ChevronLeft,
   ChevronRight,
+  EllipsisVertical,
   Folder,
   Key,
   LayoutDashboard,
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useI18n } from "@/lib/i18n";
 import {
   groupSessions,
   nextGrouping,
@@ -55,6 +57,7 @@ import {
 } from "../stores/sessions.ts";
 import ConfirmDeleteDialog from "./ConfirmDeleteDialog.vue";
 import ConnectionChip from "./ConnectionChip.vue";
+import UserProfileDialog from "./profiles/UserProfileDialog.vue";
 import RenameDialog from "./RenameDialog.vue";
 
 const route = useRoute();
@@ -141,6 +144,11 @@ const canGoForward = computed(() => {
 
 // The avatar is the account's first letter; "?" while /api/me is in flight.
 const accountInitial = computed(() => sessions.account?.[0] ?? "?");
+
+// Language and user menu state
+const { locale, setLocale, t } = useI18n();
+const profileDialogOpen = ref(false);
+const userMenuOpen = ref(false);
 
 // The rail's "5m ago" stays honest on an open page.
 const now = ref(Date.now());
@@ -501,23 +509,81 @@ async function handleDeleteConfirm(): Promise<void> {
     </ScrollArea>
 
     <footer class="px-3 py-2.5">
-      <div class="flex items-center gap-2.5">
-        <span
-          class="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary uppercase"
+      <Popover :open="userMenuOpen" @update:open="(val: boolean) => (userMenuOpen = val)">
+        <PopoverTrigger as-child>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus:outline-none focus:ring-2 focus:ring-sidebar-accent focus:ring-offset-2"
+            aria-label="Menu người dùng"
+          >
+            <span v-if="sessions.avatar" class="shrink-0 rounded-full object-cover">
+              <img
+                :src="sessions.avatar"
+                alt="Avatar"
+                class="size-6 shrink-0 rounded-full object-cover"
+              />
+            </span>
+            <span
+              v-else
+              class="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary uppercase"
+            >
+              {{ accountInitial }}
+            </span>
+            <span class="flex-1 truncate text-[13px] font-medium text-left">{{
+              sessions.account ?? "—"
+            }}</span>
+            <EllipsisVertical :size="14" class="shrink-0 text-muted-foreground" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          class="w-56 p-1 rounded-lg"
+          align="end"
+          :side-offset="4"
+          @open-auto-focus="(e: Event) => e.preventDefault()"
         >
-          {{ accountInitial }}
-        </span>
-        <span class="flex-1 truncate text-[13px]">{{ sessions.account ?? "—" }}</span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Đăng xuất"
-          class="text-muted-foreground hover:text-destructive"
-          @click="signOut"
-        >
-          <LogOut :size="14" />
-        </Button>
-      </div>
+          <div class="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+            {{ t("user.language") }}
+          </div>
+          <div class="grid grid-cols-2 gap-0.5 px-2 pb-2">
+            <Button
+              :variant="locale === 'vi' ? 'secondary' : 'ghost'"
+              size="xs"
+              class="gap-1"
+              @click="() => { setLocale('vi'); userMenuOpen = false }"
+            >
+              <span>🇻🇳</span>
+              <span>VN</span>
+            </Button>
+            <Button
+              :variant="locale === 'en' ? 'secondary' : 'ghost'"
+              size="xs"
+              class="gap-1"
+              @click="() => { setLocale('en'); userMenuOpen = false }"
+            >
+              <span>🇺🇸</span>
+              <span>EN</span>
+            </Button>
+          </div>
+          <div class="my-1 h-px bg-border" />
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+            @click="() => { profileDialogOpen = true; userMenuOpen = false }"
+          >
+            <Pencil :size="13" class="shrink-0" />
+            <span>{{ t("user.profile") }}</span>
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+            @click="() => { signOut(); userMenuOpen = false }"
+          >
+            <LogOut :size="13" class="shrink-0" />
+            <span>{{ t("common.logout") }}</span>
+          </button>
+        </PopoverContent>
+      </Popover>
+      <UserProfileDialog v-model:open="profileDialogOpen" />
     </footer>
 
     <CommandDialog
