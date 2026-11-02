@@ -1,23 +1,82 @@
 import { describe, expect, test } from "bun:test";
 import {
   installWindowsTask,
+  renderRunnerCmd,
+  renderRunnerVbs,
   renderWindowsTaskXml,
   TASK_NAME,
   uninstallWindowsTask,
+  windowsTaskPaths,
 } from "./windows.ts";
 
-const userTask = renderWindowsTaskXml({
+const sampleOpts = {
   executablePath: "C:\\Program Files\\cc-web-runner\\cc-web-runner-windows-x64.exe",
   homeDir: "C:\\Users\\User\\.cc-web-runner",
+};
+
+const userTask = renderWindowsTaskXml(sampleOpts);
+
+describe("windowsTaskPaths", () => {
+  test("normalizes backslashes and derives cmd, vbs, xml, and log paths", () => {
+    const paths = windowsTaskPaths({
+      executablePath: "C:/bin/runner.exe",
+      homeDir: "C:/Users/User/.cc-web-runner",
+    });
+
+    expect(paths.homeDir).toBe("C:\\Users\\User\\.cc-web-runner");
+    expect(paths.cmdPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.cmd");
+    expect(paths.vbsPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.vbs");
+    expect(paths.xmlPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml");
+    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log");
+  });
+
+  test("uses custom log file path when specified", () => {
+    const paths = windowsTaskPaths({
+      executablePath: "C:\\runner.exe",
+      homeDir: "C:\\home",
+      logFile: "D:/logs/custom.log",
+    });
+
+    expect(paths.logPath).toBe("D:\\logs\\custom.log");
+  });
+});
+
+describe("renderRunnerCmd", () => {
+  test("generates batch script redirecting all output to log file", () => {
+    const cmd = renderRunnerCmd(sampleOpts);
+    expect(cmd).toContain("@echo off");
+    expect(cmd).toContain(
+      '"C:\\Program Files\\cc-web-runner\\cc-web-runner-windows-x64.exe" connect --home "C:\\Users\\User\\.cc-web-runner" >> "C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log" 2>&1',
+    );
+  });
+
+  test("includes environment file when configured", () => {
+    const cmd = renderRunnerCmd({
+      ...sampleOpts,
+      environmentFile: "C:\\runner.env",
+    });
+    expect(cmd).toContain('--env-file "C:\\runner.env"');
+  });
+});
+
+describe("renderRunnerVbs", () => {
+  test("generates windowless VBS launcher with WshShell.Run style 0", () => {
+    const vbs = renderRunnerVbs("C:\\Users\\User\\.cc-web-runner\\run-runner.cmd");
+    expect(vbs).toContain('Set WshShell = CreateObject("WScript.Shell")');
+    expect(vbs).toContain(
+      'WshShell.Run "cmd.exe /c """ & "C:\\Users\\User\\.cc-web-runner\\run-runner.cmd" & """", 0, True',
+    );
+  });
 });
 
 describe("renderWindowsTaskXml", () => {
-  test("starts the connector subcommand with runner home", () => {
+  test("executes wscript with //nologo and the hidden vbs launcher", () => {
+    expect(userTask).toContain("<Command>wscript.exe</Command>");
     expect(userTask).toContain(
-      "<Command>C:\\Program Files\\cc-web-runner\\cc-web-runner-windows-x64.exe</Command>",
+      "<Arguments>//nologo &quot;C:\\Users\\User\\.cc-web-runner\\run-runner.vbs&quot;</Arguments>",
     );
     expect(userTask).toContain(
-      "<Arguments>connect --home &quot;C:\\Users\\User\\.cc-web-runner&quot;</Arguments>",
+      "<WorkingDirectory>C:\\Users\\User\\.cc-web-runner</WorkingDirectory>",
     );
   });
 
@@ -53,27 +112,18 @@ describe("renderWindowsTaskXml", () => {
     expect(userTask).not.toContain("TOKEN=");
   });
 
-  test("escapes XML special characters in paths and args", () => {
+  test("escapes XML special characters in vbs launcher path", () => {
     const withSpecialChars = renderWindowsTaskXml({
       executablePath: "C:\\Tools & Apps\\runner<test>.exe",
       homeDir: "C:\\Users\\A & B\\.cc-web-runner",
     });
-    expect(withSpecialChars).toContain("C:\\Tools &amp; Apps\\runner&lt;test&gt;.exe");
+    expect(withSpecialChars).toContain("C:\\Users\\A &amp; B\\.cc-web-runner\\run-runner.vbs");
     expect(withSpecialChars).toContain("C:\\Users\\A &amp; B\\.cc-web-runner");
-  });
-
-  test("passes environment file via command argument when specified", () => {
-    const withEnv = renderWindowsTaskXml({
-      executablePath: "C:\\cc-web-runner.exe",
-      homeDir: "C:\\Users\\User\\.cc-web-runner",
-      environmentFile: "C:\\cc-web-runner.env",
-    });
-    expect(withEnv).toContain("--env-file &quot;C:\\cc-web-runner.env&quot;");
   });
 });
 
 describe("installWindowsTask", () => {
-  test("writes the xml definition, registers task with schtasks /xml and runs it", async () => {
+  test("writes cmd, vbs, xml, stops prior instance, registers with schtasks /xml and runs", async () => {
     const calls: Array<{ kind: string; target: string; args?: string[] }> = [];
     const io = {
       writeFile: async (path: string) => {
@@ -85,9 +135,12 @@ describe("installWindowsTask", () => {
       runCommand: async (command: string, args: string[]) => {
         calls.push({ kind: "run", target: command, args });
       },
+      mkdir: async (path: string) => {
+        calls.push({ kind: "mkdir", target: path });
+      },
     };
 
-    const xmlPath = await installWindowsTask(
+    const paths = await installWindowsTask(
       {
         executablePath: "C:\\cc-web-runner.exe",
         homeDir: "C:\\Users\\User\\.cc-web-runner",
@@ -95,12 +148,33 @@ describe("installWindowsTask", () => {
       io,
     );
 
-    expect(xmlPath).toBe("C:\\Users\\User\\.cc-web-runner/cc-web-runner-task.xml");
+    expect(paths.xmlPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml");
+    expect(paths.cmdPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.cmd");
+    expect(paths.vbsPath).toBe("C:\\Users\\User\\.cc-web-runner\\run-runner.vbs");
+    expect(paths.logPath).toBe("C:\\Users\\User\\.cc-web-runner\\cc-web-runner.log");
+
     expect(calls[0]).toEqual({
-      kind: "write",
-      target: "C:\\Users\\User\\.cc-web-runner/cc-web-runner-task.xml",
+      kind: "mkdir",
+      target: "C:\\Users\\User\\.cc-web-runner",
     });
     expect(calls[1]).toEqual({
+      kind: "write",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.cmd",
+    });
+    expect(calls[2]).toEqual({
+      kind: "write",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.vbs",
+    });
+    expect(calls[3]).toEqual({
+      kind: "write",
+      target: "C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml",
+    });
+    expect(calls[4]).toEqual({
+      kind: "run",
+      target: "schtasks",
+      args: ["/end", "/tn", TASK_NAME],
+    });
+    expect(calls[5]).toEqual({
       kind: "run",
       target: "schtasks",
       args: [
@@ -108,11 +182,11 @@ describe("installWindowsTask", () => {
         "/tn",
         TASK_NAME,
         "/xml",
-        "C:\\Users\\User\\.cc-web-runner/cc-web-runner-task.xml",
+        "C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml",
         "/f",
       ],
     });
-    expect(calls[2]).toEqual({
+    expect(calls[6]).toEqual({
       kind: "run",
       target: "schtasks",
       args: ["/run", "/tn", TASK_NAME],
@@ -122,7 +196,7 @@ describe("installWindowsTask", () => {
 });
 
 describe("uninstallWindowsTask", () => {
-  test("stops the task, deletes the task and removes the xml file", async () => {
+  test("stops the task, deletes the task and removes xml, vbs, and cmd files", async () => {
     const calls: Array<{ kind: string; target: string; args?: string[] }> = [];
     const io = {
       writeFile: async (path: string) => {
@@ -150,7 +224,15 @@ describe("uninstallWindowsTask", () => {
     });
     expect(calls[2]).toEqual({
       kind: "remove",
-      target: "C:\\Users\\User\\.cc-web-runner/cc-web-runner-task.xml",
+      target: "C:\\Users\\User\\.cc-web-runner\\cc-web-runner-task.xml",
+    });
+    expect(calls[3]).toEqual({
+      kind: "remove",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.vbs",
+    });
+    expect(calls[4]).toEqual({
+      kind: "remove",
+      target: "C:\\Users\\User\\.cc-web-runner\\run-runner.cmd",
     });
   });
 
@@ -173,7 +255,7 @@ describe("uninstallWindowsTask", () => {
 
     await uninstallWindowsTask(io, { homeDir: "C:\\Users\\User\\.cc-web-runner" });
 
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(5);
     const deleteCall = calls[1];
     expect(deleteCall).toBeDefined();
     expect(deleteCall?.args).toEqual(["/delete", "/tn", TASK_NAME, "/f"]);

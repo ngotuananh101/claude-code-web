@@ -9,7 +9,8 @@
  * - Starts automatically at user logon (`/SC ONLOGON`) or system startup (`/SC ONSTART`)
  * - Auto-restarts on failure (`<RestartOnFailure>`)
  * - Runs indefinitely on AC and battery power without a 72-hour execution limit (`PT0S`)
- * - Runs hidden without keeping a console window open
+ * - Runs completely hidden without showing a console window on screen
+ * - Redirects all daemon output (stdout & stderr) to a dedicated log file
  */
 
 export const TASK_NAME = "cc-web-runner";
@@ -19,12 +20,22 @@ export type WindowsTaskOptions = {
   homeDir: string;
   environmentFile?: string | undefined;
   scope?: "system" | "user" | undefined;
+  logFile?: string | undefined;
+};
+
+export type WindowsTaskPaths = {
+  homeDir: string;
+  cmdPath: string;
+  vbsPath: string;
+  xmlPath: string;
+  logPath: string;
 };
 
 export type WindowsTaskIo = {
   writeFile: (path: string, content: string) => Promise<void>;
   removeFile: (path: string) => Promise<void>;
   runCommand: (command: string, args: string[]) => Promise<void>;
+  mkdir?: (path: string) => Promise<void>;
 };
 
 function escapeXml(unsafe: string): string {
@@ -36,8 +47,47 @@ function escapeXml(unsafe: string): string {
     .replace(/'/g, "&apos;");
 }
 
+export function windowsTaskPaths(opts: WindowsTaskOptions): WindowsTaskPaths {
+  const normHome = opts.homeDir.replaceAll("/", "\\");
+  const normLog = opts.logFile
+    ? opts.logFile.replaceAll("/", "\\")
+    : `${normHome}\\cc-web-runner.log`;
+  return {
+    homeDir: normHome,
+    cmdPath: `${normHome}\\run-runner.cmd`,
+    vbsPath: `${normHome}\\run-runner.vbs`,
+    xmlPath: `${normHome}\\cc-web-runner-task.xml`,
+    logPath: normLog,
+  };
+}
+
+/**
+ * Generates the Windows command script that starts the runner daemon
+ * and redirects all stdout and stderr output to the dedicated log file.
+ */
+export function renderRunnerCmd(opts: WindowsTaskOptions): string {
+  const paths = windowsTaskPaths(opts);
+  const argsList = ["connect", `--home "${paths.homeDir}"`];
+  if (opts.environmentFile) {
+    argsList.push(`--env-file "${opts.environmentFile.replaceAll("/", "\\")}"`);
+  }
+  const argsString = argsList.join(" ");
+
+  return `@echo off\r\n"${opts.executablePath.replaceAll("/", "\\")}" ${argsString} >> "${paths.logPath}" 2>&1\r\n`;
+}
+
+/**
+ * Generates a VBScript launcher that invokes the runner batch script with
+ * window style 0 (SW_HIDE), ensuring no console or terminal window is created.
+ */
+export function renderRunnerVbs(cmdPath: string): string {
+  const normCmd = cmdPath.replaceAll("/", "\\");
+  return `Set WshShell = CreateObject("WScript.Shell")\r\nWshShell.Run "cmd.exe /c """ & "${normCmd}" & """", 0, True\r\n`;
+}
+
 export function renderWindowsTaskXml(opts: WindowsTaskOptions): string {
   const isSystem = opts.scope === "system";
+  const paths = windowsTaskPaths(opts);
 
   const trigger = isSystem
     ? `<BootTrigger>
@@ -52,17 +102,6 @@ export function renderWindowsTaskXml(opts: WindowsTaskOptions): string {
       <RunLevel>HighestAvailable</RunLevel>`
     : `<LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>`;
-
-  const argsList = ["connect"];
-  if (opts.homeDir) {
-    argsList.push(`--home "${opts.homeDir}"`);
-  }
-  if (opts.environmentFile) {
-    argsList.push(`--env-file "${opts.environmentFile}"`);
-  }
-  const argsString = argsList.join(" ");
-
-  const workingDir = opts.homeDir || ".";
 
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -103,9 +142,9 @@ export function renderWindowsTaskXml(opts: WindowsTaskOptions): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>${escapeXml(opts.executablePath)}</Command>
-      <Arguments>${escapeXml(argsString)}</Arguments>
-      <WorkingDirectory>${escapeXml(workingDir)}</WorkingDirectory>
+      <Command>wscript.exe</Command>
+      <Arguments>//nologo &quot;${escapeXml(paths.vbsPath)}&quot;</Arguments>
+      <WorkingDirectory>${escapeXml(paths.homeDir || ".")}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
@@ -116,18 +155,40 @@ export function renderWindowsTaskXml(opts: WindowsTaskOptions): string {
 export async function installWindowsTask(
   opts: WindowsTaskOptions,
   io: WindowsTaskIo,
-): Promise<string> {
-  const xmlContent = renderWindowsTaskXml(opts);
-  const xmlPath = `${opts.homeDir}/cc-web-runner-task.xml`;
+): Promise<WindowsTaskPaths> {
+  const paths = windowsTaskPaths(opts);
 
-  await io.writeFile(xmlPath, xmlContent);
-  await io.runCommand("schtasks", ["/create", "/tn", TASK_NAME, "/xml", xmlPath, "/f"]);
+  if (io.mkdir) {
+    await io.mkdir(paths.homeDir);
+  }
+
+  // 1. Write the runner batch script redirecting output to the log file
+  const cmdContent = renderRunnerCmd(opts);
+  await io.writeFile(paths.cmdPath, cmdContent);
+
+  // 2. Write the VBScript launcher executing the script without a console window
+  const vbsContent = renderRunnerVbs(paths.cmdPath);
+  await io.writeFile(paths.vbsPath, vbsContent);
+
+  // 3. Write the Windows Task definition XML
+  const xmlContent = renderWindowsTaskXml(opts);
+  await io.writeFile(paths.xmlPath, xmlContent);
+
+  // 4. Ensure previous instance is stopped if running
+  try {
+    await io.runCommand("schtasks", ["/end", "/tn", TASK_NAME]);
+  } catch {
+    // If unit was not running, proceed
+  }
+
+  // 5. Register and run the scheduled task
+  await io.runCommand("schtasks", ["/create", "/tn", TASK_NAME, "/xml", paths.xmlPath, "/f"]);
   await io.runCommand("schtasks", ["/run", "/tn", TASK_NAME]);
 
-  return xmlPath;
+  return paths;
 }
 
-/** Stops and removes the Windows scheduled task. */
+/** Stops and removes the Windows scheduled task and launcher files. */
 export async function uninstallWindowsTask(
   io: WindowsTaskIo,
   opts?: { homeDir?: string },
@@ -141,9 +202,19 @@ export async function uninstallWindowsTask(
   await io.runCommand("schtasks", ["/delete", "/tn", TASK_NAME, "/f"]);
 
   if (opts?.homeDir) {
-    const xmlPath = `${opts.homeDir}/cc-web-runner-task.xml`;
+    const paths = windowsTaskPaths({ executablePath: "", homeDir: opts.homeDir });
     try {
-      await io.removeFile(xmlPath);
+      await io.removeFile(paths.xmlPath);
+    } catch {
+      // Proceed idempotently if file is already deleted.
+    }
+    try {
+      await io.removeFile(paths.vbsPath);
+    } catch {
+      // Proceed idempotently if file is already deleted.
+    }
+    try {
+      await io.removeFile(paths.cmdPath);
     } catch {
       // Proceed idempotently if file is already deleted.
     }
