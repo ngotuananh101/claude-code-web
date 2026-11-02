@@ -208,6 +208,46 @@ describe("profiles two-way sync logic", () => {
     expect(form.modelMapping).toEqual({ sonnet: "prime" });
   });
 
+  test("profileFormFromDetail extracts model mapping from settings.env if modelMapping is empty", () => {
+    const detail: ProfileDetail = {
+      id: "prof_2",
+      profileId: "prof_2",
+      name: "9Router",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      hasKey: false,
+      modelMapping: {},
+      settings: {
+        env: {
+          ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-3-7-sonnet-20250219",
+          ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-3-opus-20240229",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-3-5-haiku-20241022",
+        },
+      },
+    };
+    const form = profileFormFromDetail(detail);
+    expect(form.modelMapping).toEqual({
+      sonnet: "claude-3-7-sonnet-20250219",
+      opus: "claude-3-opus-20240229",
+      haiku: "claude-3-5-haiku-20241022",
+    });
+  });
+
+  test("profileFormFromDetail fills roles missing from a partial modelMapping out of settings.env", () => {
+    const detail: ProfileDetail = {
+      id: "prof_3",
+      profileId: "prof_3",
+      name: "Mixed",
+      endpoint: "http://192.168.2.3:20128",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      hasKey: false,
+      modelMapping: { sonnet: "prime" },
+      settings: { env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "titan" } },
+    };
+    const form = profileFormFromDetail(detail);
+    expect(form.modelMapping).toEqual({ sonnet: "prime", opus: "titan" });
+  });
+
   test("profileSaveBody omits an empty apiKey and an empty settings object", () => {
     const body = profileSaveBody({
       name: "9Router",

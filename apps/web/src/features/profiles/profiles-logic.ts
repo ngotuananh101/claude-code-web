@@ -222,14 +222,35 @@ function extractString(record: Record<string, unknown>, key: string): string | u
  * beside `hasKey` is the editor's "keep the stored key" state (§4.2).
  */
 export function profileFormFromDetail(
-  detail: Pick<ProfileDetail, "name" | "endpoint" | "authField" | "modelMapping">,
+  detail: Pick<ProfileDetail, "name" | "endpoint" | "authField"> & {
+    modelMapping?: ModelMapping;
+    settings?: Record<string, unknown>;
+  },
 ): ProfileForm {
+  const modelMapping: ModelMapping = { ...(detail.modelMapping ?? {}) };
+  // Roles absent from the stored mapping may still live in `settings.env` (a
+  // profile created from raw JSON, or saved before the form owned the key).
+  // Recover them so the visual inputs populate instead of appearing blank —
+  // and so a later form save does not strip them from the regenerated JSON.
+  if (detail.settings?.["env"]) {
+    const env = detail.settings["env"];
+    if (typeof env === "object" && env !== null && !Array.isArray(env)) {
+      for (const [role, envVar] of Object.entries(MODEL_ROLE_ENV)) {
+        if (modelMapping[role as ModelRole] !== undefined) continue;
+        const val = (env as Record<string, unknown>)[envVar];
+        if (typeof val === "string" && val.trim() !== "") {
+          modelMapping[role as ModelRole] = val.trim();
+        }
+      }
+    }
+  }
+
   return {
     name: detail.name,
     endpoint: detail.endpoint,
     apiKey: "",
     authField: detail.authField,
-    modelMapping: detail.modelMapping ?? {},
+    modelMapping,
   };
 }
 

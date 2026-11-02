@@ -326,7 +326,9 @@ async function confirmDelete(): Promise<void> {
       <template v-else>
         <!-- The page is full width now: the form column stays readable at a
              fixed maximum and the JSON editor takes every remaining pixel. -->
-        <div class="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,28rem)_minmax(0,1fr)]">
+        <div
+          class="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,28rem)_minmax(0,1fr)] lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]"
+        >
           <!-- LEFT: Visual form + model mapping table -->
           <section class="space-y-5">
             <div class="space-y-2">
@@ -400,42 +402,34 @@ async function confirmDelete(): Promise<void> {
                   Khớp với cấu hình 9Router
                 </span>
               </div>
-              <div class="overflow-x-auto">
-                <table
-                  class="w-full table-fixed border-separate border-spacing-0 text-sm"
+              <div class="overflow-hidden rounded-md border border-border">
+                <div
+                  class="flex items-center gap-3 border-b border-border bg-muted/40 px-2 py-1.5 text-[11px] uppercase text-muted-foreground"
                 >
-                  <thead>
-                    <tr class="text-left text-[11px] uppercase text-muted-foreground">
-                      <th class="pb-1.5 pl-1">Vai trò Claude</th>
-                      <th class="pb-1.5">Biến môi trường</th>
-                      <th class="pb-1.5 pl-1">Tên model upstream</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      v-for="m in MODEL_ROLES"
-                      :key="m.role"
-                      class="border-t border-border"
+                  <span class="min-w-0 flex-1">Vai trò / biến môi trường</span>
+                  <span class="w-[52%] shrink-0">Tên model upstream</span>
+                </div>
+                <div
+                  v-for="m in MODEL_ROLES"
+                  :key="m.role"
+                  class="flex items-center gap-3 border-t border-border px-2 py-1.5 first:border-t-0"
+                >
+                  <div class="min-w-0 flex-1">
+                    <div class="font-medium capitalize">{{ m.role }}</div>
+                    <code
+                      :title="m.envVar"
+                      class="block truncate font-mono text-[10px] text-muted-foreground"
                     >
-                      <td class="py-1.5 pl-1 font-medium capitalize">
-                        {{ m.role }}
-                      </td>
-                      <td class="py-1.5">
-                        <code class="text-[10px] text-muted-foreground">
-                          {{ m.envVar }}
-                        </code>
-                      </td>
-                      <td class="py-1.5 pl-1">
-                        <Input
-                          :value="form.modelMapping[m.role] ?? ''"
-                          @update:model-value="onModelChange(m.role, $event)"
-                          placeholder="—"
-                          class="font-mono text-sm"
-                        />
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                      {{ m.envVar }}
+                    </code>
+                  </div>
+                  <Input
+                    :model-value="form.modelMapping[m.role] ?? ''"
+                    @update:model-value="onModelChange(m.role, String($event ?? ''))"
+                    placeholder="—"
+                    class="w-[52%] shrink-0 bg-background/60 font-mono text-sm"
+                  />
+                </div>
               </div>
             </div>
 
