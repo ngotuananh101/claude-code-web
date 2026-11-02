@@ -67,6 +67,7 @@ import {
   handleFileWrite,
   handleWorkspaceRevert,
 } from "./routes/mutation-routes.ts";
+import { handleListProfileModels } from "./routes/profile-models.ts";
 import {
   handleCreateRunner,
   handleDeleteRunner,
@@ -580,6 +581,20 @@ export function createServer(options: ServerOptions): ServerHandle {
         if (request.method === "POST") {
           return handleCreateProfile(request, { db: options.db, secretBox }, authorized);
         }
+      }
+      if (url.pathname === "/api/config/profiles/models" && request.method === "POST") {
+        const origin = request.headers.get("origin");
+        if (origin !== null && !allowed.has(origin)) {
+          return new Response("forbidden", { status: 403 });
+        }
+        const authorized = await browserGateway.authorize({
+          origin: origin ?? undefined,
+          cookie: request.headers.get("cookie") ?? undefined,
+        });
+        if (!authorized.ok) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        return handleListProfileModels(request, { db: options.db, secretBox }, authorized);
       }
       if (profileIdMatch) {
         const origin = request.headers.get("origin");

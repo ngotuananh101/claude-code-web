@@ -42,6 +42,55 @@ export type SaveProfileResult =
 export type DeleteProfileResult = "deleted" | "not_found" | "unauthorized" | "error";
 
 /**
+ * Ask the control server to read a gateway's model catalogue. The api key never
+ * reaches the browser, so the server resolves it from the typed value or the
+ * sealed secret behind `profileId`, then calls `{endpoint}/models` itself.
+ */
+export type ProfileModelsBody = {
+  endpoint?: string;
+  authField?: ProfileAuthField;
+  apiKey?: string;
+  profileId?: string;
+};
+
+export type ProfileModelsResult =
+  | { ok: true; models: string[] }
+  | { ok: false; code: "unauthorized" | "error"; message: string };
+
+export async function fetchProfileModels(body: ProfileModelsBody): Promise<ProfileModelsResult> {
+  let response: Response;
+  try {
+    response = await authFetch("/api/config/profiles/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+  }
+
+  if (response.status === 401) {
+    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+  }
+  if (!response.ok) {
+    return { ok: false, code: "error", message: await errorMessage(response) };
+  }
+
+  try {
+    const parsed = (await response.json()) as { models?: unknown };
+    if (!Array.isArray(parsed.models)) {
+      return { ok: false, code: "error", message: "Phản hồi danh sách model không hợp lệ." };
+    }
+    return {
+      ok: true,
+      models: parsed.models.filter((model): model is string => typeof model === "string"),
+    };
+  } catch {
+    return { ok: false, code: "error", message: "Phản hồi danh sách model không hợp lệ." };
+  }
+}
+
+/**
  * Fetch the authenticated owner's profiles. The cleartext API key never
  * crosses this boundary — the server returns a presence flag (`hasKey`) plus a
  * masked representation on the detail.
@@ -175,6 +224,21 @@ async function text(response: Response): Promise<string> {
   } catch {
     return `Lỗi máy chủ (HTTP ${response.status}).`;
   }
+}
+
+/**
+ * Read the server's `{ error: { message } }` envelope, falling back to the raw
+ * body (and finally a generic message) so a lookup failure is always shown.
+ */
+async function errorMessage(response: Response): Promise<string> {
+  try {
+    const parsed = (await response.clone().json()) as { error?: { message?: unknown } };
+    const message = parsed.error?.message;
+    if (typeof message === "string" && message !== "") return message;
+  } catch {
+    // Fall through to the text body.
+  }
+  return (await text(response)) || `Lỗi máy chủ (HTTP ${response.status}).`;
 }
 
 /**

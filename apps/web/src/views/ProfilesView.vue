@@ -5,10 +5,11 @@ import type {
   ProfileDetail,
   ProfileSummary,
 } from "@cc-web/protocol";
-import { Plus, Save, Trash2 } from "@lucide/vue";
+import { Loader2, Plus, RefreshCw, Save, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
+import ModelCombobox from "@/components/profiles/ModelCombobox.vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,10 +32,12 @@ import {
   profileFormFromDetail,
   profileSaveBody,
   validateSettingsJson,
+  withModelMapping,
 } from "@/features/profiles/profiles-logic.ts";
 import {
   createProfile,
   deleteProfile,
+  fetchProfileModels,
   getProfile,
   listProfiles,
   updateProfile,
@@ -93,6 +96,58 @@ const saveDisabled = computed(() => !jsonValidation.value.valid);
 
 const keepExistingKey = computed(() => Boolean(editingDetail.value?.hasKey));
 
+// The upstream model catalogue the comboboxes suggest from. Loaded from the
+// gateway through the control server (which holds the credential), so the list
+// belongs to the selected profile's endpoint, not to the screen.
+const availableModels = ref<string[]>([]);
+const modelsLoading = ref(false);
+const modelsError = ref<string | null>(null);
+let modelsRequestId = 0;
+
+/**
+ * Fetch the gateway's model catalogue for the current form. `manual` marks an
+ * operator click: a missing endpoint/key or a failed lookup turns into a toast,
+ * while the silent auto-load on profile selection keeps the error inline.
+ * Responses are token-checked so switching profiles mid-flight cannot let a
+ * stale catalogue land on the new one.
+ */
+async function loadModels(manual = false): Promise<void> {
+  const requestId = ++modelsRequestId;
+  availableModels.value = [];
+  modelsError.value = null;
+
+  const endpoint = form.value.endpoint.trim();
+  const apiKey = form.value.apiKey.trim();
+  if (endpoint === "") {
+    if (manual) toast.error("Nhập endpoint trước khi tải danh sách model.");
+    return;
+  }
+  if (apiKey === "" && editingDetail.value?.hasKey !== true) {
+    if (manual) toast.error("Nhập API key trước khi tải danh sách model.");
+    return;
+  }
+
+  modelsLoading.value = true;
+  try {
+    const result = await fetchProfileModels({
+      endpoint,
+      authField: form.value.authField,
+      ...(apiKey === "" ? {} : { apiKey }),
+      ...(editingDetail.value === null ? {} : { profileId: editingDetail.value.id }),
+    });
+    if (requestId !== modelsRequestId) return;
+    if (result.ok) {
+      availableModels.value = result.models;
+      if (manual) toast.success(`Đã tải ${result.models.length} model từ gateway.`);
+    } else if (result.code !== "unauthorized") {
+      modelsError.value = result.message;
+      if (manual) toast.error(result.message);
+    }
+  } finally {
+    if (requestId === modelsRequestId) modelsLoading.value = false;
+  }
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -139,6 +194,9 @@ async function selectProfile(raw: string): Promise<void> {
     // selection's text — so a profile's own custom env/permissions show up and
     // the editor never carries another profile's leftover settings.
     json.value = formToJson(form.value, result.profile.settings ?? {});
+    // Kick off the catalogue lookup after the editor is seeded; it stays
+    // silent so a gateway that is down never blocks opening a profile.
+    void loadModels();
   } else if (result.code !== "unauthorized") {
     toast.error(result.message);
   }
@@ -155,6 +213,11 @@ function newProfile(): void {
     authField: "ANTHROPIC_AUTH_TOKEN",
     modelMapping: {},
   };
+  // Drop the previous profile's catalogue: it does not describe this endpoint.
+  modelsRequestId += 1;
+  availableModels.value = [];
+  modelsLoading.value = false;
+  modelsError.value = null;
   syncJsonFromForm();
 }
 
@@ -209,13 +272,10 @@ watch(json, (value) => {
 });
 
 function onModelChange(role: keyof ModelMapping, value: string): void {
-  const next: ModelMapping = { ...form.value.modelMapping };
-  if (value === "") {
-    delete next[role];
-  } else {
-    next[role] = value;
-  }
-  form.value = { ...form.value, modelMapping: next };
+  form.value = {
+    ...form.value,
+    modelMapping: withModelMapping(form.value.modelMapping, role, value),
+  };
 }
 
 async function save(): Promise<void> {
@@ -396,12 +456,29 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <div>
-              <div class="mb-2 flex items-end justify-between">
+              <div class="mb-2 flex items-end justify-between gap-2">
                 <Label>Model Mapping (Ánh xạ vai trò &rarr; upstream)</Label>
-                <span class="text-[11px] text-muted-foreground">
-                  Khớp với cấu hình 9Router
-                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  class="gap-1 text-[11px] text-muted-foreground"
+                  :disabled="modelsLoading"
+                  title="Tải danh sách model từ gateway"
+                  @click="void loadModels(true)"
+                >
+                  <Loader2 v-if="modelsLoading" :size="12" class="animate-spin" />
+                  <RefreshCw v-else :size="12" />
+                  <span>{{ modelsLoading ? "Đang tải…" : "Lấy model" }}</span>
+                </Button>
               </div>
+              <p v-if="modelsError" class="mb-2 text-[11px] text-destructive">
+                {{ modelsError }}
+              </p>
+              <p v-else-if="availableModels.length > 0" class="mb-2 text-[11px] text-muted-foreground">
+                {{ availableModels.length }} model từ gateway — gõ để lọc, hoặc tự
+                nhập model không có trong danh sách.
+              </p>
               <div class="overflow-hidden rounded-md border border-border">
                 <div
                   class="flex items-center gap-3 border-b border-border bg-muted/40 px-2 py-1.5 text-[11px] uppercase text-muted-foreground"
@@ -423,12 +500,15 @@ async function confirmDelete(): Promise<void> {
                       {{ m.envVar }}
                     </code>
                   </div>
-                  <Input
-                    :model-value="form.modelMapping[m.role] ?? ''"
-                    @update:model-value="onModelChange(m.role, String($event ?? ''))"
-                    placeholder="—"
-                    class="w-[52%] shrink-0 bg-background/60 font-mono text-sm"
-                  />
+                  <div class="w-[52%] shrink-0">
+                    <ModelCombobox
+                      :model-value="form.modelMapping[m.role] ?? ''"
+                      :models="availableModels"
+                      :loading="modelsLoading"
+                      placeholder="—"
+                      @update:model-value="onModelChange(m.role, String($event ?? ''))"
+                    />
+                  </div>
                 </div>
               </div>
             </div>

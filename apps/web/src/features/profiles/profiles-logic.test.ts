@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ProfileDetail } from "@cc-web/protocol";
 import {
+  filterModelChoices,
   formFreeSettings,
   formToJson,
   jsonToForm,
@@ -8,6 +9,7 @@ import {
   profileFormFromDetail,
   profileSaveBody,
   validateSettingsJson,
+  withModelMapping,
 } from "./profiles-logic.ts";
 
 describe("profiles two-way sync logic", () => {
@@ -283,5 +285,31 @@ describe("profiles two-way sync logic", () => {
     expect(nextSelectedProfileId(profiles, "prof_gone")).toBe("prof_a");
     expect(nextSelectedProfileId(profiles, null)).toBe("prof_a");
     expect(nextSelectedProfileId([], "prof_a")).toBeNull();
+  });
+
+  // --- Model catalogue combobox ---
+
+  test("filterModelChoices lists every model for an empty query, capped", () => {
+    expect(filterModelChoices(["a", "b", "c"], "")).toEqual(["a", "b", "c"]);
+    expect(filterModelChoices(["a", "b", "c"], "   ")).toEqual(["a", "b", "c"]);
+    expect(filterModelChoices(["a", "b", "c"], "", 2)).toEqual(["a", "b"]);
+  });
+
+  test("filterModelChoices matches a case-insensitive substring in catalogue order", () => {
+    const models = ["claude-opus-4-1", "claude-sonnet-4-5", "prime", "Sonnet-Alias"];
+    expect(filterModelChoices(models, "sonnet")).toEqual(["claude-sonnet-4-5", "Sonnet-Alias"]);
+    expect(filterModelChoices(models, "4-")).toEqual(["claude-opus-4-1", "claude-sonnet-4-5"]);
+    expect(filterModelChoices(models, "nope")).toEqual([]);
+  });
+
+  test("withModelMapping trims a value, removes it when blank, and keeps other roles", () => {
+    expect(withModelMapping({ opus: "titan" }, "sonnet", "  prime  ")).toEqual({
+      opus: "titan",
+      sonnet: "prime",
+    });
+    expect(withModelMapping({ opus: "titan", sonnet: "prime" }, "sonnet", "")).toEqual({
+      opus: "titan",
+    });
+    expect(withModelMapping({ opus: "titan" }, "opus", "   ")).toEqual({});
   });
 });

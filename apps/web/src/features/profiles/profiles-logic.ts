@@ -286,11 +286,42 @@ export function profileSaveBody(
 }
 
 /**
+ * Filter a gateway model catalogue for the combobox: case-insensitive substring
+ * match, catalogue order preserved, capped so a huge catalogue cannot turn the
+ * popover into an endless list. An empty query offers the first `limit` models.
+ */
+export function filterModelChoices(models: readonly string[], query: string, limit = 50): string[] {
+  const needle = query.trim().toLowerCase();
+  const matches =
+    needle === "" ? models : models.filter((model) => model.toLowerCase().includes(needle));
+  return matches.slice(0, limit);
+}
+
+/**
+ * Set or clear one role in a model mapping. Returns a new mapping so callers
+ * can assign it to a ref; a blank value removes the role rather than storing an
+ * empty string the settings JSON would then carry.
+ */
+export function withModelMapping(
+  mapping: ModelMapping,
+  role: ModelRole,
+  value: string,
+): ModelMapping {
+  const next: ModelMapping = { ...mapping };
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    delete next[role];
+  } else {
+    next[role] = trimmed;
+  }
+  return next;
+}
+
+/**
  * The profile the editor should show after a list refresh: the current
  * selection when it still exists, otherwise the first profile, otherwise none
  * (the screen starts a new profile).
- */
-export function nextSelectedProfileId(
+ */ export function nextSelectedProfileId(
   profiles: Array<Pick<ProfileSummary, "profileId">>,
   current: string | null,
 ): string | null {
