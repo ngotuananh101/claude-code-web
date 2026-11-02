@@ -44,6 +44,8 @@ type SessionsStore = {
   stream: SessionStreamState | null;
   /** The signed-in account's name (the rail footer), null until /api/me. */
   account: string | null;
+  /** The signed-in account's avatar URL, null until /api/me. */
+  avatar: string | null;
 };
 
 export const sessions = reactive<SessionsStore>({
@@ -53,6 +55,7 @@ export const sessions = reactive<SessionsStore>({
   connection: "closed",
   stream: null,
   account: null,
+  avatar: null,
 });
 
 let machine: ReturnType<typeof createSessionStream> | null = null;
@@ -71,14 +74,16 @@ export async function loadSessions(): Promise<boolean> {
 }
 
 /**
- * Reads the signed-in account's name (GET /api/me). The footer must not
- * hardcode it — the operator seeds whatever username they chose. A failure
- * keeps whatever we had: the name is cosmetic, not an auth signal.
+ * Reads the signed-in account's name and avatar (GET /api/me). The footer
+ * must not hardcode it — the operator seeds whatever username they chose.
+ * A failure keeps whatever we had: the name is cosmetic, not an auth signal.
  */
 export async function loadAccount(): Promise<void> {
   const response = await authFetch("/api/me");
   if (!response.ok) return;
-  sessions.account = ((await response.json()) as { username: string }).username;
+  const body = (await response.json()) as { username: string; avatar: string | null };
+  sessions.account = body.username;
+  sessions.avatar = body.avatar ?? null;
 }
 
 /**
