@@ -591,7 +591,7 @@ describe("event ingestion", () => {
       verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
     });
 
-    expect(gateway.capabilitiesOf("nobody")).toEqual([]);
+    expect(gateway.capabilitiesOf("nobody")).toBeUndefined();
   });
 });
 

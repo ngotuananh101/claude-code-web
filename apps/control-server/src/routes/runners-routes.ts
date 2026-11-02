@@ -83,6 +83,7 @@ export async function handleListRunners(
   const runners = listRunners(options.db, authorized.userId).map((runner) => ({
     ...runner,
     models: runnerGateway.modelsOf(runner.runnerId),
+    capabilities: runnerGateway.capabilitiesOf(runner.runnerId),
   }));
 
   return new Response(JSON.stringify({ runners }), {
@@ -197,6 +198,38 @@ export async function handleUpdateRunnerName(
  * Delete a runner and cascade delete all its sessions and related data.
  * If runner has an active socket connection, disconnect it.
  */
+export async function handleGetRunnerCapabilities(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  runnerGateway: RunnerGateway,
+  runnerId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const capabilities = runnerGateway.capabilitiesOf(runnerId);
+  if (!capabilities) {
+    return new Response("not found", { status: 404 });
+  }
+
+  return new Response(JSON.stringify({ capabilities }), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
 export async function handleDeleteRunner(
   request: Request,
   options: ServerOptions,
