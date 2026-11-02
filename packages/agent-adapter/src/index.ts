@@ -110,15 +110,65 @@ export function createSdkStream(
   // environment, then layer the profile's overrides on top. The SDK replaces the
   // subprocess env when `options.env` is set, so without spreading process.env the
   // child would lose PATH, HOME, etc.
+  //
+  // Additionally, Claude Code CLI loads settings from settingSources: ["user", "project", "local"]
+  // (such as ~/.claude/settings.json), where the "env" block takes precedence over
+  // process.env in the CLI subprocess. To guarantee profile environment overrides
+  // (endpoint, auth, model mappings) take effect against host settings.json,
+  // layer the profile overrides into options.settings.env as well.
   if (input.env !== undefined) {
     options["env"] = { ...process.env, ...input.env };
+
+    const currentSettings = (options["settings"] as Record<string, unknown> | undefined) ?? {};
+    const currentEnv =
+      typeof currentSettings["env"] === "object" && currentSettings["env"] !== null
+        ? (currentSettings["env"] as Record<string, unknown>)
+        : {};
+
+    const cleanInputEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(input.env)) {
+      if (typeof value === "string") {
+        cleanInputEnv[key] = value;
+      }
+    }
+
+    // If an auth field is explicitly set, blank out the opposing auth field in settings.env
+    // so a stale host credential in ~/.claude/settings.json cannot conflict.
+    if (cleanInputEnv["ANTHROPIC_AUTH_TOKEN"] && cleanInputEnv["ANTHROPIC_API_KEY"] === undefined) {
+      cleanInputEnv["ANTHROPIC_API_KEY"] = "";
+    } else if (
+      cleanInputEnv["ANTHROPIC_API_KEY"] &&
+      cleanInputEnv["ANTHROPIC_AUTH_TOKEN"] === undefined
+    ) {
+      cleanInputEnv["ANTHROPIC_AUTH_TOKEN"] = "";
+    }
+
+    options["settings"] = {
+      ...currentSettings,
+      env: {
+        ...currentEnv,
+        ...cleanInputEnv,
+      },
+    };
   }
   // P3-C: profile settings overlay — merge into any existing settings (e.g. ultracode)
   // rather than replacing, so both a session flag and profile settings travel together.
   if (input.settings !== undefined) {
+    const currentSettings = (options["settings"] as Record<string, unknown> | undefined) ?? {};
+    const currentEnv =
+      typeof currentSettings["env"] === "object" && currentSettings["env"] !== null
+        ? (currentSettings["env"] as Record<string, unknown>)
+        : {};
+    const incomingEnv =
+      typeof input.settings["env"] === "object" && input.settings["env"] !== null
+        ? (input.settings["env"] as Record<string, unknown>)
+        : {};
+    const hasEnv = Object.keys(currentEnv).length > 0 || Object.keys(incomingEnv).length > 0;
+
     options["settings"] = {
-      ...(options["settings"] as Record<string, unknown> | undefined),
+      ...currentSettings,
       ...input.settings,
+      ...(hasEnv ? { env: { ...currentEnv, ...incomingEnv } } : {}),
     };
   }
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;

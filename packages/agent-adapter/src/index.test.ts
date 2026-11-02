@@ -188,7 +188,71 @@ describe("env and settings overlays (P3-C profiles)", () => {
     expect(env["CUSTOM_VAR"]).toBe("custom");
     expect(env["PATH"]).toBeDefined(); // Process env was spread
 
-    expect(capturedOptions?.["settings"]).toMatchObject({ effortLevel: "high" });
+    // Env vars are also layered into settings.env so they override filesystem settings (settings.json)
+    expect(capturedOptions?.["settings"]).toBeDefined();
+    const settings = capturedOptions?.["settings"] as Record<string, unknown>;
+    const settingsEnv = settings["env"] as Record<string, string>;
+    expect(settingsEnv["ANTHROPIC_BASE_URL"]).toBe("http://192.168.2.3:20128");
+    expect(settingsEnv["CUSTOM_VAR"]).toBe("custom");
+    expect(settingsEnv["PATH"]).toBeUndefined(); // Host process.env is not dumped into settings.env
+
+    expect(settings).toMatchObject({ effortLevel: "high" });
+  });
+
+  test("blanks out opposing auth key in settings.env when ANTHROPIC_AUTH_TOKEN is passed", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const fakeQuery = ((params: { options?: Record<string, unknown> }) => {
+      capturedOptions = params.options;
+      return (async function* () {})();
+    }) as unknown as QueryFn;
+
+    const stream = createSdkStream(
+      {
+        prompt: "test",
+        cwd: "/tmp",
+        env: {
+          ANTHROPIC_BASE_URL: "http://custom-proxy:8080",
+          ANTHROPIC_AUTH_TOKEN: "sk-token",
+        },
+      },
+      () => fakeQuery,
+    );
+
+    for await (const _ of stream) {
+    }
+
+    const settings = capturedOptions?.["settings"] as Record<string, unknown>;
+    const settingsEnv = settings["env"] as Record<string, string>;
+    expect(settingsEnv["ANTHROPIC_AUTH_TOKEN"]).toBe("sk-token");
+    expect(settingsEnv["ANTHROPIC_API_KEY"]).toBe("");
+  });
+
+  test("blanks out opposing auth key in settings.env when ANTHROPIC_API_KEY is passed", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const fakeQuery = ((params: { options?: Record<string, unknown> }) => {
+      capturedOptions = params.options;
+      return (async function* () {})();
+    }) as unknown as QueryFn;
+
+    const stream = createSdkStream(
+      {
+        prompt: "test",
+        cwd: "/tmp",
+        env: {
+          ANTHROPIC_BASE_URL: "http://custom-proxy:8080",
+          ANTHROPIC_API_KEY: "sk-key",
+        },
+      },
+      () => fakeQuery,
+    );
+
+    for await (const _ of stream) {
+    }
+
+    const settings = capturedOptions?.["settings"] as Record<string, unknown>;
+    const settingsEnv = settings["env"] as Record<string, string>;
+    expect(settingsEnv["ANTHROPIC_API_KEY"]).toBe("sk-key");
+    expect(settingsEnv["ANTHROPIC_AUTH_TOKEN"]).toBe("");
   });
 
   test("merges settings with any existing settings rather than replacing", async () => {
