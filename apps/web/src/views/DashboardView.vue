@@ -8,10 +8,13 @@ import { toast } from "vue-sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { folderBasename } from "../features/sessions/folder-tree.ts";
 import { formatTokens } from "../lib/format-tokens.ts";
+import { useI18n } from "../lib/i18n/index.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { authFetch } from "../services/auth-api.ts";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
 import { type SessionSummary, sessions } from "../stores/sessions.ts";
+
+const { t, locale } = useI18n();
 
 /**
  * The landing page (§17.1's usage read): what the journal cost in tokens,
@@ -69,25 +72,25 @@ const kpis = computed<Kpi[]>(() => {
   const totals = stats.value?.totals;
   return [
     {
-      label: "Token vào",
+      label: t("dashboard.tokensIn"),
       value: totals?.inputTokens ?? 0,
       icon: ArrowDownLeft,
       tone: "text-chart-1",
     },
     {
-      label: "Đọc cache",
+      label: t("dashboard.tokensCacheRead"),
       value: totals?.cacheReadTokens ?? 0,
       icon: Database,
       tone: "text-chart-2",
     },
     {
-      label: "Tạo cache",
+      label: t("dashboard.tokensCacheCreate"),
       value: totals?.cacheCreationTokens ?? 0,
       icon: Layers,
       tone: "text-chart-3",
     },
     {
-      label: "Token ra",
+      label: t("dashboard.tokensOut"),
       value: totals?.outputTokens ?? 0,
       icon: ArrowUpRight,
       tone: "text-chart-4",
@@ -95,10 +98,13 @@ const kpis = computed<Kpi[]>(() => {
   ];
 });
 
-const today = new Date().toLocaleDateString("vi-VN", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
+const today = computed(() => {
+  const loc = locale.value === "vi" ? "vi-VN" : "en-US";
+  return new Date().toLocaleDateString(loc, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
 });
 
 // The chart: stacked bars, one per day, in the journal's four token colors.
@@ -121,10 +127,10 @@ const bars = computed<Bar[]>(() => {
   const scale = (tokens: number): number =>
     max === 0 ? 0 : Math.max(tokens > 0 ? 1.5 : 0, (tokens / max) * (CHART.height - 6));
   const fills: Array<[keyof DayTokens, string, string]> = [
-    ["inputTokens", "fill-chart-1", "vào"],
-    ["cacheReadTokens", "fill-chart-2", "đọc cache"],
-    ["cacheCreationTokens", "fill-chart-3", "tạo cache"],
-    ["outputTokens", "fill-chart-4", "ra"],
+    ["inputTokens", "fill-chart-1", t("dashboard.in")],
+    ["cacheReadTokens", "fill-chart-2", t("dashboard.cacheRead")],
+    ["cacheCreationTokens", "fill-chart-3", t("dashboard.cacheCreate")],
+    ["outputTokens", "fill-chart-4", t("dashboard.out")],
   ];
   return daily.map((day, index) => {
     let top = CHART.height;
@@ -144,12 +150,12 @@ type DayTokens = {
   outputTokens: number;
 };
 
-const legend: Array<{ label: string; swatch: string }> = [
-  { label: "vào", swatch: "bg-chart-1" },
-  { label: "đọc cache", swatch: "bg-chart-2" },
-  { label: "tạo cache", swatch: "bg-chart-3" },
-  { label: "ra", swatch: "bg-chart-4" },
-];
+const legend = computed<Array<{ label: string; swatch: string }>>(() => [
+  { label: t("dashboard.in"), swatch: "bg-chart-1" },
+  { label: t("dashboard.cacheRead"), swatch: "bg-chart-2" },
+  { label: t("dashboard.cacheCreate"), swatch: "bg-chart-3" },
+  { label: t("dashboard.out"), swatch: "bg-chart-4" },
+]);
 
 const hasUsage = computed(
   () =>
@@ -172,10 +178,10 @@ const recent = computed(() =>
   <ScrollArea class="min-h-0 flex-1">
     <div class="mx-auto grid w-full max-w-[900px] gap-5 px-7 py-7">
       <header>
-        <p class="font-mono text-[13px] text-primary">cc-web / tổng quan</p>
-        <h1 class="mt-3 mb-1 text-[26px] font-medium tracking-tight">Tổng quan.</h1>
+        <p class="font-mono text-[13px] text-primary">cc-web / {{ t("rail.dashboard").toLowerCase() }}</p>
+        <h1 class="mt-3 mb-1 text-[26px] font-medium tracking-tight">{{ t("dashboard.overviewTitle") }}</h1>
         <p class="text-sm text-muted-foreground">
-          Token đã dùng và hoạt động journal — {{ today }}.
+          {{ t("dashboard.subtitle", { date: today }) }}
         </p>
       </header>
 
@@ -192,13 +198,13 @@ const recent = computed(() =>
           <p class="mt-2 text-[22px] leading-tight font-medium tabular-nums">
             {{ formatTokens(kpi.value) }}
           </p>
-          <p class="mt-0.5 text-[11px] text-muted-foreground">toàn bộ thời gian</p>
+          <p class="mt-0.5 text-[11px] text-muted-foreground">{{ t("dashboard.allTime") }}</p>
         </div>
       </div>
 
       <section class="rounded-xl border border-border bg-card p-4.5">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 class="text-sm font-medium">Lượng dùng — 14 ngày gần nhất</h2>
+          <h2 class="text-sm font-medium">{{ t("dashboard.usageLast14Days") }}</h2>
           <div class="flex items-center gap-3.5">
             <span
               v-for="item in legend"
@@ -211,14 +217,14 @@ const recent = computed(() =>
           </div>
         </div>
         <p v-if="stats !== null && !hasUsage" class="py-10 text-center text-sm text-muted-foreground">
-          Chưa có dữ liệu usage — số liệu sẽ về đây khi các run hoàn tất.
+          {{ t("dashboard.noUsageData") }}
         </p>
         <svg
           v-else
           class="w-full"
           :viewBox="`0 0 ${CHART.width} ${CHART.height}`"
           role="img"
-          aria-label="Token dùng theo ngày"
+          :aria-label="t('dashboard.chartAria')"
         >
           <g v-for="(bar, i) in bars" :key="i">
             <rect
@@ -246,26 +252,26 @@ const recent = computed(() =>
 
       <div class="grid gap-3 lg:grid-cols-2">
         <section class="rounded-xl border border-border bg-card p-4.5">
-          <h2 class="mb-3 text-sm font-medium">Journal</h2>
+          <h2 class="mb-3 text-sm font-medium">{{ t("dashboard.journal") }}</h2>
           <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-[13px]">
             <div>
-              <dt class="text-xs text-muted-foreground">Phiên</dt>
+              <dt class="text-xs text-muted-foreground">{{ t("dashboard.sessionsCount") }}</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.sessions ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Lượt chạy</dt>
+              <dt class="text-xs text-muted-foreground">{{ t("dashboard.runsCount") }}</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.runs ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Sự kiện</dt>
+              <dt class="text-xs text-muted-foreground">{{ t("dashboard.eventsCount") }}</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ stats?.events ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Runner đã kết nối</dt>
+              <dt class="text-xs text-muted-foreground">{{ t("dashboard.runnersConnected") }}</dt>
               <dd class="mt-0.5 font-medium tabular-nums">{{ runnersEnrolled ?? "—" }}</dd>
             </div>
             <div>
-              <dt class="text-xs text-muted-foreground">Đang chạy</dt>
+              <dt class="text-xs text-muted-foreground">{{ t("dashboard.runningNow") }}</dt>
               <dd class="mt-0.5 flex items-center gap-1.5 font-medium tabular-nums">
                 {{ liveCount }}
                 <i
@@ -278,9 +284,9 @@ const recent = computed(() =>
         </section>
 
         <section class="rounded-xl border border-border bg-card p-4.5">
-          <h2 class="mb-3 text-sm font-medium">Phiên gần đây</h2>
+          <h2 class="mb-3 text-sm font-medium">{{ t("dashboard.recentSessions") }}</h2>
           <p v-if="recent.length === 0" class="text-sm text-muted-foreground">
-            Chưa có phiên nào — kết nối runner và chạy lệnh đầu tiên.
+            {{ t("dashboard.noRecentSessions") }}
           </p>
           <!-- Same as the rail's session list: minmax(0,1fr) keeps the row
                inside the card however long the session id is. -->
@@ -306,11 +312,11 @@ const recent = computed(() =>
                   </span>
                 </span>
                 <span class="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-                  {{ s.eventCount }} sự kiện · {{ relativeTime(s.lastIngestedAt) }}
+                  {{ t("dashboard.eventsCountLabel", { count: s.eventCount, time: relativeTime(s.lastIngestedAt) }) }}
                   <i
                     v-if="s.live"
                     class="size-[7px] animate-pulse rounded-full bg-primary"
-                    title="Có một run đang chạy"
+                    :title="t('common.activeRun')"
                   />
                 </span>
               </RouterLink>

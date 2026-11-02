@@ -10,7 +10,10 @@ import {
   railOpenOnViewportChange,
   saveRailPreference,
 } from "../features/layout/layout-prefs.ts";
+import { useI18n } from "../lib/i18n/index.ts";
 import { loadSessions } from "../stores/sessions.ts";
+
+const { t } = useI18n();
 
 const route = useRoute();
 
@@ -101,8 +104,8 @@ onUnmounted(() => {
         ref="openButton"
         type="button"
         class="absolute top-1/2 left-0 z-30 -translate-y-1/2 cursor-pointer rounded-r-md border border-l-0 border-border bg-card py-2 pr-1 pl-0.5 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
-        aria-label="Mở sidebar"
-        title="Mở sidebar"
+        :aria-label="t('rail.openSidebar')"
+        :title="t('rail.openSidebar')"
         @click="openRail"
       >
         <PanelLeftOpen :size="14" />

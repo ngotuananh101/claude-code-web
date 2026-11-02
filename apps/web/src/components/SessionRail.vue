@@ -60,6 +60,8 @@ import ConnectionChip from "./ConnectionChip.vue";
 import UserProfileDialog from "./profiles/UserProfileDialog.vue";
 import RenameDialog from "./RenameDialog.vue";
 
+const { locale, setLocale, t } = useI18n();
+
 const route = useRoute();
 const router = useRouter();
 
@@ -107,9 +109,7 @@ const groups = computed(() =>
 
 const groupingIcon = computed<Component>(() => (grouping.value === "runner" ? Server : Folder));
 const groupingTitle = computed(() =>
-  grouping.value === "runner"
-    ? "Đang gộp theo runner — bấm để gộp theo project"
-    : "Đang gộp theo project — bấm để gộp theo runner",
+  grouping.value === "runner" ? t("rail.groupByRunner") : t("rail.ungrouped"),
 );
 const sortIcon = computed<Component>(() => {
   if (sort.value === "oldest") return ArrowUpWideNarrow;
@@ -117,11 +117,11 @@ const sortIcon = computed<Component>(() => {
   return ArrowDownWideNarrow;
 });
 const sortLabels: Record<SessionSort, string> = {
-  recent: "mới nhất trước",
-  oldest: "cũ nhất trước",
-  name: "theo tên",
+  recent: t("rail.sortRecent"),
+  oldest: t("rail.sortOldest"),
+  name: t("rail.sortName"),
 };
-const sortTitle = computed(() => `Sắp xếp: ${sortLabels[sort.value]} — bấm để đổi`);
+const sortTitle = computed(() => `${t("rail.sort")}: ${sortLabels[sort.value]}`);
 
 function toggleGrouping(): void {
   grouping.value = nextGrouping(grouping.value);
@@ -145,8 +145,6 @@ const canGoForward = computed(() => {
 // The avatar is the account's first letter; "?" while /api/me is in flight.
 const accountInitial = computed(() => sessions.account?.[0] ?? "?");
 
-// Language and user menu state
-const { locale, setLocale, t } = useI18n();
 const profileDialogOpen = ref(false);
 const userMenuOpen = ref(false);
 
@@ -219,9 +217,9 @@ async function handleRenameConfirm(newTitle: string): Promise<void> {
   const ok = await renameSession(sid, newTitle);
   if (ok) {
     updateSessionTitleInStore(sid, newTitle);
-    toast.success("Đã đổi tên phiên.");
+    toast.success(t("common.sessionRenamed"));
   } else {
-    toast.error("Không thể đổi tên phiên.");
+    toast.error(t("common.sessionRenameFailed"));
   }
   sessionToRename.value = null;
 }
@@ -236,6 +234,13 @@ function triggerDelete(session: SessionSummary): void {
   deleteDialogOpen.value = true;
 }
 
+const deleteSessionTarget = computed(() => {
+  if (!sessionToDelete.value) return "";
+  return sessionToDelete.value.title
+    ? `“${sessionToDelete.value.title}” (${sessionToDelete.value.sessionId})`
+    : sessionToDelete.value.sessionId;
+});
+
 async function handleDeleteConfirm(): Promise<void> {
   if (!sessionToDelete.value) return;
   const sid = sessionToDelete.value.sessionId;
@@ -244,12 +249,12 @@ async function handleDeleteConfirm(): Promise<void> {
     const ok = await deleteSession(sid);
     if (ok) {
       removeSession(sid);
-      toast.success("Đã xoá phiên.");
+      toast.success(t("common.sessionDeleted"));
       if (route.params.sessionId === sid) {
         void router.push("/sessions");
       }
     } else {
-      toast.error("Không thể xoá phiên.");
+      toast.error(t("common.sessionDeleteFailed"));
     }
   } finally {
     deleteBusy.value = false;
@@ -265,7 +270,7 @@ async function handleDeleteConfirm(): Promise<void> {
       <RouterLink
         to="/"
         class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-mono text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-        title="Tổng quan"
+        :title="t('rail.dashboard')"
       >
         cc
       </RouterLink>
@@ -274,7 +279,7 @@ async function handleDeleteConfirm(): Promise<void> {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Quay lại"
+          :aria-label="t('common.back')"
           :disabled="!canGoBack"
           @click="router.back()"
         >
@@ -283,7 +288,7 @@ async function handleDeleteConfirm(): Promise<void> {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Tiến"
+          :aria-label="t('common.forward')"
           :disabled="!canGoForward"
           @click="router.forward()"
         >
@@ -292,8 +297,8 @@ async function handleDeleteConfirm(): Promise<void> {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Thu gọn sidebar"
-          title="Thu gọn sidebar"
+          :aria-label="t('rail.collapseSidebar')"
+          :title="t('rail.collapseSidebar')"
           @click="emit('close')"
         >
           <PanelLeftClose :size="15" />
@@ -312,7 +317,7 @@ async function handleDeleteConfirm(): Promise<void> {
         "
       >
         <LayoutDashboard :size="15" />
-        Tổng quan
+        {{ t("rail.dashboard") }}
       </RouterLink>
       <button
         type="button"
@@ -322,11 +327,11 @@ async function handleDeleteConfirm(): Promise<void> {
             ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
             : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
         "
-        title="Tháo journal — phiên kế tiếp sẽ hiện ở đây ngay khi runner bắt đầu"
+        :title="t('rail.newSession')"
         @click="newSession"
       >
         <SquarePen :size="15" />
-        Phiên mới
+        {{ t("rail.newSession") }}
       </button>
       <RouterLink
         to="/runners"
@@ -338,7 +343,7 @@ async function handleDeleteConfirm(): Promise<void> {
         "
       >
         <Server :size="15" />
-        Runners
+        {{ t("rail.runners") }}
       </RouterLink>
       <RouterLink
         to="/profiles"
@@ -350,161 +355,161 @@ async function handleDeleteConfirm(): Promise<void> {
         "
       >
         <Key :size="15" />
-        Profiles
+        {{ t("rail.profiles") }}
       </RouterLink>
     </nav>
 
     <ScrollArea class="min-h-0 flex-1">
       <div class="px-2 pb-2">
-      <div class="flex h-9 items-center justify-between px-2.5">
-        <p class="text-sm font-semibold text-foreground">Phiên</p>
-        <span class="flex items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Đổi cách gộp phiên"
-            :title="groupingTitle"
-            @click="toggleGrouping"
-          >
-            <component :is="groupingIcon" :size="15" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Đổi cách sắp xếp phiên"
-            :title="sortTitle"
-            @click="cycleSort"
-          >
-            <component :is="sortIcon" :size="15" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Tìm phiên"
-            title="Tìm phiên (Ctrl+K)"
-            @click="searchOpen = true"
-          >
-            <Search :size="15" />
-          </Button>
-        </span>
-      </div>
-      <!-- Grouped by project or by runner, per the two buttons above — never an
-           un-scoped flat list. -->
-      <div v-if="groups.length > 0" class="space-y-3">
-        <div v-for="group in groups" :key="group.key" class="space-y-0.5">
-          <div
-            class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider"
-            :title="group.title"
-          >
-            <component
-              :is="grouping === 'runner' ? Server : Folder"
-              :size="12"
-              class="shrink-0 text-primary"
-            />
-            <span class="truncate font-mono">{{ group.label }}</span>
-            <span class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/70">
-              {{ group.detail }}
-            </span>
-          </div>
-          <ul class="grid grid-cols-1 content-start gap-0.5 pl-1.5">
-            <li
-              v-for="row in group.sessions"
-              :key="row.session.sessionId"
-              class="group relative flex items-center"
+        <div class="flex h-9 items-center justify-between px-2.5">
+          <p class="text-sm font-semibold text-foreground">{{ t("rail.sessions") }}</p>
+          <span class="flex items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              :aria-label="t('rail.groupByRunner')"
+              :title="groupingTitle"
+              @click="toggleGrouping"
             >
-              <Button
-                variant="ghost"
-                class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
-                :class="
-                  row.session.sessionId === sessions.activeId &&
-                  'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
-                "
-                @click="router.push(`/sessions/${row.session.sessionId}`)"
+              <component :is="groupingIcon" :size="15" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              :aria-label="t('rail.sort')"
+              :title="sortTitle"
+              @click="cycleSort"
+            >
+              <component :is="sortIcon" :size="15" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              :aria-label="t('rail.searchPlaceholder')"
+              :title="t('rail.searchTitle')"
+              @click="searchOpen = true"
+            >
+              <Search :size="15" />
+            </Button>
+          </span>
+        </div>
+        <!-- Grouped by project or by runner, per the two buttons above — never an
+             un-scoped flat list. -->
+        <div v-if="groups.length > 0" class="space-y-3">
+          <div v-for="group in groups" :key="group.key" class="space-y-0.5">
+            <div
+              class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider"
+              :title="group.title"
+            >
+              <component
+                :is="grouping === 'runner' ? Server : Folder"
+                :size="12"
+                class="shrink-0 text-primary"
+              />
+              <span class="truncate font-mono">{{ group.label }}</span>
+              <span class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/70">
+                {{ group.detail }}
+              </span>
+            </div>
+            <ul class="grid grid-cols-1 content-start gap-0.5 pl-1.5">
+              <li
+                v-for="row in group.sessions"
+                :key="row.session.sessionId"
+                class="group relative flex items-center"
               >
-                <span class="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span
-                    v-if="grouping === 'runner' && row.folder"
-                    class="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
-                  >
-                    {{ row.folder }}
-                  </span>
-                  <span
-                    class="min-w-0 flex-1 truncate text-left text-xs"
-                    :class="row.session.title ? 'font-medium' : 'font-mono text-muted-foreground'"
-                    :title="row.session.title || row.session.sessionId"
-                  >
-                    {{ row.session.title || row.session.sessionId }}
-                  </span>
-                </span>
-                <span
-                  class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground transition-opacity"
+                <Button
+                  variant="ghost"
+                  class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
                   :class="
-                    activeMenuSessionId === row.session.sessionId
-                      ? 'opacity-0'
-                      : 'group-hover:opacity-0'
+                    row.session.sessionId === sessions.activeId &&
+                    'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
                   "
+                  @click="router.push(`/sessions/${row.session.sessionId}`)"
                 >
-                  <span>
-                    {{ relativeTime(row.session.lastIngestedAt, now) }}
+                  <span class="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span
+                      v-if="grouping === 'runner' && row.folder"
+                      class="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+                    >
+                      {{ row.folder }}
+                    </span>
+                    <span
+                      class="min-w-0 flex-1 truncate text-left text-xs"
+                      :class="row.session.title ? 'font-medium' : 'font-mono text-muted-foreground'"
+                      :title="row.session.title || row.session.sessionId"
+                    >
+                      {{ row.session.title || row.session.sessionId }}
+                    </span>
                   </span>
                   <span
-                    v-if="row.session.live"
-                    class="size-[7px] animate-pulse rounded-full bg-primary"
-                    title="Có một run đang chạy"
-                  />
-                </span>
-              </Button>
-
-              <Popover
-                :open="activeMenuSessionId === row.session.sessionId"
-                @update:open="(val: boolean) => activeMenuSessionId = val ? row.session.sessionId : null"
-              >
-                <PopoverTrigger as-child>
-                  <button
-                    type="button"
-                    class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100"
+                    class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground transition-opacity"
                     :class="
                       activeMenuSessionId === row.session.sessionId
-                        ? 'opacity-100 bg-muted text-foreground pointer-events-auto'
-                        : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                        ? 'opacity-0'
+                        : 'group-hover:opacity-0'
                     "
-                    aria-label="Tùy chọn phiên"
-                    title="Thao tác"
-                    @click.stop
                   >
-                    <MoreHorizontal :size="14" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent class="w-36 p-1 gap-0.5 rounded-lg" align="end" :side-offset="4">
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
-                    @click.stop="triggerRename(row.session)"
-                  >
-                    <Pencil :size="13" class="shrink-0" />
-                    <span>Đổi tên</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
-                    @click.stop="triggerDelete(row.session)"
-                  >
-                    <Trash2 :size="13" class="shrink-0" />
-                    <span>Xoá phiên</span>
-                  </button>
-                </PopoverContent>
-              </Popover>
-            </li>
-          </ul>
+                    <span>
+                      {{ relativeTime(row.session.lastIngestedAt, now) }}
+                    </span>
+                    <span
+                      v-if="row.session.live"
+                      class="size-[7px] animate-pulse rounded-full bg-primary"
+                      :title="t('common.activeRun')"
+                    />
+                  </span>
+                </Button>
+
+                <Popover
+                  :open="activeMenuSessionId === row.session.sessionId"
+                  @update:open="(val: boolean) => (activeMenuSessionId = val ? row.session.sessionId : null)"
+                >
+                  <PopoverTrigger as-child>
+                    <button
+                      type="button"
+                      class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100"
+                      :class="
+                        activeMenuSessionId === row.session.sessionId
+                          ? 'opacity-100 bg-muted text-foreground pointer-events-auto'
+                          : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                      "
+                      :aria-label="t('rail.sessionOptions')"
+                      :title="t('rail.actions')"
+                      @click.stop
+                    >
+                      <MoreHorizontal :size="14" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent class="w-36 p-1 gap-0.5 rounded-lg" align="end" :side-offset="4">
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+                      @click.stop="triggerRename(row.session)"
+                    >
+                      <Pencil :size="13" class="shrink-0" />
+                      <span>{{ t("common.rename") }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+                      @click.stop="triggerDelete(row.session)"
+                    >
+                      <Trash2 :size="13" class="shrink-0" />
+                      <span>{{ t("common.delete") }}</span>
+                    </button>
+                  </PopoverContent>
+                </Popover>
+              </li>
+            </ul>
+          </div>
         </div>
-      </div>
-      <p
-        v-else-if="sessions.loaded"
-        class="px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
-      >
-        Chưa có phiên nào. Chọn runner và thư mục để tạo phiên mới.
-      </p>
-      <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">Đang đọc journal…</p>
+        <p
+          v-else-if="sessions.loaded"
+          class="px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
+        >
+          {{ t("rail.noSessions") }}
+        </p>
+        <p v-else class="px-2.5 py-2 text-xs text-muted-foreground">{{ t("rail.readingJournal") }}</p>
       </div>
     </ScrollArea>
 
@@ -514,7 +519,7 @@ async function handleDeleteConfirm(): Promise<void> {
           <button
             type="button"
             class="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus:outline-none focus:ring-2 focus:ring-sidebar-accent focus:ring-offset-2"
-            aria-label="Menu người dùng"
+            :aria-label="t('user.title')"
           >
             <span v-if="sessions.avatar" class="shrink-0 rounded-full object-cover">
               <img
@@ -588,12 +593,12 @@ async function handleDeleteConfirm(): Promise<void> {
 
     <CommandDialog
       v-model:open="searchOpen"
-      title="Tìm phiên"
-      description="Chọn một phiên để mở journal của nó."
+      :title="t('rail.searchTitle')"
+      :description="t('rail.searchDescription')"
     >
-      <CommandInput placeholder="Tìm phiên theo tên hoặc id…" />
+      <CommandInput :placeholder="t('rail.searchPlaceholder')" />
       <CommandList>
-        <CommandEmpty>Không có phiên nào khớp.</CommandEmpty>
+        <CommandEmpty>{{ t("rail.noMatchingSessions") }}</CommandEmpty>
         <CommandGroup
           v-for="group in groups"
           :key="group.key"
@@ -627,19 +632,19 @@ async function handleDeleteConfirm(): Promise<void> {
 
     <RenameDialog
       v-model:open="renameDialogOpen"
-      title="Đổi tên phiên"
-      description="Đặt tên gợi nhớ cho phiên làm việc này."
+      :title="t('common.renameSession')"
+      :description="t('common.renameSessionDescription')"
       :initial-value="sessionToRename?.title || ''"
-      placeholder="Nhập tên phiên..."
+      :placeholder="t('common.enterSessionName')"
       @confirm="handleRenameConfirm"
     />
 
     <ConfirmDeleteDialog
       v-model:open="deleteDialogOpen"
-      title="Xoá phiên làm việc"
-      :description="`Bạn có chắc chắn muốn xoá phiên ${sessionToDelete?.title ? `“${sessionToDelete.title}” (${sessionToDelete.sessionId})` : sessionToDelete?.sessionId}?`"
-      warning="Toàn bộ lịch sử tin nhắn, sự kiện và phê duyệt của phiên này sẽ bị xoá vĩnh viễn và không thể khôi phục."
-      confirm-label="Xoá phiên"
+      :title="t('common.deleteSession')"
+      :description="t('rail.confirmDeleteSession', { target: deleteSessionTarget })"
+      :warning="t('common.deleteSessionWarning')"
+      :confirm-label="t('common.delete')"
       :busy="deleteBusy"
       @confirm="handleDeleteConfirm"
     />

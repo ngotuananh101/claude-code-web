@@ -34,6 +34,7 @@ import {
   validateSettingsJson,
   withModelMapping,
 } from "@/features/profiles/profiles-logic.ts";
+import { useI18n } from "@/lib/i18n/index.ts";
 import {
   createProfile,
   deleteProfile,
@@ -42,6 +43,8 @@ import {
   listProfiles,
   updateProfile,
 } from "@/services/profiles-api.ts";
+
+const { t } = useI18n();
 
 /** The auth-field choices the operator can bind the API key under. */
 const AUTH_OPTIONS: Array<{ value: ProfileAuthField; label: string }> = [
@@ -119,11 +122,11 @@ async function loadModels(manual = false): Promise<void> {
   const endpoint = form.value.endpoint.trim();
   const apiKey = form.value.apiKey.trim();
   if (endpoint === "") {
-    if (manual) toast.error("Nhập endpoint trước khi tải danh sách model.");
+    if (manual) toast.error(t("profiles.enterEndpointFirst"));
     return;
   }
   if (apiKey === "" && editingDetail.value?.hasKey !== true) {
-    if (manual) toast.error("Nhập API key trước khi tải danh sách model.");
+    if (manual) toast.error(t("profiles.enterApiKeyFirst"));
     return;
   }
 
@@ -138,7 +141,7 @@ async function loadModels(manual = false): Promise<void> {
     if (requestId !== modelsRequestId) return;
     if (result.ok) {
       availableModels.value = result.models;
-      if (manual) toast.success(`Đã tải ${result.models.length} model từ gateway.`);
+      if (manual) toast.success(t("profiles.modelsLoadedGateway", { count: result.models.length }));
     } else if (result.code !== "unauthorized") {
       modelsError.value = result.message;
       if (manual) toast.error(result.message);
@@ -297,7 +300,9 @@ async function save(): Promise<void> {
     if (selectedId.value !== result.profile.profileId) {
       await selectProfile(result.profile.profileId);
     }
-    toast.success(wasCreating ? "Đã tạo profile." : "Đã lưu profile.");
+    toast.success(
+      wasCreating ? t("profiles.profileCreatedSuccess") : t("profiles.profileSavedSuccess"),
+    );
   } else {
     toast.error(result.message);
   }
@@ -307,6 +312,8 @@ function triggerDelete(profile?: ProfileSummary): void {
   if (profile) deleteTarget.value = profile;
 }
 
+const deleteProfileTargetName = computed(() => deleteTarget.value?.name ?? "");
+
 async function handleDelete(): Promise<void> {
   if (!deleteTarget.value) return;
   const id = deleteTarget.value.profileId;
@@ -315,9 +322,9 @@ async function handleDelete(): Promise<void> {
     // `load` re-resolves the selection: the deleted profile is gone from the
     // list, so it opens the next one — or a blank editor when none remain.
     await load();
-    toast.success("Đã xoá profile.");
+    toast.success(t("profiles.profileDeletedSuccess"));
   } else {
-    toast.error("Không thể xoá profile.");
+    toast.error(t("profiles.profileDeleteError"));
   }
   deleteTarget.value = null;
 }
@@ -338,32 +345,30 @@ async function confirmDelete(): Promise<void> {
   <ScrollArea class="min-h-0 flex-1">
     <div class="w-full px-7 py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
-        cc-web / profiles
+        cc-web / {{ t("rail.profiles").toLowerCase() }}
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
       </p>
-      <h1 class="mb-2 text-[26px] font-medium tracking-tight">Profiles nguồn dữ liệu.</h1>
+      <h1 class="mb-2 text-[26px] font-medium tracking-tight">{{ t("profiles.profilesDataSourceTitle") }}</h1>
       <p class="mb-6 text-sm leading-relaxed text-muted-foreground">
-        Định cấu hình nguồn dữ liệu thay thế (9Router, proxy, endpoint
-        Anthropic) và bảng ánh xạ model cho từng phiên. Thay đổi ở form này
-        cập nhật ngay sang JSON bên phải.
+        {{ t("profiles.profilesDataSourceDesc") }}
       </p>
 
       <div class="mb-6 flex items-center justify-between gap-3">
         <div class="flex items-center gap-2.5">
-          <span class="text-xs font-medium text-muted-foreground">Chọn profile:</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ t("profiles.selectProfileLabel") }}</span>
           <Select
             :model-value="selectedId ?? ''"
             @update:model-value="selectProfile"
           >
             <SelectTrigger class="w-64 sm:w-72">
-              <SelectValue placeholder="Chọn hoặc tạo profile…">
+              <SelectValue :placeholder="t('profiles.selectOrNewPlaceholder')">
                 <span v-if="selected" class="truncate font-medium text-foreground">
                   {{ selected.name }}
                 </span>
                 <span v-else-if="selectedId === null" class="italic text-muted-foreground">
-                  + Tạo profile mới
+                  {{ t("profiles.newProfileOption") }}
                 </span>
-                <span v-else class="text-muted-foreground">Chọn hoặc tạo profile…</span>
+                <span v-else class="text-muted-foreground">{{ t("profiles.selectOrNewPlaceholder") }}</span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent
@@ -371,8 +376,8 @@ async function confirmDelete(): Promise<void> {
               :side-offset="4"
               class="w-[var(--reka-select-trigger-width)] min-w-72"
             >
-              <SelectItem value="" text-value="Tạo profile mới">
-                <span class="font-medium text-primary">+ Tạo profile mới</span>
+              <SelectItem value="" :text-value="t('profiles.newProfileOption')">
+                <span class="font-medium text-primary">{{ t("profiles.newProfileOption") }}</span>
               </SelectItem>
               <SelectItem
                 v-for="p in profiles"
@@ -391,7 +396,7 @@ async function confirmDelete(): Promise<void> {
           </Select>
           <Button variant="outline" size="sm" @click="newProfile">
             <Plus :size="14" />
-            <span class="ml-1.5">Tạo profile mới</span>
+            <span class="ml-1.5">{{ t("profiles.newProfileOption") }}</span>
           </Button>
         </div>
       </div>
@@ -400,7 +405,7 @@ async function confirmDelete(): Promise<void> {
         v-if="loading"
         class="py-8 text-center text-sm text-muted-foreground"
       >
-        Đang tải profile…
+        {{ t("profiles.loadingProfiles") }}
       </div>
 
       <template v-else>
@@ -412,7 +417,7 @@ async function confirmDelete(): Promise<void> {
           <!-- LEFT: Visual form + model mapping table -->
           <section class="space-y-5">
             <div class="space-y-2">
-              <Label for="profile-name">Tên profile *</Label>
+              <Label for="profile-name">{{ t("profiles.profileNameLabel") }}</Label>
               <Input
                 id="profile-name"
                 v-model="form.name"
@@ -422,7 +427,7 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <div class="space-y-2">
-              <Label for="profile-endpoint">API Endpoint *</Label>
+              <Label for="profile-endpoint">{{ t("profiles.apiEndpointLabel") }}</Label>
               <Input
                 id="profile-endpoint"
                 v-model="form.endpoint"
@@ -432,7 +437,7 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <div class="space-y-2">
-              <Label for="profile-apiKey">API Key</Label>
+              <Label for="profile-apiKey">{{ t("profiles.apiKeyLabel") }}</Label>
               <Input
                 id="profile-apiKey"
                 v-model="form.apiKey"
@@ -440,8 +445,8 @@ async function confirmDelete(): Promise<void> {
                 autocomplete="off"
                 :placeholder="
                   keepExistingKey
-                    ? 'Để trống để giữ key đã lưu (được ẩn)'
-                    : 'Chưa có key'
+                    ? t('profiles.apiKeyEmptyKeepStored')
+                    : t('profiles.apiKeyEmptyNoKey')
                 "
                 class="font-mono text-sm"
               />
@@ -449,13 +454,12 @@ async function confirmDelete(): Promise<void> {
                 v-if="keepExistingKey"
                 class="text-xs text-muted-foreground"
               >
-                Key hiện tại đã được lưu và mã hoá an toàn. Để trống để giữ
-                nguyên, nhập giá trị mới để cập nhật.
+                {{ t("profiles.apiKeyStoredNotice") }}
               </p>
             </div>
 
             <div class="space-y-2">
-              <Label for="profile-authField">Auth Header Field</Label>
+              <Label for="profile-authField">{{ t("profiles.authHeaderFieldLabel") }}</Label>
               <Select v-model="form.authField">
                 <SelectTrigger id="profile-authField">
                   <SelectValue />
@@ -477,34 +481,33 @@ async function confirmDelete(): Promise<void> {
 
             <div>
               <div class="mb-2 flex items-end justify-between gap-2">
-                <Label>Model Mapping (Ánh xạ vai trò &rarr; upstream)</Label>
+                <Label>{{ t("profiles.modelMappingLabel") }}</Label>
                 <Button
                   type="button"
                   variant="outline"
                   size="xs"
                   class="gap-1.5 text-xs"
                   :disabled="modelsLoading"
-                  title="Tải danh sách model từ gateway"
+                  :title="t('profiles.loadModelsBtn')"
                   @click="void loadModels(true)"
                 >
                   <Loader2 v-if="modelsLoading" :size="12" class="animate-spin" />
                   <RefreshCw v-else :size="12" />
-                  <span>{{ modelsLoading ? "Đang tải…" : "Lấy model" }}</span>
+                  <span>{{ modelsLoading ? t("profiles.loadingModelsBtn") : t("profiles.loadModelsBtn") }}</span>
                 </Button>
               </div>
               <p v-if="modelsError" class="mb-2 text-[11px] text-destructive">
                 {{ modelsError }}
               </p>
               <p v-else-if="availableModels.length > 0" class="mb-2 text-[11px] text-muted-foreground">
-                {{ availableModels.length }} model từ gateway — gõ để lọc, hoặc tự
-                nhập model không có trong danh sách.
+                {{ t("profiles.modelsFilterNotice", { count: availableModels.length }) }}
               </p>
               <div class="overflow-hidden rounded-md border border-border">
                 <div
                   class="flex items-center gap-3 border-b border-border bg-muted/40 px-2 py-1.5 text-[11px] uppercase text-muted-foreground"
                 >
-                  <span class="min-w-0 flex-1">Vai trò / biến môi trường</span>
-                  <span class="w-[52%] shrink-0">Tên model upstream</span>
+                  <span class="min-w-0 flex-1">{{ t("profiles.roleEnvVarHeader") }}</span>
+                  <span class="w-[52%] shrink-0">{{ t("profiles.upstreamModelHeader") }}</span>
                 </div>
                 <div
                   v-for="m in MODEL_ROLES"
@@ -534,8 +537,7 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <p class="text-xs text-muted-foreground">
-              * Mọi thay đổi ở form này cập nhật ngay sang khung JSON bên
-              phải.
+              {{ t("profiles.formJsonSyncNotice") }}
             </p>
           </section>
 
@@ -543,9 +545,9 @@ async function confirmDelete(): Promise<void> {
           <section class="flex flex-col gap-2">
             <div class="flex items-center justify-between">
               <div>
-                <Label for="profile-json">Config JSON (Claude Code settings)</Label>
+                <Label for="profile-json">{{ t("profiles.configJsonLabel") }}</Label>
                 <p class="text-[11px] text-muted-foreground">
-                  Sửa trực tiếp block env &amp; cài đặt tuỳ chọn
+                  {{ t("profiles.configJsonDesc") }}
                 </p>
               </div>
               <TooltipProvider>
@@ -557,10 +559,10 @@ async function confirmDelete(): Promise<void> {
                     @click="json = JSON.stringify(JSON.parse(json), null, 2)"
                     :disabled="!jsonValidation.valid"
                   >
-                    Định dạng
+                    {{ t("profiles.formatJsonBtn") }}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Format JSON</TooltipContent>
+                <TooltipContent>{{ t("profiles.formatJsonTooltip") }}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
             </div>
@@ -600,11 +602,11 @@ async function confirmDelete(): Promise<void> {
                 @click="triggerDelete(selected)"
               >
                 <Trash2 :size="13" />
-                <span class="ml-1">Xoá profile</span>
+                <span class="ml-1">{{ t("profiles.deleteProfileBtn") }}</span>
               </Button>
               <Button :disabled="saveDisabled" @click="save">
                 <Save :size="14" />
-                <span class="ml-1.5">Lưu profile</span>
+                <span class="ml-1.5">{{ t("profiles.saveProfileBtn") }}</span>
               </Button>
             </div>
           </section>
@@ -615,12 +617,10 @@ async function confirmDelete(): Promise<void> {
 
   <ConfirmDeleteDialog
     v-model:open="deleteDialogOpen"
-    title="Xoá profile"
-    :description="`Bạn có chắc chắn muốn xoá profile “${deleteTarget?.name}”?`"
-    :warning="
-      'Toàn bộ cấu hình endpoint, key và ánh xạ model của profile này sẽ bị xoá vĩnh viễn.'
-    "
-    confirm-label="Xoá profile"
+    :title="t('profiles.deleteProfileBtn')"
+    :description="t('profiles.profileDeleteConfirm', { name: deleteProfileTargetName })"
+    :warning="t('profiles.profileDeleteWarning')"
+    :confirm-label="t('profiles.deleteProfileBtn')"
     :busy="deleteBusy"
     @confirm="confirmDelete"
   />
