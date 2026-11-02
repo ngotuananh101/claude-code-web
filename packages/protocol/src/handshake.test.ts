@@ -168,6 +168,195 @@ describe("hello negotiation", () => {
     }
   });
 
+  test("a hello without the runnerCapabilities field negotiates with an empty catalogue", () => {
+    // A runner that predates discovery advertises nothing; the composer and the
+    // capabilities dialog read that as "unknown", never as "no commands exist".
+    const result = negotiateHello(hello(), policy);
+    expect(result).toMatchObject({
+      ok: true,
+      runnerCapabilities: { commands: [], plugins: [], mcpServers: [], agents: [] },
+    });
+  });
+
+  test("a hello carrying runnerCapabilities has the catalogue returned", () => {
+    const result = negotiateHello(
+      hello({
+        runnerCapabilities: {
+          commands: [
+            {
+              name: "code-review",
+              description: "Review the current diff",
+              argumentHint: "[effort]",
+              builtin: true,
+              aliases: ["review"],
+              // SDK/runner internals ride along; only the wire fields survive.
+              plugin: "superpowers",
+            },
+            { name: "brainstorm" },
+          ],
+          plugins: [
+            {
+              name: "superpowers",
+              version: "1.2.3",
+              source: "claude-plugins-official",
+              installPath: "/home/runner/.claude/plugins/superpowers",
+              scope: "user",
+            },
+          ],
+          mcpServers: [
+            {
+              name: "browseros-neo",
+              status: "connected",
+              source: "user",
+              command: "node /opt/browseros-neo/dist/index.js",
+              tools: ["open", "click"],
+            },
+            // An unknown status cannot be rendered as a badge; the record is
+            // dropped rather than journaled as a status it never had.
+            { name: "broken", status: "exploded" },
+          ],
+          agents: [{ name: "Explore", description: "Read-only search agent", model: "sonnet" }],
+        },
+      }),
+      policy,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.runnerCapabilities).toEqual({
+      commands: [
+        {
+          name: "code-review",
+          description: "Review the current diff",
+          argumentHint: "[effort]",
+          builtin: true,
+          aliases: ["review"],
+        },
+        { name: "brainstorm" },
+      ],
+      plugins: [
+        {
+          name: "superpowers",
+          version: "1.2.3",
+          source: "claude-plugins-official",
+          installPath: "/home/runner/.claude/plugins/superpowers",
+          scope: "user",
+        },
+      ],
+      mcpServers: [
+        {
+          name: "browseros-neo",
+          status: "connected",
+          source: "user",
+          command: "node /opt/browseros-neo/dist/index.js",
+          tools: ["open", "click"],
+        },
+      ],
+      agents: [{ name: "Explore", description: "Read-only search agent", model: "sonnet" }],
+    });
+  });
+
+  test("an empty runnerCapabilities object negotiates as an empty catalogue", () => {
+    const result = negotiateHello(hello({ runnerCapabilities: {} }), policy);
+    expect(result).toMatchObject({
+      ok: true,
+      runnerCapabilities: { commands: [], plugins: [], mcpServers: [], agents: [] },
+    });
+  });
+
+  test("a runnerCapabilities field outside the shape is malformed", () => {
+    for (const bad of [
+      "catalogue",
+      [],
+      { commands: "code-review" },
+      { plugins: "superpowers" },
+      { mcpServers: { name: "db" } },
+      { agents: "Explore" },
+      null,
+    ]) {
+      expect(negotiateHello(hello({ runnerCapabilities: bad }), policy)).toMatchObject({
+        ok: false,
+        reason: "malformed",
+      });
+    }
+  });
+
+  test("malformed catalogue records are ignored, not fatal", () => {
+    // The catalogue is display-only discovery data: one bad entry must not
+    // refuse the hello, exactly like an unknown effort level on a model.
+    const result = negotiateHello(
+      hello({
+        runnerCapabilities: {
+          commands: [{ name: "compact" }, "junk", { name: "" }],
+          plugins: [{ name: "remember" }, null],
+          mcpServers: [{ name: "db", status: "failed", env: { API_KEY: "sk-live" } }],
+          agents: [{ name: "Explore" }, 7],
+        },
+      }),
+      policy,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.runnerCapabilities).toEqual({
+      commands: [{ name: "compact" }],
+      plugins: [{ name: "remember" }],
+      mcpServers: [{ name: "db", status: "failed" }],
+      agents: [{ name: "Explore" }],
+    });
+  });
+
+  test("the catalogue strips env blocks so MCP credentials never reach the journal", () => {
+    // §4.1 secret sanitization: the runner redacts before sending, and the
+    // server-side parser redacts again by construction — a field that is never
+    // copied cannot be persisted, even from a runner that failed to strip it.
+    const result = negotiateHello(
+      hello({
+        runnerCapabilities: {
+          mcpServers: [
+            {
+              name: "db",
+              status: "configured",
+              source: "project",
+              command: "npx mcp-server",
+              env: {
+                DATABASE_URL: "postgres://user:password@host/db",
+                ANTHROPIC_AUTH_TOKEN: "token",
+              },
+            },
+          ],
+        },
+      }),
+      policy,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const server = result.runnerCapabilities.mcpServers[0];
+    expect(server).toEqual({
+      name: "db",
+      status: "configured",
+      source: "project",
+      command: "npx mcp-server",
+    });
+    expect(JSON.stringify(result.runnerCapabilities)).not.toContain("password");
+    expect(JSON.stringify(result.runnerCapabilities)).not.toContain("token");
+  });
+
+  test("feature flags and the catalogue negotiate side by side", () => {
+    // `capabilities` (string feature flags) and `runnerCapabilities` (the
+    // discovered catalogue) are different fields with different lifetimes; a
+    // hello may carry both, and neither may shadow the other.
+    const result = negotiateHello(
+      hello({
+        capabilities: ["inspect", "browse"],
+        runnerCapabilities: { commands: [{ name: "compact", builtin: true }] },
+      }),
+      policy,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.capabilities).toEqual(["inspect", "browse"]);
+    expect(result.runnerCapabilities.commands).toEqual([{ name: "compact", builtin: true }]);
+  });
+
   test("rejects a hello carrying provider secrets or raw environment", () => {
     // §6.2: the hello payload carries no provider keys, raw env or full config.
     // Accepting one would put a credential into the control journal permanently.

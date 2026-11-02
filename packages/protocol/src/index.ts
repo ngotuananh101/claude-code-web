@@ -5,6 +5,8 @@
  * See ARCHITECTURE.md §9 (commands), §12 (events), §17 (HTTP/wire).
  */
 
+import type { RunnerCapabilities } from "./capabilities.ts";
+
 export const PROTOCOL_VERSION = 1 as const;
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
@@ -42,7 +44,13 @@ export const WS_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
  */
 export const MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024;
 
-export type RunnerCommand = {
+/**
+ * Server → Runner: one dispatched command (§9.1). Named `RunnerCommandEnvelope`
+ * to distinguish it from the `RunnerCommand` slash-command catalogue entry in
+ * `capabilities.ts`: the envelope travels one command to a runner, the
+ * catalogue entry describes a command a runner can run.
+ */
+export type RunnerCommandEnvelope = {
   protocolVersion: ProtocolVersion;
   commandId: string;
   runnerId: string;
@@ -263,6 +271,12 @@ export type RunnerHello = {
    * gates on before dispatching an inspection.
    */
   capabilities?: string[];
+  /**
+   * The commands, plugins, MCP servers and agents this runner discovered at
+   * boot (§4.1). Optional so an older runner can still say hello; absent reads
+   * as an empty catalogue, exactly like `capabilities` and `models`.
+   */
+  runnerCapabilities?: RunnerCapabilities;
 };
 
 export type RunInventoryItem = {
@@ -286,6 +300,18 @@ export {
   type SessionCleanupRequest,
   type SessionCleanupResult,
 } from "./attachments.ts";
+
+export {
+  parseRunnerAgents,
+  parseRunnerCommands,
+  parseRunnerMcpServers,
+  parseRunnerPlugins,
+  type RunnerAgent,
+  type RunnerCapabilities,
+  type RunnerCommand,
+  type RunnerMcpServer,
+  type RunnerPlugin,
+} from "./capabilities.ts";
 
 export {
   ConnectionRegistry,

@@ -12,6 +12,13 @@
  * reconciliation before dispatch.
  */
 
+import {
+  parseRunnerAgents,
+  parseRunnerCommands,
+  parseRunnerMcpServers,
+  parseRunnerPlugins,
+  type RunnerCapabilities,
+} from "./capabilities.ts";
 import { parseRunnerModels, type RunnerModel } from "./models.ts";
 import { type DeclaredWorkspace, parseDeclaredWorkspaces } from "./reconcile.ts";
 
@@ -52,6 +59,12 @@ export type NegotiateResult =
        * back to the protocol's own `MODEL_IDS`, never to "accept anything".
        */
       models: RunnerModel[];
+      /**
+       * The commands, plugins, MCP servers and agents this runner discovered
+       * at boot (§4.1). Empty lists for a runner that predates discovery —
+       * the capabilities dialog then shows nothing, never refuses a hello.
+       */
+      runnerCapabilities: RunnerCapabilities;
     }
   | {
       ok: false;
@@ -138,6 +151,14 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     return fail("malformed", "models must be an array of model descriptors");
   }
 
+  // §4.1: the discovered command/plugin/MCP/agent catalogue, so the composer
+  // and the capabilities dialog can show what this host actually offers. Same
+  // reading as models — absent is a pre-discovery runner, not an error.
+  const runnerCapabilities = parseRunnerCapabilities(record["runnerCapabilities"]);
+  if (runnerCapabilities === undefined) {
+    return fail("malformed", "runnerCapabilities must be an object of catalogues");
+  }
+
   const clientVersion = record["protocolVersion"];
 
   // Refuse a version the server cannot speak. Silently accepting and ignoring
@@ -155,6 +176,7 @@ export function negotiateHello(input: unknown, policy: ServerPolicy): NegotiateR
     workspaces,
     capabilities,
     models,
+    runnerCapabilities,
     negotiation: {
       protocolVersion: policy.maxProtocolVersion,
       policy: {
@@ -187,6 +209,33 @@ export function parseCapabilities(value: unknown): string[] | undefined {
     if (!capabilities.includes(entry)) capabilities.push(entry);
   }
   return capabilities;
+}
+
+/**
+ * Compose the four catalogue parsers over the hello's `runnerCapabilities`
+ * field. The field itself must be an object when present — an array or a
+ * string is a shape violation, not an empty catalogue — while each sub-list is
+ * parsed by its own parser, whose `undefined` (non-array) propagates as
+ * malformed. Absent is a pre-discovery runner: every sub-parser then reads an
+ * absent field as an empty list.
+ */
+function parseRunnerCapabilities(value: unknown): RunnerCapabilities | undefined {
+  if (value === undefined) {
+    return { commands: [], plugins: [], mcpServers: [], agents: [] };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const commands = parseRunnerCommands(record["commands"]);
+  if (commands === undefined) return undefined;
+  const plugins = parseRunnerPlugins(record["plugins"]);
+  if (plugins === undefined) return undefined;
+  const mcpServers = parseRunnerMcpServers(record["mcpServers"]);
+  if (mcpServers === undefined) return undefined;
+  const agents = parseRunnerAgents(record["agents"]);
+  if (agents === undefined) return undefined;
+  return { commands, plugins, mcpServers, agents };
 }
 
 function fail(reason: FailureReason, detail: string): NegotiateResult {

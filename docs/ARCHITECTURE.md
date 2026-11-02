@@ -310,6 +310,16 @@ type RunnerHello = {
   maxConcurrentRuns: number;
   activeRuns: RunInventoryItem[];
   eventOffsets: RunEventOffset[];
+  /** Feature flags tùy chọn (§6.4), ví dụ "inspect". */
+  capabilities?: string[];
+  /** Models runner's Claude Code offers; vắng = runner predates discovery. */
+  models?: RunnerModel[];
+  /**
+   * Catalogue discovered at boot (§4.1): commands, plugins, MCP servers,
+   * agents. Khối `env` của MCP server bị strip ở parser — không bao giờ
+   * lên journal, dù runner có gửi.
+   */
+  runnerCapabilities?: RunnerCapabilities;
 };
 ```
 
@@ -432,7 +442,7 @@ Phase sau. Cần xem diff, backup, expected hash, atomic write, audit và xác n
 ### 9.1. Envelope
 
 ```ts
-type RunnerCommand = {
+type RunnerCommandEnvelope = {
   protocolVersion: 1;
   commandId: string;
   runnerId: string;
@@ -448,7 +458,7 @@ type RunnerCommand = {
 };
 ```
 
-Payload là discriminated union đã validate; examples không phải SDK API. Request fingerprint dùng canonical serialization có định nghĩa version, không hash JSON với ordering không ổn định.
+Payload là discriminated union đã validate; examples không phải SDK API. Request fingerprint dùng canonical serialization có định nghĩa version, không hash JSON với ordering không ổn định. Kiểu mang tên `RunnerCommandEnvelope` để phân biệt với `RunnerCommand` — entry catalogue slash-command trong `runnerCapabilities` (§4.1).
 
 ### 9.2. Server outbox
 

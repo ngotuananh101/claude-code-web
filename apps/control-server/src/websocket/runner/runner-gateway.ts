@@ -33,7 +33,7 @@ import {
   parseDeclaredWorkspaces,
   parseRpcResultFrame,
   type RpcResultFrame,
-  type RunnerCommand,
+  type RunnerCommandEnvelope,
   type RunnerEvent,
   type RunnerModel,
   type RunnerRunState,
@@ -432,7 +432,7 @@ export class RunnerGateway {
    * receipt: the write can still be lost, which is why the caller keeps the
    * command deliverable.
    */
-  sendCommand(runnerId: string, command: RunnerCommand): SendCommandResult {
+  sendCommand(runnerId: string, command: RunnerCommandEnvelope): SendCommandResult {
     if (this.#connections.isRevoked(runnerId)) return { ok: false, reason: "revoked" };
 
     const connection = this.#live.get(runnerId);

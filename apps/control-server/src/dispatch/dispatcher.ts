@@ -20,14 +20,14 @@
  */
 
 import type { CommandOutbox, OutboxCommand } from "@cc-web/control-db";
-import { PROTOCOL_VERSION, type RunnerCommand } from "@cc-web/protocol";
+import { PROTOCOL_VERSION, type RunnerCommandEnvelope } from "@cc-web/protocol";
 import type { CommandReceipt } from "../websocket/runner/runner-gateway.ts";
 
 /** The subset of `RunnerGateway` used here; keeps the dispatcher testable. */
 export type CommandSink = {
   sendCommand(
     runnerId: string,
-    command: RunnerCommand,
+    command: RunnerCommandEnvelope,
   ): { ok: true } | { ok: false; reason: "offline" | "not_ready" | "revoked" };
 };
 
@@ -155,14 +155,14 @@ export class Dispatcher {
 export function toEnvelope(
   command: OutboxCommand,
   openSecurePayload?: (stored: unknown) => unknown | null,
-): RunnerCommand {
+): RunnerCommandEnvelope {
   let payload = command.payloadSecure ?? command.payload;
   if (command.payloadSecure !== undefined && openSecurePayload !== undefined) {
     const opened = openSecurePayload(command.payloadSecure);
     payload = opened === null ? command.payload : opened;
   }
 
-  const envelope: RunnerCommand = {
+  const envelope: RunnerCommandEnvelope = {
     protocolVersion: PROTOCOL_VERSION,
     commandId: command.commandId,
     runnerId: command.runnerId,
