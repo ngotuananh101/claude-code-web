@@ -18,6 +18,16 @@ export interface UpdateMePayload {
 }
 
 /**
+ * Internal type for building the payload with undefined handling for exactOptionalPropertyTypes
+ */
+export type UpdateMePayloadInternal = {
+  username?: string | undefined;
+  avatar?: string | null | undefined;
+  currentPassword?: string | undefined;
+  newPassword?: string | undefined;
+};
+
+/**
  * User profile update response (Task 4).
  *
  * A 200 response becomes `{ ok: true, username, avatar }` with the updated
@@ -35,7 +45,9 @@ export type UpdateMeResponse =
  * store's account and avatar, then returns the new profile. On error,
  * returns a Vietnamese message parsed from the body or a generic fallback.
  */
-export async function updateUserProfile(payload: UpdateMePayload): Promise<UpdateMeResponse> {
+export async function updateUserProfile(
+  payload: UpdateMePayloadInternal,
+): Promise<UpdateMeResponse> {
   try {
     const response = await authFetch("/api/me", {
       method: "PATCH",
