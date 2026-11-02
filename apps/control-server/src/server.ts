@@ -61,7 +61,7 @@ import {
   handleUpdateProfile,
 } from "./routes/config-routes.ts";
 import { handleInspect } from "./routes/inspect-routes.ts";
-import { handleMe } from "./routes/me-routes.ts";
+import { handleMe, handleUpdateMe } from "./routes/me-routes.ts";
 import {
   handleFileRevert,
   handleFileWrite,
@@ -556,6 +556,10 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/me" && request.method === "GET") {
         return handleMe(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/me" && request.method === "PATCH") {
+        return handleUpdateMe(request, options, allowed, browserGateway);
       }
 
       // Profiles management (§17.1, §18.1, P3-C). Owner-scoped CRUD over
