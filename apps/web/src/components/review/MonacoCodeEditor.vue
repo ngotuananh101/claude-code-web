@@ -9,9 +9,12 @@ const props = withDefaults(
     content: string;
     path?: string;
     readOnly?: boolean;
+    minimap?: boolean;
+    options?: monaco.editor.IStandaloneEditorConstructionOptions;
   }>(),
   {
     readOnly: false,
+    minimap: true,
   },
 );
 
@@ -38,6 +41,8 @@ onMounted(() => {
     theme: "cc-web-dark",
     automaticLayout: true,
     readOnly: props.readOnly,
+    minimap: { enabled: props.minimap },
+    ...props.options,
   });
 
   model = editor.getModel();
@@ -69,6 +74,23 @@ watch(
       editor.updateOptions({ readOnly: newReadOnly });
     }
   },
+);
+
+watch(
+  () => props.minimap,
+  (newMinimap) => {
+    editor?.updateOptions({ minimap: { enabled: newMinimap } });
+  },
+);
+
+watch(
+  () => props.options,
+  (newOptions) => {
+    if (editor && newOptions) {
+      editor.updateOptions(newOptions);
+    }
+  },
+  { deep: true },
 );
 
 onUnmounted(() => {

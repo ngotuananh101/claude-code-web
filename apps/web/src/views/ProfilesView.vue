@@ -10,6 +10,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
 import ModelCombobox from "@/components/profiles/ModelCombobox.vue";
+import MonacoCodeEditor from "@/components/review/MonacoCodeEditor.vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProfileForm } from "@/features/profiles/profiles-logic.ts";
 import {
@@ -194,9 +194,12 @@ async function selectProfile(raw: string): Promise<void> {
     // selection's text — so a profile's own custom env/permissions show up and
     // the editor never carries another profile's leftover settings.
     json.value = formToJson(form.value, result.profile.settings ?? {});
-    // Kick off the catalogue lookup after the editor is seeded; it stays
-    // silent so a gateway that is down never blocks opening a profile.
-    void loadModels();
+    // Reset catalogue for the newly opened profile; models are fetched on-demand
+    // only when the operator clicks "Lấy model".
+    modelsRequestId += 1;
+    availableModels.value = [];
+    modelsLoading.value = false;
+    modelsError.value = null;
   } else if (result.code !== "unauthorized") {
     toast.error(result.message);
   }
@@ -352,19 +355,36 @@ async function confirmDelete(): Promise<void> {
             :model-value="selectedId ?? ''"
             @update:model-value="selectProfile"
           >
-            <SelectTrigger class="w-48">
-              <SelectValue placeholder="Chọn hoặc tạo profile…" />
+            <SelectTrigger class="w-64 sm:w-72">
+              <SelectValue placeholder="Chọn hoặc tạo profile…">
+                <span v-if="selected" class="truncate font-medium text-foreground">
+                  {{ selected.name }}
+                </span>
+                <span v-else-if="selectedId === null" class="italic text-muted-foreground">
+                  + Tạo profile mới
+                </span>
+                <span v-else class="text-muted-foreground">Chọn hoặc tạo profile…</span>
+              </SelectValue>
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="" class="font-mono">mới</SelectItem>
+            <SelectContent
+              position="popper"
+              :side-offset="4"
+              class="w-[var(--reka-select-trigger-width)] min-w-72"
+            >
+              <SelectItem value="" text-value="Tạo profile mới">
+                <span class="font-medium text-primary">+ Tạo profile mới</span>
+              </SelectItem>
               <SelectItem
                 v-for="p in profiles"
                 :key="p.profileId"
                 :value="p.profileId"
+                :text-value="p.name"
               >
-                <div class="flex flex-col">
-                  <span class="font-medium">{{ p.name }}</span>
-                  <span class="text-xs text-muted-foreground">{{ p.endpoint }}</span>
+                <div class="flex flex-col gap-0.5 py-0.5 min-w-0">
+                  <span class="font-medium text-foreground truncate">{{ p.name }}</span>
+                  <span class="font-mono text-[11px] text-muted-foreground truncate">
+                    {{ p.endpoint }}
+                  </span>
                 </div>
               </SelectItem>
             </SelectContent>
@@ -460,9 +480,9 @@ async function confirmDelete(): Promise<void> {
                 <Label>Model Mapping (Ánh xạ vai trò &rarr; upstream)</Label>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="xs"
-                  class="gap-1 text-[11px] text-muted-foreground"
+                  class="gap-1.5 text-xs"
                   :disabled="modelsLoading"
                   title="Tải danh sách model từ gateway"
                   @click="void loadModels(true)"
@@ -545,17 +565,27 @@ async function confirmDelete(): Promise<void> {
             </TooltipProvider>
             </div>
 
-            <div class="relative flex-1">
-              <Textarea
-                id="profile-json"
-                v-model="json"
-                spellcheck="false"
-                class="min-h-[420px] font-mono text-xs overflow-y-auto"
-                rows="18"
+            <div
+              class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#09090b] min-h-[420px]"
+            >
+              <MonacoCodeEditor
+                :content="json"
+                path="settings.json"
+                :minimap="false"
+                :options="{
+                  fontSize: 12,
+                  lineNumbers: 'on',
+                  scrollBeyondLastLine: false,
+                  tabSize: 2,
+                  renderLineHighlight: 'all',
+                  padding: { top: 8, bottom: 8 },
+                }"
+                class="size-full"
+                @update:content="json = $event"
               />
               <div
                 v-if="!jsonValidation.valid"
-                class="absolute right-2 top-2 rounded border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive"
+                class="pointer-events-none absolute right-3 top-2.5 z-10 rounded border border-destructive/30 bg-destructive/90 px-2 py-0.5 text-[10px] font-medium text-destructive-foreground shadow-sm"
               >
                 {{ jsonValidation.error }}
               </div>

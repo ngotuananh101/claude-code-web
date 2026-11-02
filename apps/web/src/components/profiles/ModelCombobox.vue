@@ -145,7 +145,7 @@ function onBlur(): void {
         v-else-if="models.length === 0"
         class="px-2 py-1.5 text-xs text-muted-foreground"
       >
-        Chưa có danh sách model — bấm nút tải lại để thử.
+        Chưa có danh sách model — bấm nút "Lấy model" để tải.
       </div>
       <div v-else-if="filtered.length === 0" class="px-2 py-1.5 text-xs text-muted-foreground">
         Không có model nào khớp — vẫn có thể gõ tay tên model.
