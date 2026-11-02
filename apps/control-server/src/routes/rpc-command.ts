@@ -41,7 +41,7 @@ export async function submitRpc(
   options: ServerOptions,
   runnerGateway: {
     stateOf(runnerId: string): string;
-    capabilitiesOf(runnerId: string): readonly string[];
+    capabilitiesOf(runnerId: string): readonly string[] | undefined;
   },
   pending: PendingRpcRequests,
   dispatcher: Dispatcher | undefined,
@@ -52,7 +52,8 @@ export async function submitRpc(
   if (runnerGateway.stateOf(runnerId) !== "ready") {
     return jsonError("RUNNER_UNAVAILABLE", "runner unavailable", 503);
   }
-  if (!runnerGateway.capabilitiesOf(runnerId).includes(capability)) {
+  const capabilities = runnerGateway.capabilitiesOf(runnerId);
+  if (!capabilities?.includes(capability)) {
     return jsonError("RUNNER_UNAVAILABLE", `runner does not support ${capability}`, 503);
   }
 

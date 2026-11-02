@@ -19,10 +19,12 @@ describe('slash-commands', () => {
         commands: [
           {
             name: 'test-command',
-            displayName: 'Test Command',
             description: 'A test command',
           },
         ],
+        plugins: [],
+        mcpServers: [],
+        agents: [],
       };
       const commands = getAvailableCommands(mockCapabilities);
       expect(commands).toContainEqual({

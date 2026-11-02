@@ -407,7 +407,7 @@ export class RunnerGateway {
    * copy, `[]` when nothing is live — and deliberately `[]` after a close, so
    * a caller that gatekeeps on this cannot act on a stale declaration.
    */
-  capabilitiesOf(runnerId: string): RunnerCapabilities | undefined {
+  capabilitiesOf(runnerId: string): readonly string[] | undefined {
     return this.#live.get(runnerId)?.capabilities;
   }
 
