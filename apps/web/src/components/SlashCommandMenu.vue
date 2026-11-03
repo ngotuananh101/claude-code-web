@@ -17,8 +17,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
-import type { SlashCommandItem } from '../features/composer/slash-commands';
+import { computed, ref, watch } from "vue";
+import type { SlashCommandItem } from "../features/composer/slash-commands";
 
 interface Props {
   commands: SlashCommandItem[];
@@ -27,14 +27,14 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-const emit = defineEmits(['select']);
+const emit = defineEmits(["select"]);
 
 const selectedIndex = ref(0);
 
 const filteredCommands = computed(() => {
   if (!props.query) return props.commands;
 
-  const normalizedQuery = props.query.toLowerCase().replace(/^\//, '');
+  const normalizedQuery = props.query.toLowerCase().replace(/^\//, "");
 
   return props.commands.filter((cmd) => {
     const nameMatch = cmd.name.toLowerCase().includes(normalizedQuery);
@@ -45,47 +45,50 @@ const filteredCommands = computed(() => {
   });
 });
 
-watch(() => props.visible, (newVal) => {
-  if (newVal) {
-    selectedIndex.value = 0;
-  }
-});
+watch(
+  () => props.visible,
+  (newVal) => {
+    if (newVal) {
+      selectedIndex.value = 0;
+    }
+  },
+);
 
-watch(() => filteredCommands.value, (newCommands) => {
-  if (newCommands.length > 0) {
-    selectedIndex.value = 0;
-  }
-});
+watch(
+  () => filteredCommands.value,
+  (newCommands) => {
+    if (newCommands.length > 0) {
+      selectedIndex.value = 0;
+    }
+  },
+);
 
 function selectCommand(command: SlashCommandItem) {
-  emit('select', command);
+  emit("select", command);
 }
 
 function handleKeyDown(event: KeyboardEvent) {
   if (!props.visible) return;
 
   switch (event.key) {
-    case 'ArrowUp':
+    case "ArrowUp":
       event.preventDefault();
       selectedIndex.value = Math.max(0, selectedIndex.value - 1);
       break;
-    case 'ArrowDown':
+    case "ArrowDown":
       event.preventDefault();
-      selectedIndex.value = Math.min(
-        filteredCommands.value.length - 1,
-        selectedIndex.value + 1
-      );
+      selectedIndex.value = Math.min(filteredCommands.value.length - 1, selectedIndex.value + 1);
       break;
-    case 'Enter':
-    case 'Tab':
+    case "Enter":
+    case "Tab":
       event.preventDefault();
       if (filteredCommands.value.length > 0) {
-        selectCommand(filteredCommands.value[selectedIndex.value]);
+        selectCommand(filteredCommands.value[selectedIndex.value]!);
       }
       break;
-    case 'Escape':
+    case "Escape":
       event.preventDefault();
-      emit('select', null);
+      emit("select", null);
       break;
   }
 }

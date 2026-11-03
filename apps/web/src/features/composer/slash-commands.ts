@@ -1,38 +1,38 @@
-import type { RunnerCapabilities, RunnerCommand } from '@cc-web/protocol';
+import type { RunnerCapabilities, RunnerCommand } from "@cc-web/protocol";
 
 export type SlashCommandItem = {
   name: string;
   displayName: string;
   description: string;
   argumentHint?: string;
-  category: 'skill' | 'builtin' | 'plugin' | 'agent';
-  pluginName?: string;
+  category: "skill" | "builtin" | "plugin" | "agent";
+  pluginName?: string | undefined;
 };
 
 export function getAvailableCommands(runnerCapabilities?: RunnerCapabilities): SlashCommandItem[] {
   const builtinCommands: SlashCommandItem[] = [
     {
-      name: 'clear',
-      displayName: 'Clear',
-      description: 'Clear the conversation',
-      category: 'builtin',
+      name: "clear",
+      displayName: "Clear",
+      description: "Clear the conversation",
+      category: "builtin",
     },
     {
-      name: 'code-review',
-      displayName: 'Code Review',
-      description: 'Review code',
-      category: 'builtin',
+      name: "code-review",
+      displayName: "Code Review",
+      description: "Review code",
+      category: "builtin",
     },
     // Add more builtin commands as needed
   ];
 
-  const runnerCommands: SlashCommandItem[] = runnerCapabilities?.commands?.map((cmd: RunnerCommand) => ({
-    name: cmd.name,
-    displayName: cmd.displayName || cmd.name,
-    description: cmd.description || '',
-    category: 'plugin',
-    pluginName: cmd.pluginName,
-  })) || [];
+  const runnerCommands: SlashCommandItem[] =
+    runnerCapabilities?.commands?.map((cmd: RunnerCommand) => ({
+      name: cmd.name,
+      displayName: cmd.name,
+      description: cmd.description || "",
+      category: cmd.builtin ? ("builtin" as const) : ("plugin" as const),
+    })) || [];
 
   return [...builtinCommands, ...runnerCommands];
 }
@@ -40,7 +40,7 @@ export function getAvailableCommands(runnerCapabilities?: RunnerCapabilities): S
 export function filterCommands(commands: SlashCommandItem[], query: string): SlashCommandItem[] {
   if (!query) return commands;
 
-  const normalizedQuery = query.toLowerCase().replace(/^\//, '');
+  const normalizedQuery = query.toLowerCase().replace(/^\//, "");
 
   return commands.filter((cmd) => {
     const nameMatch = cmd.name.toLowerCase().includes(normalizedQuery);
@@ -51,7 +51,10 @@ export function filterCommands(commands: SlashCommandItem[], query: string): Sla
   });
 }
 
-export function applyCommandToPrompt(prompt: string, command: SlashCommandItem): { newPrompt: string; cursorPosition: number } {
+export function applyCommandToPrompt(
+  prompt: string,
+  command: SlashCommandItem,
+): { newPrompt: string; cursorPosition: number } {
   const commandText = `/${command.name}`;
   const newPrompt = `${commandText} ${prompt}`.trim();
   const cursorPosition = commandText.length + 1;

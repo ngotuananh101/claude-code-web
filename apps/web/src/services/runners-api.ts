@@ -1,13 +1,14 @@
 /**
  * The runner registry's HTTP half (§6.1, §5.2): who exists, and — for a live
- * runner — which models its Claude Code offers.
+ * runner — which models its Claude Code offers and which commands, plugins,
+ * MCP servers and agents it discovered at boot.
  *
  * The model list is what the composer's picker is built from. An offline
  * runner answers with none: absence means "unknown", never "nothing to run",
  * so the picker falls back to the protocol's own list rather than going empty.
  */
 
-import type { RunnerModel } from "@cc-web/protocol";
+import type { RunnerCapabilities, RunnerModel } from "@cc-web/protocol";
 import { authFetch } from "./auth-api.ts";
 
 export type OwnerRunner = {
@@ -16,6 +17,13 @@ export type OwnerRunner = {
   revokedAt: number | null;
   /** The models this runner's Claude Code advertised; empty when unknown. */
   models: RunnerModel[];
+  /**
+   * The commands, plugins, MCP servers and agents this runner's Claude Code
+   * discovered at boot — the composer's slash-command catalogue. Absent when
+   * the runner is offline or predates discovery; like `models`, absence means
+   * "unknown", never "nothing to offer".
+   */
+  capabilities?: RunnerCapabilities;
 };
 
 export type RunnersResult =
