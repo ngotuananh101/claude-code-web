@@ -35,12 +35,16 @@ describe("i18n module", () => {
     expect(t("user.dialogTitle")).toBe("Hồ sơ người dùng");
     expect(t("user.uploadBtn")).toBe("Tải ảnh lên");
     expect(t("user.usernameLabel")).toBe("Tên đăng nhập");
+    expect(t("user.accountSection")).toBe("Tài khoản & Mật khẩu");
+    expect(t("user.notificationsSection")).toBe("Cài đặt thông báo");
     expect(t("profiles.profileDeletedSuccess")).toBe("Đã xóa profile.");
 
     setLocale("en");
     expect(t("user.dialogTitle")).toBe("User Profile");
     expect(t("user.uploadBtn")).toBe("Upload avatar");
     expect(t("user.usernameLabel")).toBe("Username");
+    expect(t("user.accountSection")).toBe("Account & Security");
+    expect(t("user.notificationsSection")).toBe("Notification Preferences");
     expect(t("profiles.profileDeletedSuccess")).toBe("Profile deleted.");
   });
 });

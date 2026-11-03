@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Copy, Loader2 } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import {
@@ -80,16 +81,18 @@ const browserStorage = {
   setItem: (key: string, value: string) => window.localStorage.setItem(key, value),
 };
 const browserPermissionText = computed(() => {
-  if (browserPermission.value === "granted") return "Đã cho phép";
-  if (browserPermission.value === "denied") return "Đã bị từ chối (đổi trong cài đặt trình duyệt)";
-  if (browserPermission.value === "unsupported") return "Trình duyệt không hỗ trợ";
-  return "Chưa xin phép";
+  if (browserPermission.value === "granted") return t("user.browserPermissionGranted");
+  if (browserPermission.value === "denied") return t("user.browserPermissionDenied");
+  if (browserPermission.value === "unsupported") return t("user.browserPermissionUnsupported");
+  return t("user.browserPermissionPrompt");
 });
 const telegramStatusText = computed(() => {
-  if (telegramStatus.value === null) return "Không tải được trạng thái";
-  if (!telegramStatus.value.configured) return "Chưa cấu hình bot trên máy chủ";
-  if (!telegramStatus.value.linked) return "Chưa liên kết";
-  return telegramStatus.value.enabled ? "Đã liên kết, đang bật" : "Đã liên kết, đang tắt";
+  if (telegramStatus.value === null) return t("user.telegramStatusError");
+  if (!telegramStatus.value.configured) return t("user.telegramStatusUnconfigured");
+  if (!telegramStatus.value.linked) return t("user.telegramStatusUnlinked");
+  return telegramStatus.value.enabled
+    ? t("user.telegramStatusLinkedEnabled")
+    : t("user.telegramStatusLinkedDisabled");
 });
 
 async function loadNotifications(): Promise<void> {
@@ -105,7 +108,7 @@ async function toggleBrowser(event: Event): Promise<void> {
     browserPermission.value = await Notification.requestPermission();
     if (browserPermission.value !== "granted") {
       browserEnabled.value = false;
-      toast.error("Trình duyệt chưa cho phép thông báo.");
+      toast.error(t("user.browserPermissionDeniedToast"));
       return;
     }
   }
@@ -118,7 +121,7 @@ async function createLink(): Promise<void> {
   try {
     const result = await createTelegramLink();
     if (result === null) {
-      toast.error("Không tạo được mã liên kết. Kiểm tra bot đã cấu hình chưa.");
+      toast.error(t("user.telegramCreateCodeFailed"));
       return;
     }
     telegramCode.value = result.code;
@@ -131,17 +134,17 @@ async function copyCode(): Promise<void> {
   if (telegramCode.value === null) return;
   try {
     await navigator.clipboard.writeText(`/start ${telegramCode.value}`);
-    toast.success("Đã sao chép lệnh liên kết.");
+    toast.success(t("user.telegramCopied"));
   } catch {
-    toast.error("Không sao chép được, hãy gõ tay mã trên.");
+    toast.error(t("user.telegramCopyFailed"));
   }
 }
 
 async function testTelegram(): Promise<void> {
   telegramBusy.value = true;
   try {
-    if (await sendTelegramTest()) toast.success("Đã gửi tin thử qua Telegram.");
-    else toast.error("Gửi tin thử thất bại. Kiểm tra liên kết Telegram.");
+    if (await sendTelegramTest()) toast.success(t("user.telegramTestSuccess"));
+    else toast.error(t("user.telegramTestFailed"));
   } finally {
     telegramBusy.value = false;
   }
@@ -153,9 +156,9 @@ async function unlink(): Promise<void> {
     if (await unlinkTelegram()) {
       telegramCode.value = null;
       telegramStatus.value = await getTelegramStatus();
-      toast.success("Đã hủy liên kết Telegram.");
+      toast.success(t("user.telegramUnlinkSuccess"));
     } else {
-      toast.error("Hủy liên kết thất bại.");
+      toast.error(t("user.telegramUnlinkFailed"));
     }
   } finally {
     telegramBusy.value = false;
@@ -167,7 +170,7 @@ async function toggleTelegramEnabled(event: Event): Promise<void> {
   if (await setTelegramEnabled(checked)) {
     telegramStatus.value = await getTelegramStatus();
   } else {
-    toast.error("Đổi cài đặt Telegram thất bại.");
+    toast.error(t("user.telegramToggleFailed"));
   }
 }
 
@@ -292,179 +295,289 @@ const onClose = () => {
 
 <template>
   <Dialog :open="open" @update:open="onClose">
-    <DialogContent class="sm:max-w-md">
-      <DialogHeader>
-        <DialogTitle>{{ t("user.dialogTitle") }}</DialogTitle>
-        <DialogDescription>{{ t("user.dialogDescription") }}</DialogDescription>
+    <DialogContent
+      class="flex max-h-[90dvh] w-full max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl md:max-w-3xl lg:max-w-4xl"
+    >
+      <!-- Dialog Header: Fixed at top -->
+      <DialogHeader class="shrink-0 border-b border-border/60 px-6 py-4 pr-12 text-left">
+        <DialogTitle class="text-base font-semibold">{{ t("user.dialogTitle") }}</DialogTitle>
+        <DialogDescription class="text-xs text-muted-foreground">
+          {{ t("user.dialogDescription") }}
+        </DialogDescription>
       </DialogHeader>
 
-      <!-- Avatar Section -->
-      <div class="flex flex-col gap-4">
-        <div class="flex flex-col items-center gap-3">
-          <!-- Circular Avatar Preview -->
-          <div
-            class="relative flex items-center justify-center rounded-full bg-muted overflow-hidden"
-            :class="`w-16 h-16 sm:w-18 sm:h-18 border-2 border-border`"
-          >
-            <!-- Circular mask using CSS -->
-            <div class="absolute inset-0 rounded-full overflow-hidden">
+      <!-- Scrollable Body: 2 columns on desktop/tablet, 1 stacked column on mobile -->
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5">
+        <div class="grid grid-cols-1 gap-6 items-start md:grid-cols-2">
+          <!-- COLUMN 1: Account Information & Security -->
+          <div class="flex flex-col gap-4">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {{ t("user.accountSection") }}
+            </h4>
+
+            <!-- Circular Avatar & Actions -->
+            <div class="flex items-center gap-4 rounded-xl border border-border/60 bg-muted/20 p-3.5">
               <div
-                v-if="avatarUrl"
-                class="w-full h-full bg-cover bg-center"
-                :style="{ backgroundImage: `url(${avatarUrl})` }"
-              />
-              <div
-                v-else
-                class="w-full h-full flex items-center justify-center text-2xl font-medium text-foreground/50"
+                class="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-border bg-muted"
               >
-                {{ avatarInitial }}
+                <div class="absolute inset-0 overflow-hidden rounded-full">
+                  <div
+                    v-if="avatarUrl"
+                    class="h-full w-full bg-cover bg-center"
+                    :style="{ backgroundImage: `url(${avatarUrl})` }"
+                  />
+                  <div
+                    v-else
+                    class="flex h-full w-full items-center justify-center text-2xl font-medium text-foreground/50"
+                  >
+                    {{ avatarInitial }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+                <div class="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" @click="openFilePicker">
+                    {{ t("user.uploadBtn") }}
+                  </Button>
+                  <input
+                    ref="fileInput"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    class="hidden"
+                    @change="handleFileSelect"
+                  />
+                  <Button
+                    v-if="avatarUrl"
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    @click="removeAvatar"
+                  >
+                    {{ t("user.removeBtn") }}
+                  </Button>
+                </div>
+                <p class="text-[11px] leading-tight text-muted-foreground">
+                  {{ t("user.avatarHint") }}
+                </p>
+              </div>
+            </div>
+
+            <!-- Username Input -->
+            <div class="flex flex-col gap-1.5">
+              <Label for="username" class="text-xs font-medium">{{ t("user.usernameLabel") }}</Label>
+              <Input
+                id="username"
+                v-model="username"
+                :placeholder="t('user.usernamePlaceholder')"
+                :class="username.trim() && !validateUsername(username.trim()).valid ? 'aria-invalid' : ''"
+              />
+            </div>
+
+            <!-- Password Change Card -->
+            <div class="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/20 p-3.5">
+              <h5 class="text-xs font-semibold text-foreground">{{ t("user.passwordSection") }}</h5>
+              <div class="flex flex-col gap-2.5">
+                <div class="flex flex-col gap-1">
+                  <Label for="currentPassword" class="text-xs text-muted-foreground">
+                    {{ t("user.currentPasswordLabel") }}
+                  </Label>
+                  <Input
+                    id="currentPassword"
+                    v-model="currentPassword"
+                    type="password"
+                    :placeholder="t('user.currentPasswordPlaceholder')"
+                  />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <Label for="newPassword" class="text-xs text-muted-foreground">
+                    {{ t("user.newPasswordLabel") }}
+                  </Label>
+                  <Input
+                    id="newPassword"
+                    v-model="newPassword"
+                    type="password"
+                    :placeholder="t('user.newPasswordPlaceholder')"
+                  />
+                </div>
+                <div class="flex flex-col gap-1">
+                  <Label for="confirmPassword" class="text-xs text-muted-foreground">
+                    {{ t("user.confirmPasswordLabel") }}
+                  </Label>
+                  <Input
+                    id="confirmPassword"
+                    v-model="confirmPassword"
+                    type="password"
+                    :placeholder="t('user.confirmPasswordPlaceholder')"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- Avatar Actions -->
-          <div class="flex gap-2">
-            <Button type="button" variant="outline" size="sm" @click="openFilePicker">
-              {{ t("user.uploadBtn") }}
-            </Button>
-            <input
-              ref="fileInput"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              class="hidden"
-              @change="handleFileSelect"
-            />
-            <Button
-              v-if="avatarUrl"
-              type="button"
-              variant="ghost"
-              size="sm"
-              @click="removeAvatar"
-            >
-              {{ t("user.removeBtn") }}
-            </Button>
-          </div>
-          <p class="text-xs text-muted-foreground">{{ t("user.avatarHint") }}</p>
-        </div>
+          <!-- COLUMN 2: Notification Preferences -->
+          <div class="flex flex-col gap-4">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {{ t("user.notificationsSection") }}
+            </h4>
 
-        <!-- Username Input -->
-        <div class="flex flex-col gap-2">
-          <Label for="username">{{ t("user.usernameLabel") }}</Label>
-          <Input
-            id="username"
-            v-model="username"
-            :placeholder="t('user.usernamePlaceholder')"
-            :class="username.trim() && !validateUsername(username.trim()).valid ? 'aria-invalid' : ''"
-          />
-        </div>
+            <!-- Browser Notifications Card -->
+            <div class="flex flex-col gap-2.5 rounded-xl border border-border/60 bg-muted/20 p-3.5">
+              <div class="flex items-start gap-2.5">
+                <input
+                  id="browser-notification-toggle"
+                  type="checkbox"
+                  :checked="browserEnabled"
+                  class="mt-0.5 h-4 w-4 cursor-pointer rounded border-border accent-primary"
+                  @change="toggleBrowser"
+                />
+                <label
+                  for="browser-notification-toggle"
+                  class="cursor-pointer text-xs font-medium leading-snug"
+                >
+                  {{ t("user.browserNotificationsHelp") }}
+                </label>
+              </div>
+              <div class="flex items-center gap-1.5 pl-6 text-[11px] text-muted-foreground">
+                <span>{{ t("user.browserStatusLabel") }}</span>
+                <span
+                  class="font-medium"
+                  :class="{
+                    'text-emerald-600 dark:text-emerald-400': browserPermission === 'granted',
+                    'text-destructive': browserPermission === 'denied',
+                  }"
+                >
+                  {{ browserPermissionText }}
+                </span>
+              </div>
+            </div>
 
-        <!-- Password Change Section -->
-        <div class="flex flex-col gap-3 border-t pt-4">
-          <h4 class="text-sm font-medium">{{ t("user.passwordSection") }}</h4>
-          <div class="flex flex-col gap-3">
-            <div class="flex flex-col gap-2">
-              <Label for="currentPassword">{{ t("user.currentPasswordLabel") }}</Label>
-              <Input
-                id="currentPassword"
-                v-model="currentPassword"
-                type="password"
-                :placeholder="t('user.currentPasswordPlaceholder')"
-              />
-            </div>
-            <div class="flex flex-col gap-2">
-              <Label for="newPassword">{{ t("user.newPasswordLabel") }}</Label>
-              <Input
-                id="newPassword"
-                v-model="newPassword"
-                type="password"
-                :placeholder="t('user.newPasswordPlaceholder')"
-              />
-            </div>
-            <div class="flex flex-col gap-2">
-              <Label for="confirmPassword">{{ t("user.confirmPasswordLabel") }}</Label>
-              <Input
-                id="confirmPassword"
-                v-model="confirmPassword"
-                type="password"
-                :placeholder="t('user.confirmPasswordPlaceholder')"
-              />
-            </div>
-          </div>
-        </div>
-        <!-- Notifications Section (N1) -->
-        <div class="flex flex-col gap-3 border-t pt-4">
-          <h4 class="text-sm font-medium">Thông báo</h4>
-          <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" :checked="browserEnabled" @change="toggleBrowser" />
-            Thông báo trình duyệt khi cần phê duyệt hoặc run kết thúc
-          </label>
-          <p class="text-xs text-muted-foreground">Trình duyệt: {{ browserPermissionText }}</p>
-          <div v-if="telegramStatus" class="flex flex-col gap-2">
-            <p class="text-sm">Telegram: {{ telegramStatusText }}</p>
-            <label v-if="telegramStatus.linked" class="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                :checked="telegramStatus.enabled"
-                @change="toggleTelegramEnabled"
-              />
-              Nhận thông báo qua Telegram
-            </label>
-            <div class="flex flex-wrap gap-2">
-              <Button
-                v-if="!telegramStatus.linked && telegramStatus.configured"
-                type="button"
-                variant="outline"
-                size="sm"
-                :disabled="telegramBusy"
-                @click="createLink"
-              >
-                Tạo mã liên kết Telegram
-              </Button>
-              <Button
-                v-if="telegramStatus.linked"
-                type="button"
-                variant="outline"
-                size="sm"
-                :disabled="telegramBusy"
-                @click="testTelegram"
-              >
-                Gửi tin thử
-              </Button>
-              <Button
-                v-if="telegramStatus.linked"
-                type="button"
-                variant="ghost"
-                size="sm"
-                :disabled="telegramBusy"
-                @click="unlink"
-              >
-                Hủy liên kết
-              </Button>
-            </div>
-            <p v-if="!telegramStatus.configured" class="text-xs text-muted-foreground">
-              Chưa cấu hình bot Telegram trên máy chủ (CC_WEB_TELEGRAM_BOT_TOKEN).
-            </p>
-            <div v-if="telegramCode" class="flex flex-col gap-2">
-              <p class="text-xs text-muted-foreground">
-                Gửi lệnh sau cho bot Telegram của bạn (mã dùng 1 lần, hết hạn sau 15 phút):
-              </p>
-              <p class="break-all text-sm"><code>/start {{ telegramCode }}</code></p>
-              <div>
-                <Button type="button" variant="outline" size="sm" @click="copyCode">
-                  Sao chép lệnh
+            <!-- Telegram Notifications Card -->
+            <div class="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/20 p-3.5">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-semibold">{{ t("user.telegramSection") }}</span>
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                  :class="{
+                    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400':
+                      telegramStatus?.linked && telegramStatus?.enabled,
+                    'bg-amber-500/10 text-amber-600 dark:text-amber-400':
+                      telegramStatus?.linked && !telegramStatus?.enabled,
+                    'bg-muted text-muted-foreground': !telegramStatus?.linked,
+                  }"
+                >
+                  <span
+                    class="h-1.5 w-1.5 rounded-full"
+                    :class="{
+                      'bg-emerald-500': telegramStatus?.linked && telegramStatus?.enabled,
+                      'bg-amber-500': telegramStatus?.linked && !telegramStatus?.enabled,
+                      'bg-muted-foreground/60': !telegramStatus?.linked,
+                    }"
+                  />
+                  {{ telegramStatusText }}
+                </span>
+              </div>
+
+              <!-- Telegram Toggle when linked -->
+              <div v-if="telegramStatus?.linked" class="flex items-center gap-2.5">
+                <input
+                  id="telegram-toggle"
+                  type="checkbox"
+                  :checked="telegramStatus.enabled"
+                  class="h-4 w-4 cursor-pointer rounded border-border accent-primary"
+                  @change="toggleTelegramEnabled"
+                />
+                <label for="telegram-toggle" class="cursor-pointer text-xs font-medium">
+                  {{ t("user.telegramNotificationsCheckbox") }}
+                </label>
+              </div>
+
+              <!-- Telegram Action Buttons -->
+              <div v-if="telegramStatus" class="flex flex-wrap gap-2">
+                <Button
+                  v-if="!telegramStatus.linked && telegramStatus.configured"
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  :disabled="telegramBusy"
+                  @click="createLink"
+                >
+                  <Loader2 v-if="telegramBusy" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  {{ t("user.telegramCreateLink") }}
                 </Button>
+                <Button
+                  v-if="telegramStatus.linked"
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  :disabled="telegramBusy"
+                  @click="testTelegram"
+                >
+                  <Loader2 v-if="telegramBusy" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  {{ t("user.telegramTest") }}
+                </Button>
+                <Button
+                  v-if="telegramStatus.linked"
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  :disabled="telegramBusy"
+                  @click="unlink"
+                >
+                  <Loader2 v-if="telegramBusy" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  {{ t("user.telegramUnlink") }}
+                </Button>
+              </div>
+
+              <!-- Not Configured Notice -->
+              <p
+                v-if="telegramStatus && !telegramStatus.configured"
+                class="text-[11px] leading-relaxed text-muted-foreground"
+              >
+                {{ t("user.telegramUnconfiguredHelp") }}
+              </p>
+
+              <!-- One-time code card -->
+              <div
+                v-if="telegramCode"
+                class="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs"
+              >
+                <p class="text-[11px] text-muted-foreground">
+                  {{ t("user.telegramCodeInstructions") }}
+                </p>
+                <div
+                  class="flex items-center justify-between gap-2 rounded bg-background/80 px-2.5 py-1.5 font-mono text-xs"
+                >
+                  <code class="break-all text-primary">/start {{ telegramCode }}</code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    class="h-7 shrink-0 px-2.5 text-xs"
+                    @click="copyCode"
+                  >
+                    <Copy class="mr-1.5 h-3 w-3" />
+                    {{ t("user.telegramCopyCode") }}
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <DialogFooter>
-        <Button variant="outline" @click="onClose">
+      <!-- Dialog Footer: Fixed at bottom -->
+      <DialogFooter
+        class="flex shrink-0 flex-row items-center justify-end gap-2 border-t border-border/60 bg-muted/10 px-6 py-3.5"
+      >
+        <Button variant="outline" size="sm" @click="onClose">
           {{ t("user.cancelBtn") }}
         </Button>
-        <Button :loading="isSaving" @click="saveProfile">
-          {{ t("user.saveBtn") }}
+        <Button size="sm" :disabled="isSaving" @click="saveProfile">
+          <Loader2 v-if="isSaving" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          {{ isSaving ? t("user.savingBtn") : t("user.saveBtn") }}
         </Button>
       </DialogFooter>
     </DialogContent>
