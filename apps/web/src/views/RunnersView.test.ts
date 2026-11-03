@@ -73,4 +73,23 @@ describe("RunnersView logic", () => {
     expect(getDeleteWarning(false)).toContain("ngắt kết nối ngay lập tức");
     expect(getDeleteWarning(true)).toContain("xoá vĩnh viễn dữ liệu runner");
   });
+
+  test("runner row carries capabilities binding", () => {
+    const runner = {
+      runnerId: "runner-abc-123",
+      name: "Office",
+      createdAt: 1000,
+      revokedAt: null,
+      capabilities: {
+        commands: [{ name: "review" }],
+        plugins: [{ name: "plugin-a", version: "1.0.0" }],
+        mcpServers: [{ name: "srv", status: "connected" as const }],
+        agents: [{ name: "agent-1" }],
+      },
+    };
+
+    expect(runner.capabilities?.plugins?.[0]?.name).toBe("plugin-a");
+    expect(runner.capabilities?.mcpServers?.[0]?.status).toBe("connected");
+    expect(runner.capabilities?.agents?.[0]?.name).toBe("agent-1");
+  });
 });

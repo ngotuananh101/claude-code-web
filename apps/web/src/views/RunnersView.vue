@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { Pencil, Trash2 } from "@lucide/vue";
+import type { RunnerCapabilities } from "@cc-web/protocol";
+import { Pencil, SlidersHorizontal, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog.vue";
 import RenameDialog from "@/components/RenameDialog.vue";
+import RunnerCapabilitiesDialog from "@/components/RunnerCapabilitiesDialog.vue";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useI18n } from "@/lib/i18n/index.ts";
@@ -25,6 +27,7 @@ type RunnerRow = {
   name?: string | null;
   createdAt: number;
   revokedAt: number | null;
+  capabilities?: RunnerCapabilities;
 };
 
 const runners = ref<RunnerRow[]>([]);
@@ -41,6 +44,14 @@ const renameDialogOpen = ref(false);
 const runnerToDelete = ref<RunnerRow | null>(null);
 const deleteDialogOpen = ref(false);
 const deleteBusy = ref(false);
+
+const inspectedRunner = ref<RunnerRow | null>(null);
+const capabilitiesDialogOpen = ref(false);
+
+function inspectCapabilities(runner: RunnerRow): void {
+  inspectedRunner.value = runner;
+  capabilitiesDialogOpen.value = true;
+}
 
 /** The journal's numbering: the newest runner is event 0001. */
 const mintedSeq = computed(() => {
@@ -309,6 +320,15 @@ onMounted(() => void load());
             <Button
               variant="ghost"
               size="icon-xs"
+              :title="t('runners.inspectCapabilities')"
+              class="text-muted-foreground hover:text-foreground"
+              @click="inspectCapabilities(runner)"
+            >
+              <SlidersHorizontal :size="14" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
               :title="t('runners.deleteRunner')"
               class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               @click="triggerDelete(runner)"
@@ -337,6 +357,13 @@ onMounted(() => void load());
       :confirm-label="t('runners.deleteRunner')"
       :busy="deleteBusy"
       @confirm="handleDeleteConfirm"
+    />
+
+    <RunnerCapabilitiesDialog
+      v-model:open="capabilitiesDialogOpen"
+      :runner-name="inspectedRunner?.name ?? null"
+      :runner-id="inspectedRunner?.runnerId ?? ''"
+      :capabilities="inspectedRunner?.capabilities ?? null"
     />
   </ScrollArea>
 </template>

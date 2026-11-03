@@ -371,6 +371,20 @@ export type TranslationDictionary = {
     runnerDeletedSuccess: string;
     runnerDeleteFailed: string;
     runnerRevokedSuccess: string;
+    inspectCapabilities: string;
+    capabilitiesDialogTitle: string;
+    tabPlugins: string;
+    tabMcp: string;
+    tabAgents: string;
+    noPlugins: string;
+    noMcpServers: string;
+    noAgents: string;
+    mcpStatusConnected: string;
+    mcpStatusFailed: string;
+    mcpStatusConfigured: string;
+    installedPlugins: string;
+    availableCommands: string;
+    toolsExposed: string;
   };
   dashboard: {
     title: string;
