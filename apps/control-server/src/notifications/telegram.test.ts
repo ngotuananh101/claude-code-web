@@ -30,7 +30,12 @@ class FakeSender implements TelegramSender {
     replyMarkup?: unknown;
   }> = [];
   answers: Array<{ id: string; text: string }> = [];
-  edits: Array<{ chatId: string; messageId: number; text: string }> = [];
+  edits: Array<{
+    chatId: string;
+    messageId: number;
+    text: string;
+    replyMarkup?: unknown;
+  }> = [];
   updates: TelegramUpdate[] = [];
   failSend = false;
   async sendMessage(chatId: string, text: string, replyMarkup?: unknown): Promise<boolean> {
@@ -42,8 +47,13 @@ class FakeSender implements TelegramSender {
     this.answers.push({ id, text });
     return true;
   }
-  async editMessageText(chatId: string, messageId: number, text: string): Promise<boolean> {
-    this.edits.push({ chatId, messageId, text });
+  async editMessageText(
+    chatId: string,
+    messageId: number,
+    text: string,
+    replyMarkup?: unknown,
+  ): Promise<boolean> {
+    this.edits.push({ chatId, messageId, text, replyMarkup });
     return true;
   }
   async getUpdates(_offset: number): Promise<TelegramUpdate[]> {
@@ -474,6 +484,298 @@ describe("telegram approval actions", () => {
       },
       undefined,
     );
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(markup.inline_keyboard).toHaveLength(1);
+    expect(markup.inline_keyboard[0]![0]!.text).toBe("❌ Từ chối");
+  });
+
+  test("user_question with multiple questions presents step-by-step options and completes with all answers", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-multi-q",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-multi",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          {
+            header: "Dev Stack",
+            question: "Choose stack?",
+            options: [{ label: "Docker" }, { label: "Bun" }],
+          },
+          {
+            header: "Theme Mode",
+            question: "Choose theme?",
+            options: [{ label: "Dark" }, { label: "Light" }],
+          },
+        ],
+      },
+      undefined,
+    );
+
+    const initialMarkup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    // Step 0: Should have options for Q1 ("Docker", "Bun") + "❌ Từ chối"
+    expect(initialMarkup.inline_keyboard).toHaveLength(3);
+    expect(initialMarkup.inline_keyboard[0]![0]!.text).toContain("Docker");
+    expect(initialMarkup.inline_keyboard[1]![0]!.text).toContain("Bun");
+    expect(initialMarkup.inline_keyboard[2]![0]!.text).toBe("❌ Từ chối");
+
+    const calls: Array<{ approvalId: string; decision: string; answers?: unknown }> = [];
+    const decide = async (
+      approvalId: string,
+      decision: string,
+      answers?: Record<string, unknown>,
+    ) => {
+      calls.push({ approvalId, decision, answers });
+      return { ok: true as const };
+    };
+
+    // Click "Docker" in Step 0
+    const dockerBtn = initialMarkup.inline_keyboard[0]![0]!;
+    await processTelegramUpdates(
+      db,
+      sender,
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "cb-step-0",
+            data: dockerBtn.callback_data,
+            message: { chat: { id: 12345 }, message_id: 20, text: "⏳ Cần phê duyệt" },
+          },
+        },
+      ],
+      Date.now(),
+      decide,
+    );
+
+    // Intermediate step: decide should NOT have been called yet
+    expect(calls).toHaveLength(0);
+    expect(sender.edits).toHaveLength(1);
+    expect(sender.edits[0]!.text).toContain("Docker");
+    expect(sender.edits[0]!.text).toContain("Theme Mode");
+
+    // Check step 1 keyboard: options for Q2 ("Dark", "Light") + Back + Deny
+    const step1Markup = sender.edits[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(step1Markup.inline_keyboard).toHaveLength(4);
+    expect(step1Markup.inline_keyboard[0]![0]!.text).toContain("Dark");
+    expect(step1Markup.inline_keyboard[1]![0]!.text).toContain("Light");
+    expect(step1Markup.inline_keyboard[2]![0]!.text).toContain("Chọn lại");
+    expect(step1Markup.inline_keyboard[3]![0]!.text).toBe("❌ Từ chối");
+
+    // Click "Dark" in Step 1
+    const darkBtn = step1Markup.inline_keyboard[0]![0]!;
+    await processTelegramUpdates(
+      db,
+      sender,
+      [
+        {
+          update_id: 2,
+          callback_query: {
+            id: "cb-step-1",
+            data: darkBtn.callback_data,
+            message: { chat: { id: 12345 }, message_id: 20, text: sender.edits[0]!.text },
+          },
+        },
+      ],
+      Date.now(),
+      decide,
+    );
+
+    // Final step: decide must have been called with complete answers
+    expect(calls).toEqual([
+      {
+        approvalId: "appr-multi",
+        decision: "allow",
+        answers: {
+          "Choose stack?": "Docker",
+          "Choose theme?": "Dark",
+        },
+      },
+    ]);
+    expect(sender.edits).toHaveLength(2);
+    expect(sender.edits[1]!.text).toContain("Đã chọn tất cả");
+    expect(sender.edits[1]!.text).toContain("Docker");
+    expect(sender.edits[1]!.text).toContain("Dark");
+  });
+
+  test("user_question with multiple questions allows going back to previous step", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-multi-back",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-back",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          { question: "Q1", options: [{ label: "A1" }, { label: "A2" }] },
+          { question: "Q2", options: [{ label: "B1" }, { label: "B2" }] },
+        ],
+      },
+      undefined,
+    );
+
+    const initialMarkup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    const a1Btn = initialMarkup.inline_keyboard[0]![0]!;
+
+    const calls: Array<{ approvalId: string; decision: string; answers?: unknown }> = [];
+    const decide = async (
+      approvalId: string,
+      decision: string,
+      answers?: Record<string, unknown>,
+    ) => {
+      calls.push({ approvalId, decision, answers });
+      return { ok: true as const };
+    };
+
+    // Step 0 -> Step 1
+    await processTelegramUpdates(
+      db,
+      sender,
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "cb-1",
+            data: a1Btn.callback_data,
+            message: { chat: { id: 12345 }, message_id: 25, text: "⏳ Cần phê duyệt" },
+          },
+        },
+      ],
+      Date.now(),
+      decide,
+    );
+
+    const step1Markup = sender.edits[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    const backBtn = step1Markup.inline_keyboard.find((row) =>
+      row[0]?.text.includes("Chọn lại"),
+    )![0]!;
+
+    // Click Back button
+    await processTelegramUpdates(
+      db,
+      sender,
+      [
+        {
+          update_id: 2,
+          callback_query: {
+            id: "cb-back",
+            data: backBtn.callback_data,
+            message: { chat: { id: 12345 }, message_id: 25, text: sender.edits[0]!.text },
+          },
+        },
+      ],
+      Date.now(),
+      decide,
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(sender.edits).toHaveLength(2);
+    const restoredMarkup = sender.edits[1]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(restoredMarkup.inline_keyboard[0]![0]!.text).toContain("A1");
+    expect(restoredMarkup.inline_keyboard[1]![0]!.text).toContain("A2");
+  });
+
+  test("user_question with multiple questions can be denied at any step", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-multi-deny",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-deny-step",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          { question: "Q1", options: [{ label: "A1" }] },
+          { question: "Q2", options: [{ label: "B1" }] },
+        ],
+      },
+      undefined,
+    );
+
+    const initialMarkup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    const denyBtn = initialMarkup.inline_keyboard.find((row) => row[0]?.text === "❌ Từ chối")![0]!;
+
+    const calls: Array<{ approvalId: string; decision: string }> = [];
+    const decide = async (approvalId: string, decision: string) => {
+      calls.push({ approvalId, decision });
+      return { ok: true as const };
+    };
+
+    await processTelegramUpdates(
+      db,
+      sender,
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "cb-deny",
+            data: denyBtn.callback_data,
+            message: { chat: { id: 12345 }, message_id: 30, text: "⏳ Cần phê duyệt" },
+          },
+        },
+      ],
+      Date.now(),
+      decide,
+    );
+
+    expect(calls).toEqual([{ approvalId: "appr-deny-step", decision: "deny" }]);
+    expect(sender.edits[0]!.text).toContain("❌ Đã từ chối");
+  });
+
+  test("user_question where any question lacks options renders fallback deny button", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-mixed",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-mixed",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          { question: "Q1", options: [{ label: "A1" }] },
+          { question: "Q2 (freeform, no options)" },
+        ],
+      },
+      undefined,
+    );
+
     const markup = sender.sent[0]!.replyMarkup as {
       inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
     };

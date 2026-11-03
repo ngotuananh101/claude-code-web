@@ -297,8 +297,9 @@ export type ActionTokenClaim =
       ok: true;
       approvalId: string;
       decision: TelegramActionDecision;
-      answers?: Record<string, unknown>;
-      label?: string;
+      expiresAt: number;
+      answers?: Record<string, unknown> | undefined;
+      label?: string | undefined;
     }
   | { ok: false; reason: "unknown" | "wrong_chat" | "expired" | "used" };
 
@@ -350,6 +351,7 @@ export function claimActionToken(
     ok: true,
     approvalId: row.approval_id,
     decision: row.decision === "deny" ? "deny" : "allow",
+    expiresAt: row.expires_at,
     ...(parsedAnswers === undefined ? {} : { answers: parsedAnswers }),
     ...(row.label !== null && row.label !== undefined ? { label: row.label } : {}),
   };
@@ -378,6 +380,82 @@ export function setPollOffset(db: Database, offset: number): void {
 export type InlineKeyboardButton = { text: string; callback_data: string };
 export type InlineKeyboardMarkup = { inline_keyboard: InlineKeyboardButton[][] };
 
+/**
+ * Build inline keyboard markup for a question step in single or multi-question approvals.
+ */
+export function createQuestionStepMarkup(
+  db: Database,
+  approvalId: string,
+  chatId: string,
+  expiresAt: number,
+  questions: TelegramQuestion[],
+  stepIndex: number,
+  accumulatedAnswers: Record<string, string>,
+): InlineKeyboardMarkup {
+  const currentQuestion = questions[stepIndex]!;
+  const options = currentQuestion.options ?? [];
+  const rows: InlineKeyboardButton[][] = [];
+  const isMultiQuestion = questions.length > 1;
+
+  const hasDenyOption = options.some((opt) =>
+    /^(từ chối|hủy|deny|cancel|reject)/i.test(opt.label.trim()),
+  );
+
+  for (const opt of options.slice(0, 8)) {
+    const nextAnswers: Record<string, unknown> = isMultiQuestion
+      ? {
+          __multiStep: true,
+          __step: stepIndex,
+          __total: questions.length,
+          __answers: { ...accumulatedAnswers, [currentQuestion.question]: opt.label },
+          __questions: questions,
+        }
+      : { [currentQuestion.question]: opt.label };
+
+    const token = createCustomActionToken(db, approvalId, chatId, expiresAt, {
+      decision: "allow",
+      answers: nextAnswers,
+      label: opt.label,
+    });
+
+    const prefix = isMultiQuestion ? `[${stepIndex + 1}/${questions.length}] ` : "";
+    const rawLabel = `${prefix}${opt.label}`;
+    const text = rawLabel.length > 50 ? `${rawLabel.slice(0, 47)}…` : rawLabel;
+    rows.push([{ text, callback_data: `act:${token}` }]);
+  }
+
+  if (isMultiQuestion && stepIndex > 0) {
+    const prevStepIndex = stepIndex - 1;
+    const prevQuestion = questions[prevStepIndex]!;
+    const prevAccumulated = { ...accumulatedAnswers };
+    delete prevAccumulated[prevQuestion.question];
+
+    const backToken = createCustomActionToken(db, approvalId, chatId, expiresAt, {
+      decision: "allow",
+      answers: {
+        __multiStep: true,
+        __isBack: true,
+        __step: prevStepIndex,
+        __total: questions.length,
+        __answers: prevAccumulated,
+        __questions: questions,
+      },
+      label: "Quay lại",
+    });
+    rows.push([{ text: "⬅️ Chọn lại câu trước", callback_data: `act:${backToken}` }]);
+  }
+
+  if (!hasDenyOption) {
+    const denyToken = createCustomActionToken(db, approvalId, chatId, expiresAt, {
+      decision: "deny",
+      label: "Từ chối",
+    });
+    rows.push([{ text: "❌ Từ chối", callback_data: `act:${denyToken}` }]);
+  }
+
+  return { inline_keyboard: rows };
+}
+
 export type TelegramCallbackQuery = {
   id: string;
   data?: string;
@@ -397,7 +475,12 @@ export type TelegramUpdate = {
 export interface TelegramSender {
   sendMessage(chatId: string, text: string, replyMarkup?: InlineKeyboardMarkup): Promise<boolean>;
   answerCallbackQuery(id: string, text: string): Promise<boolean>;
-  editMessageText(chatId: string, messageId: number, text: string): Promise<boolean>;
+  editMessageText(
+    chatId: string,
+    messageId: number,
+    text: string,
+    replyMarkup?: InlineKeyboardMarkup,
+  ): Promise<boolean>;
   getUpdates(offset: number): Promise<TelegramUpdate[]>;
 }
 
@@ -449,8 +532,13 @@ export class BotApiTelegramSender implements TelegramSender {
     }
   }
 
-  /** Rewrite the message text and drop its keyboard, so stale buttons die. */
-  async editMessageText(chatId: string, messageId: number, text: string): Promise<boolean> {
+  /** Rewrite the message text and optionally update its keyboard (drops buttons when replyMarkup is omitted). */
+  async editMessageText(
+    chatId: string,
+    messageId: number,
+    text: string,
+    replyMarkup?: InlineKeyboardMarkup,
+  ): Promise<boolean> {
     try {
       const response = await this.#fetchFn(this.#url("editMessageText"), {
         method: "POST",
@@ -459,7 +547,7 @@ export class BotApiTelegramSender implements TelegramSender {
           chat_id: chatId,
           message_id: messageId,
           text,
-          reply_markup: { inline_keyboard: [] },
+          reply_markup: replyMarkup ?? { inline_keyboard: [] },
         }),
       });
       return response.ok;
@@ -531,46 +619,19 @@ export async function dispatchTelegramNotification(
       };
     } else if (input.approvalKind === "user_question") {
       const questions = parseTelegramQuestions(input);
-      const firstQuestion = questions.length === 1 ? questions[0] : undefined;
-      const questionOptions = firstQuestion?.options;
-      if (
-        firstQuestion !== undefined &&
-        questionOptions !== undefined &&
-        questionOptions.length > 0
-      ) {
-        const rows: InlineKeyboardButton[][] = [];
-        const hasDenyOption = questionOptions.some((opt) =>
-          /^(từ chối|hủy|deny|cancel|reject)/i.test(opt.label.trim()),
+      const allHaveOptions =
+        questions.length > 0 &&
+        questions.every((q) => q.options !== undefined && q.options.length > 0);
+      if (allHaveOptions) {
+        replyMarkup = createQuestionStepMarkup(
+          db,
+          input.approvalId as string,
+          settings.chatId,
+          input.approvalExpiresAt as number,
+          questions,
+          0,
+          {},
         );
-        for (const opt of questionOptions.slice(0, 8)) {
-          const token = createCustomActionToken(
-            db,
-            input.approvalId as string,
-            settings.chatId,
-            input.approvalExpiresAt as number,
-            {
-              decision: "allow",
-              answers: { [firstQuestion.question]: opt.label },
-              label: opt.label,
-            },
-          );
-          const text = opt.label.length > 50 ? `${opt.label.slice(0, 47)}…` : opt.label;
-          rows.push([{ text, callback_data: `act:${token}` }]);
-        }
-        if (!hasDenyOption) {
-          const denyToken = createCustomActionToken(
-            db,
-            input.approvalId as string,
-            settings.chatId,
-            input.approvalExpiresAt as number,
-            {
-              decision: "deny",
-              label: "Từ chối",
-            },
-          );
-          rows.push([{ text: "❌ Từ chối", callback_data: `act:${denyToken}` }]);
-        }
-        replyMarkup = { inline_keyboard: rows };
       } else {
         const denyToken = createCustomActionToken(
           db,
@@ -646,6 +707,99 @@ async function handleCallbackQuery(
     await sender.answerCallbackQuery(callback.id, answer);
     return;
   }
+  const message = callback.message;
+  const rawOriginal = message !== undefined && typeof message.text === "string" ? message.text : "";
+  const original = rawOriginal.split("\n\n📍 Đang chọn ")[0]!;
+
+  if (
+    claim.decision === "allow" &&
+    typeof claim.answers === "object" &&
+    claim.answers !== null &&
+    (claim.answers as Record<string, unknown>)["__multiStep"] === true
+  ) {
+    const payload = claim.answers as {
+      __multiStep: true;
+      __isBack?: boolean;
+      __step: number;
+      __total: number;
+      __answers: Record<string, string>;
+      __questions: TelegramQuestion[];
+    };
+    if (payload.__isBack === true) {
+      const replyMarkup = createQuestionStepMarkup(
+        db,
+        claim.approvalId,
+        chatId,
+        claim.expiresAt,
+        payload.__questions,
+        payload.__step,
+        payload.__answers,
+      );
+      await sender.answerCallbackQuery(callback.id, "Đang quay lại câu trước…");
+      if (message !== undefined && typeof message.message_id === "number") {
+        const nextQ = payload.__questions[payload.__step]!;
+        const qHeader = nextQ.header ? `${nextQ.header}: ${nextQ.question}` : nextQ.question;
+        let stepText = `${original}\n\n📍 Đang chọn (${payload.__step + 1}/${payload.__total}): ${qHeader}`;
+        for (const [, val] of Object.entries(payload.__answers)) {
+          stepText += `\n• ${val}`;
+        }
+        await sender.editMessageText(chatId, message.message_id, stepText, replyMarkup);
+      }
+      return;
+    }
+
+    const isLastQuestion = payload.__step === payload.__total - 1;
+    if (!isLastQuestion) {
+      const nextStep = payload.__step + 1;
+      const nextQ = payload.__questions[nextStep]!;
+      const replyMarkup = createQuestionStepMarkup(
+        db,
+        claim.approvalId,
+        chatId,
+        claim.expiresAt,
+        payload.__questions,
+        nextStep,
+        payload.__answers,
+      );
+      await sender.answerCallbackQuery(
+        callback.id,
+        claim.label ? `Đã chọn: ${claim.label}` : "Đang chuyển câu tiếp theo…",
+      );
+      if (message !== undefined && typeof message.message_id === "number") {
+        const qHeader = nextQ.header ? `${nextQ.header}: ${nextQ.question}` : nextQ.question;
+        let stepText = `${original}\n\n📍 Đang chọn (${nextStep + 1}/${payload.__total}): ${qHeader}`;
+        for (const [, val] of Object.entries(payload.__answers)) {
+          stepText += `\n• ${val}`;
+        }
+        await sender.editMessageText(chatId, message.message_id, stepText, replyMarkup);
+      }
+      return;
+    }
+
+    // Last question: submit all answers to decide handler!
+    const outcome = await decide(claim.approvalId, "allow", payload.__answers);
+    const answer = outcome.ok
+      ? "Đã chọn tất cả câu trả lời."
+      : outcome.reason === "expired"
+        ? "Phê duyệt đã hết hạn."
+        : "Phê duyệt này đã được quyết định rồi.";
+    await sender.answerCallbackQuery(callback.id, answer);
+
+    if (message !== undefined && typeof message.message_id === "number") {
+      let decisionText: string;
+      if (outcome.ok) {
+        decisionText = "✅ Đã chọn tất cả câu trả lời:";
+        for (const [, val] of Object.entries(payload.__answers)) {
+          decisionText += `\n• ${val}`;
+        }
+      } else {
+        decisionText = "⌛ Phê duyệt này không còn quyết định được nữa";
+      }
+      await sender.editMessageText(chatId, message.message_id, `${original}\n\n${decisionText}`);
+    }
+    return;
+  }
+
   const outcome = await decide(claim.approvalId, claim.decision, claim.answers);
   const label = claim.label ?? (claim.decision === "allow" ? "Duyệt" : "Từ chối");
   const isDeny =
@@ -661,9 +815,7 @@ async function handleCallbackQuery(
       ? "Phê duyệt đã hết hạn."
       : "Phê duyệt này đã được quyết định rồi.";
   await sender.answerCallbackQuery(callback.id, answer);
-  const message = callback.message;
   if (message !== undefined && typeof message.message_id === "number") {
-    const original = typeof message.text === "string" ? message.text : "";
     const decisionText =
       claim.label !== undefined && claim.label !== "Duyệt" && claim.label !== "Từ chối"
         ? `${icon} Đã chọn: ${claim.label}`
