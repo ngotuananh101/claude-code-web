@@ -31,6 +31,7 @@ export function getAvailableCommands(runnerCapabilities?: RunnerCapabilities): S
       name: cmd.name,
       displayName: cmd.name,
       description: cmd.description || "",
+      ...(cmd.argumentHint ? { argumentHint: cmd.argumentHint } : {}),
       category: cmd.builtin ? ("builtin" as const) : ("plugin" as const),
     })) || [];
 
