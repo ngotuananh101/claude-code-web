@@ -33,10 +33,15 @@
 	# owns deep links.
 	@assets path /assets/*
 	handle @assets {
+		# CSP only on the SPA responses: API and attachment responses keep
+		# their own headers (attachments carry a sandbox CSP from the
+		# control server, which a site-level CSP would overwrite).
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 		root * /srv
 		file_server
 	}
 	handle {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 		root * /srv
 		try_files {path} /index.html
 		file_server
@@ -46,5 +51,8 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy no-referrer
+		# Ignored by browsers over plain http, takes effect only once
+		# the site is served over https (external proxy or Caddy TLS).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	}
 }

@@ -56,6 +56,17 @@ export type ServerConfig = {
   attachmentsDir?: string;
   /** Where startup warnings go; defaults to `console.warn`. */
   warn?: (message: string) => void;
+  /**
+   * Separate key for sealing stored profile API keys (SecretBox).
+   * When omitted, the JWT secret is used for backward compatibility —
+   * that is the old behaviour, kept so existing sealed keys keep
+   * working. Set CC_WEB_SECRET_BOX_KEY (via index.ts) to separate the
+   * two: rotating the JWT secret must then not break stored keys, and
+   * a leaked JWT secret alone must not open them. Note that changing
+   * this key makes keys sealed with the old key unreadable until they
+   * are re-entered on the Profiles page.
+   */
+  secretBoxSecret?: Uint8Array;
 };
 
 /**
@@ -88,16 +99,17 @@ export function warnUnreadableProfileKeys(
   if (unreadable.length === 0) return;
   warn(
     `control server: ${unreadable.length} stored profile API key(s) cannot be opened with ` +
-      `CC_WEB_JWT_SECRET (${unreadable.map((row) => row.name).join(", ")}). ` +
+      `the current sealing secret (CC_WEB_SECRET_BOX_KEY if set, otherwise CC_WEB_JWT_SECRET) ` +
+      `(${unreadable.map((row) => row.name).join(", ")}). ` +
       "If the secret was rotated, re-enter those keys on the Profiles page.",
   );
 }
 
 export function buildServerOptions(config: ServerConfig): ServerOptions {
   const auth = new AuthService({ db: config.db, signer: createSigner(config.secret) });
-  // §18.1, P3-C Task 5b: derive the secret box from the server secret so the
-  // same key seals every profile at rest across restarts.
-  const secretBox = createSecretBox(config.secret);
+  // §18.1, P3-C Task 5b: seal profile keys with a dedicated key when
+  // one is configured, falling back to the JWT secret for compatibility.
+  const secretBox = createSecretBox(config.secretBoxSecret ?? config.secret);
   warnUnreadableProfileKeys(config.db, secretBox, config.warn ?? console.warn);
 
   return {

@@ -104,6 +104,24 @@ describe("profiles two-way sync logic", () => {
     expect(roundTripped.modelMapping.subagent).toBe("sub-agent");
   });
 
+  test("jsonToForm with preserveName keeps the current name when JSON has no name", () => {
+    const json = JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: "https://my-proxy.com" },
+    });
+    expect(jsonToForm(json).name).toBe("");
+    expect(jsonToForm(json, "9Router").name).toBe("9Router");
+    expect(jsonToForm(json, "9Router").endpoint).toBe("https://my-proxy.com");
+  });
+
+  test("jsonToForm preserveName wins over a name found in JSON", () => {
+    const json = JSON.stringify({
+      name: "FromJson",
+      env: { ANTHROPIC_BASE_URL: "https://my-proxy.com" },
+    });
+    expect(jsonToForm(json, "Current").name).toBe("Current");
+    expect(jsonToForm(json).name).toBe("FromJson");
+  });
+
   test("validateSettingsJson rejects non-object JSON", () => {
     expect(validateSettingsJson("[1,2,3]").valid).toBe(false);
     expect(validateSettingsJson('"a string"').valid).toBe(false);

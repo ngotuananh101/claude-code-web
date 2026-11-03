@@ -81,6 +81,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
           :href="attachmentUrl(att.id)"
           download
           target="_blank"
+          rel="noopener noreferrer"
           class="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-muted px-2 text-xs text-foreground hover:bg-muted/80"
           :title="att.name"
         >
@@ -117,16 +118,19 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       <div v-html="renderMarkdown(turn.text)" :class="proseClasses" />
     </div>
 
-    <!-- Actions row (Copy prompt, View JSON) below bubble, right-aligned, hover-only -->
+    <!-- Actions row (Copy prompt, View JSON) below bubble, right-aligned.
+         Visible on hover, on keyboard focus inside the group, and always
+         on small/touch screens where hover does not exist. -->
     <div
       class="mt-1 flex items-center justify-end gap-1 transition-opacity"
-      :class="showRaw ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+      :class="showRaw ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 max-sm:opacity-100'"
     >
       <button
         v-if="turn.text"
         type="button"
         @click="copyText"
         title="Sao chép nội dung"
+        aria-label="Sao chép nội dung"
         class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
       >
         <Copy :size="13" />
@@ -135,6 +139,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         v-if="turn.rawPayload !== undefined"
         type="button"
         :aria-expanded="showRaw"
+        :aria-label="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
         @click="showRaw = !showRaw"
         :title="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
         class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
@@ -197,6 +202,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
           </button>
           <img
             :src="lightboxSrc"
+            alt=""
             class="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
             @click.stop
           />

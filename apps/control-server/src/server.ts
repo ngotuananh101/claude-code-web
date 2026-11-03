@@ -35,6 +35,7 @@ import type { Server } from "bun";
 import { abandonAttemptApprovals } from "./approvals/abandon.ts";
 import { projectApprovalEvent } from "./approvals/ingest.ts";
 import type { AuthService } from "./auth/auth-service.ts";
+import { clientKey, createRateLimiter, type RateLimiter } from "./auth/rate-limit.ts";
 import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import { Dispatcher, openSealedPayload } from "./dispatch/dispatcher.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
@@ -106,6 +107,12 @@ export type ServerOptions = {
   /** Owner auth (ADR-0001): signs access tokens, checks them against the DB. */
   auth: AuthService;
   allowedOrigins: string[];
+  /**
+   * Rate limiter for POST /auth/login and POST /auth/setup. Injectable
+   * so tests can pass a small limiter; production defaults to
+   * createRateLimiter() (30 attempts per 15 minutes per client key).
+   */
+  loginRateLimiter?: RateLimiter;
   verifyRunnerCredential: (credential: string) => RunnerCredentialCheck;
   /**
    * Password check for /auth/login. Injectable so tests can answer without
@@ -368,6 +375,7 @@ export function createServer(options: ServerOptions): ServerHandle {
   });
 
   const allowed = new Set(options.allowedOrigins);
+  const loginRateLimiter = options.loginRateLimiter ?? createRateLimiter();
 
   const server = Bun.serve<RunnerSocketData | BrowserSocketData>({
     port: options.port ?? 0,
@@ -382,6 +390,12 @@ export function createServer(options: ServerOptions): ServerHandle {
       }
 
       if (url.pathname === "/auth/login" && request.method === "POST") {
+        if (!loginRateLimiter.check(clientKey(request))) {
+          return new Response("too many requests", {
+            status: 429,
+            headers: { "Retry-After": "900", "Cache-Control": "no-store" },
+          });
+        }
         return handleLogin(request, options, allowed);
       }
 
@@ -398,6 +412,12 @@ export function createServer(options: ServerOptions): ServerHandle {
       }
 
       if (url.pathname === "/auth/setup" && request.method === "POST") {
+        if (!loginRateLimiter.check(clientKey(request))) {
+          return new Response("too many requests", {
+            status: 429,
+            headers: { "Retry-After": "900", "Cache-Control": "no-store" },
+          });
+        }
         return handleSetup(request, options, allowed);
       }
 

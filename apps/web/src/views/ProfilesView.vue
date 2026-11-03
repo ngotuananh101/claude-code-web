@@ -255,7 +255,10 @@ watch(form, syncJsonFromForm, { deep: true });
 watch(json, (value) => {
   const validation = validateSettingsJson(value);
   if (!validation.valid) return;
-  const parsed = jsonToForm(value);
+  // The JSON editor does not own the name (see jsonToForm): passing
+  // the current name here is what stops every other field edit from
+  // resetting the name input to "".
+  const parsed = jsonToForm(value, form.value.name);
   // Avoid a self-inflicted loop: only write back when something actually
   // changed. The credential and auth field are part of the comparison — typing
   // a key into the JSON env block is a real edit, and it should reach the form

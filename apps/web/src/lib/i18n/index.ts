@@ -23,6 +23,14 @@ function loadInitialLocale(): Locale {
 
 export const currentLocale: Ref<Locale> = ref(loadInitialLocale());
 
+function syncDocumentLang(locale: Locale): void {
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = locale;
+  }
+}
+
+syncDocumentLang(currentLocale.value);
+
 function saveLocale(locale: Locale): void {
   if (typeof window !== "undefined") {
     localStorage.setItem(STORAGE_KEY, locale);
@@ -32,6 +40,7 @@ function saveLocale(locale: Locale): void {
 export function setLocale(locale: Locale): void {
   currentLocale.value = locale;
   saveLocale(locale);
+  syncDocumentLang(locale);
 }
 
 function getNestedValue(obj: unknown, path: string): string | undefined {

@@ -332,6 +332,33 @@ describe("GET /api/attachments/:id", () => {
     expect(response.headers.get("content-disposition")).toBe('attachment; filename="doc.txt"');
   });
 
+  test("an SVG attachment gets Content-Disposition: attachment, never inline", async () => {
+    const dir = makeAttachmentsDir();
+    const { db, url, cookie } = await start(dir);
+    await seedSession(db, "sess-svg");
+    const sessionDir = join(dir, "sess-svg");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, "att-svg-1-evil.svg"), "<svg></svg>");
+    db.query(
+      "INSERT INTO session_attachments (id, session_id, owner_id, name, mime_type, size, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "att-svg-1",
+      "sess-svg",
+      "user-1",
+      "evil.svg",
+      "image/svg+xml",
+      11,
+      join(sessionDir, "att-svg-1-evil.svg"),
+      Date.now(),
+    );
+    const response = await fetch(`${url}/api/attachments/att-svg-1`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/svg+xml");
+    expect(response.headers.get("content-disposition")).toBe('attachment; filename="evil.svg"');
+  });
+
   test("404 for an unknown attachment id", async () => {
     const { url, cookie } = await start();
     const response = await fetch(`${url}/api/attachments/nonexistent`, {

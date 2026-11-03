@@ -12,7 +12,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { migrateRunnerDb } from "@cc-web/runner-db";
@@ -105,8 +105,12 @@ function resolveUserHome(username: string): string | undefined {
   if (process.platform === "win32") {
     return process.env["USERPROFILE"] ?? homedir();
   }
+  // Never interpolate a username into a shell command: execFileSync passes
+  // it as a single argv to getent (no shell at all), and the regex rejects
+  // anything that is not a plain username before we even call it.
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(username)) return undefined;
   try {
-    const entry = execSync(`getent passwd ${username}`, {
+    const entry = execFileSync("getent", ["passwd", username], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });

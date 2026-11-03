@@ -42,17 +42,16 @@ const confirmPassword = ref("");
 
 // Avatar state
 const stagedAvatar = ref<string | null>(null);
-const avatarPreview = computed(() => {
-  if (stagedAvatar.value) {
-    return stagedAvatar.value;
-  }
-  if (sessions.avatar) {
-    return sessions.avatar;
-  }
-  // Fallback to initial
-  const initial = sessions.account ? sessions.account.charAt(0).toUpperCase() : "";
-  return initial;
+const avatarRemoved = ref(false);
+/** The image URL to show, or null when there is no avatar at all. */
+const avatarUrl = computed(() => {
+  if (avatarRemoved.value) return null;
+  return stagedAvatar.value ?? sessions.avatar ?? null;
 });
+/** The letter shown when there is no avatar image — never used as an image URL. */
+const avatarInitial = computed(() =>
+  sessions.account ? sessions.account.charAt(0).toUpperCase() : "",
+);
 
 // Loading state
 const isSaving = ref(false);
@@ -68,6 +67,7 @@ watch(
       newPassword.value = "";
       confirmPassword.value = "";
       stagedAvatar.value = null;
+      avatarRemoved.value = false;
     }
   },
 );
@@ -88,6 +88,7 @@ const handleFileSelect = async (event: Event) => {
   try {
     const dataUrl = await downscaleAvatarImage(file, 256);
     stagedAvatar.value = dataUrl;
+    avatarRemoved.value = false;
     toast.success(t("user.avatarLoaded"));
   } catch {
     toast.error(t("user.avatarLoadError"));
@@ -100,9 +101,13 @@ const handleFileSelect = async (event: Event) => {
   }
 };
 
-// Remove staged avatar
+// Remove the avatar: clearing only the staged value used to fall back
+// to the saved server avatar, so "remove" appeared to do nothing. The
+// flag makes the preview show the initial letter, and saveProfile sends
+// an empty string, which the server treats as "clear avatar".
 const removeAvatar = () => {
   stagedAvatar.value = null;
+  avatarRemoved.value = true;
 };
 
 // Open file picker
@@ -141,7 +146,7 @@ const saveProfile = async () => {
   try {
     const payload: UpdateMePayloadInternal = {
       username: username.value.trim() || undefined,
-      avatar: stagedAvatar.value ?? undefined,
+      avatar: avatarRemoved.value ? "" : (stagedAvatar.value ?? undefined),
       currentPassword: currentPassword.value.trim() || undefined,
       newPassword: newPassword.value.trim() || undefined,
     };
@@ -188,15 +193,15 @@ const onClose = () => {
             <!-- Circular mask using CSS -->
             <div class="absolute inset-0 rounded-full overflow-hidden">
               <div
-                v-if="avatarPreview"
+                v-if="avatarUrl"
                 class="w-full h-full bg-cover bg-center"
-                :style="{ backgroundImage: `url(${avatarPreview})` }"
+                :style="{ backgroundImage: `url(${avatarUrl})` }"
               />
               <div
                 v-else
                 class="w-full h-full flex items-center justify-center text-2xl font-medium text-foreground/50"
               >
-                {{ avatarPreview }}
+                {{ avatarInitial }}
               </div>
             </div>
           </div>
@@ -214,7 +219,7 @@ const onClose = () => {
               @change="handleFileSelect"
             />
             <Button
-              v-if="avatarPreview"
+              v-if="avatarUrl"
               type="button"
               variant="ghost"
               size="sm"

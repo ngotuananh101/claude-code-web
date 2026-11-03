@@ -46,6 +46,11 @@ function main(): void {
   // The signing secret is read as raw bytes; a short one is rejected by
   // `createSigner` rather than silently weakening every token.
   const secret = new TextEncoder().encode(requireEnv("CC_WEB_JWT_SECRET"));
+  // Optional separate sealing key for stored profile API keys. When unset,
+  // buildServerOptions falls back to the JWT secret (old behaviour).
+  const secretBoxSecretRaw = process.env["CC_WEB_SECRET_BOX_KEY"];
+  const secretBoxSecret =
+    secretBoxSecretRaw === undefined ? undefined : new TextEncoder().encode(secretBoxSecretRaw);
   const allowedOrigins = (process.env["CC_WEB_ALLOWED_ORIGINS"] ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -66,7 +71,14 @@ function main(): void {
   }
 
   const handle = createServer(
-    buildServerOptions({ db, secret, allowedOrigins, port, attachmentsDir }),
+    buildServerOptions({
+      db,
+      secret,
+      allowedOrigins,
+      port,
+      attachmentsDir,
+      ...(secretBoxSecret === undefined ? {} : { secretBoxSecret }),
+    }),
   );
 
   console.log(

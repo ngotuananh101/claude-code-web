@@ -781,7 +781,7 @@ async function stop(): Promise<void> {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  class="absolute -top-1.5 -right-1.5 z-10 size-5 rounded-full border border-border bg-background text-muted-foreground shadow-xs opacity-0 transition-opacity duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                  class="absolute -top-1.5 -right-1.5 z-10 size-5 rounded-full border border-border bg-background text-muted-foreground shadow-xs opacity-0 transition-opacity duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100"
                   :aria-label="`Xoá tệp ${att.name}`"
                   @click.stop="dropFile(i)"
                 >

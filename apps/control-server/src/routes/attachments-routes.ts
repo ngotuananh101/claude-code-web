@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import {
   getSessionAttachment,
   getSessionAttachmentById,
@@ -33,6 +33,33 @@ const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 function sanitizeName(name: string): string {
   return basename(name).replace(/[^a-zA-Z0-9._-]/g, "_");
 }
+
+/**
+ * Session ids used as a directory name must be a single safe path segment.
+ * This rejects "..", "/", "\\", and any other traversal attempt, while
+ * still allowing the ids the app actually mints (uuids, "sess-1", ...).
+ * Uploading to a new unpinned session is intentional, so existence is NOT
+ * checked here — only the shape of the id.
+ */
+export function isValidSessionId(sessionId: string): boolean {
+  if (sessionId.length === 0 || sessionId.length > 128) return false;
+  if (sessionId === "." || sessionId === "..") return false;
+  if (sessionId.includes("..")) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId);
+}
+
+/**
+ * Only raster images are safe to stream inline from the same origin.
+ * SVG (and anything else) is forced to download: an SVG served inline on
+ * the app origin could run script in the app's context.
+ */
+const INLINE_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+]);
 
 /**
  * Resolve the on-disk attachments directory, defaulting to `./data/attachments`
@@ -71,7 +98,7 @@ export async function handleUploadAttachments(
     return new Response("unauthorized", { status: 401 });
   }
 
-  if (!sessionId || sessionId.trim() === "") {
+  if (!isValidSessionId(sessionId)) {
     return new Response("bad request", { status: 400 });
   }
 
@@ -111,6 +138,14 @@ export async function handleUploadAttachments(
 
   const attachmentsDir = resolveAttachmentsDir(options);
   const sessionDir = join(attachmentsDir, sessionId);
+  const resolvedSessionDir = resolve(sessionDir);
+  const resolvedAttachmentsDir = resolve(attachmentsDir);
+  if (
+    resolvedSessionDir !== resolvedAttachmentsDir &&
+    !resolvedSessionDir.startsWith(resolvedAttachmentsDir + sep)
+  ) {
+    return new Response("bad request", { status: 400 });
+  }
   mkdirSync(sessionDir, { recursive: true });
 
   const infos: AttachmentInfo[] = [];
@@ -217,7 +252,8 @@ export async function handleGetRunnerAttachment(
 
 /**
  * Stream an attachment row from disk with the right Content-Type,
- * Content-Disposition, and a private cache directive.
+ * Content-Disposition, a private cache directive, and a sandbox CSP.
+ * Only raster images stream inline; SVG and everything else downloads.
  */
 function serveAttachment(record: SessionAttachmentRecord): Response {
   if (!existsSync(record.storagePath)) {
@@ -227,7 +263,7 @@ function serveAttachment(record: SessionAttachmentRecord): Response {
   const data = readFileSync(record.storagePath);
 
   let contentDisposition: string;
-  if (record.mimeType.startsWith("image/")) {
+  if (INLINE_IMAGE_TYPES.has(record.mimeType)) {
     contentDisposition = "inline";
   } else {
     const safeName = sanitizeName(record.name);
@@ -239,6 +275,7 @@ function serveAttachment(record: SessionAttachmentRecord): Response {
       "Content-Type": record.mimeType,
       "Content-Disposition": contentDisposition,
       "Cache-Control": "private, max-age=86400",
+      "Content-Security-Policy": "sandbox",
     },
   });
 }

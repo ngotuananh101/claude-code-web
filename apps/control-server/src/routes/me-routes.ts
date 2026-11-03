@@ -3,6 +3,7 @@ import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 import {
   ACCESS_TTL_SECONDS,
   COOKIE_NAME,
+  cookieSecureFlag,
   REFRESH_COOKIE_NAME,
   REFRESH_TTL_SECONDS,
 } from "./auth-routes.ts";
@@ -199,7 +200,7 @@ export async function handleUpdateMe(
     const newAccessToken = await options.auth.issueAccessToken(authorized.userId);
     const newRefreshToken = await options.auth.issueRefreshToken(authorized.userId);
 
-    const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+    const secure = cookieSecureFlag(request);
     const headers = new Headers();
     headers.set("Content-Type", "application/json");
 

@@ -151,7 +151,19 @@ function mergeSettings(
  * Throws `SyntaxError` when the JSON is invalid — callers (and the editor)
  * surface that as the syntax-error badge.
  */
-export function jsonToForm(json: string): ProfileForm & { settingsJson: string } {
+/**
+ * Parse settings JSON back into the visual form. The optional
+ * `preserveName` is the name the form already has: settings JSON never
+ * carries `name` (the name lives in the profile row, not in Claude Code
+ * settings), so without it the parsed name defaults to "" and a caller
+ * that applies the parsed form blindly wipes the name on every edit to
+ * any other field. When preserveName is given it always wins, because
+ * the JSON editor does not own the name — the form's name input does.
+ */
+export function jsonToForm(
+  json: string,
+  preserveName?: string,
+): ProfileForm & { settingsJson: string } {
   const parsed: unknown = JSON.parse(json);
   const record = (
     typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
@@ -202,7 +214,7 @@ export function jsonToForm(json: string): ProfileForm & { settingsJson: string }
     Object.keys(remainder).length > 0 ? JSON.stringify(remainder, null, 2) : "{}";
 
   return {
-    name: extractString(record, "name") ?? "",
+    name: preserveName ?? extractString(record, "name") ?? "",
     endpoint: endpoint ?? "",
     apiKey: credential,
     authField,

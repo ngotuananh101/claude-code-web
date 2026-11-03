@@ -24,6 +24,29 @@ export function readCookie(cookie: string | undefined, name: string): string | u
 }
 
 /**
+ * Whether session cookies should carry the Secure flag for this request.
+ *
+ * The old rule only looked at the request URL's own protocol. Behind a
+ * TLS-terminating proxy (Caddy in production) the control server sees
+ * plain http on loopback even though the browser is on https, so Secure
+ * was silently dropped in exactly the deployment that needs it.
+ *
+ * Trusting X-Forwarded-Proto for this one flag is safe in that direction:
+ * a client that spoofs "https" only gets a stricter Secure cookie, never
+ * a weaker one. An explicit CC_WEB_SECURE_COOKIES=true/false overrides
+ * both, so local plain-http dev can keep working and production can
+ * force Secure regardless of proxy headers.
+ */
+export function cookieSecureFlag(request: Request): string {
+  const override = process.env["CC_WEB_SECURE_COOKIES"];
+  if (override === "true") return "; Secure";
+  if (override === "false") return "";
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  if (forwarded === "https") return "; Secure";
+  return new URL(request.url).protocol === "https:" ? "; Secure" : "";
+}
+
+/**
  * First-time setup (§19.1): whether the owner account still needs seeding.
  *
  * Read-only and unauthenticated by design: the web front door calls this before
@@ -135,7 +158,7 @@ export async function handleSetup(
 
   const token = await options.auth.issueAccessToken(id);
   const refreshToken = await options.auth.issueRefreshToken(id);
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const secure = cookieSecureFlag(request);
 
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
@@ -194,11 +217,12 @@ export async function handleLogin(
   const token = await options.auth.issueAccessToken(row.id);
   const refreshToken = await options.auth.issueRefreshToken(row.id);
 
-  // Secure only when the request is actually https: on a plain-http origin
-  // (local dev, self-hosted LAN) a Secure cookie is dropped by the browser,
-  // which would turn every login into a silent no-op. The flag still does
-  // its real work wherever TLS terminates at this server.
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  // Secure flag via cookieSecureFlag: https URL, X-Forwarded-Proto
+  // from a TLS proxy, or the CC_WEB_SECURE_COOKIES override. On a
+  // plain-http origin a Secure cookie is dropped by the browser, which
+  // would turn every login into a silent no-op — that is why the
+  // override exists instead of forcing Secure unconditionally.
+  const secure = cookieSecureFlag(request);
 
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
@@ -242,7 +266,7 @@ export async function handleRefresh(
     return new Response("unauthorized", { status: 401 });
   }
 
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const secure = cookieSecureFlag(request);
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
   headers.append(
@@ -287,7 +311,7 @@ export async function handleLogout(
   options.auth.revokeAllSessions(authorized.userId);
   browserGateway.revoke(authorized.userId);
 
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  const secure = cookieSecureFlag(request);
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
   headers.append(
