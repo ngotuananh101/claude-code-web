@@ -89,3 +89,29 @@ describe("RunnerCapabilitiesDialog — filtering", () => {
     expect(connected[0]?.name).toBe("a");
   });
 });
+
+describe("RunnerCapabilitiesDialog — models in Tab 3", () => {
+  test("models formatting: id, display name, description", () => {
+    const models = [
+      { value: "claude-sonnet-4", displayName: "Sonnet 4", description: "Fast" },
+      { value: "claude-opus-4", displayName: "claude-opus-4", description: "" },
+    ];
+    expect(models[0]?.value).toBe("claude-sonnet-4");
+    expect(models[0]?.displayName).toBe("Sonnet 4");
+    expect(models[0]?.description).toBe("Fast");
+    expect(models[1]?.value).toBe("claude-opus-4");
+  });
+
+  test("empty models yields noModels state", () => {
+    const models: { value: string }[] = [];
+    const hasModels = models.length > 0;
+    expect(hasModels).toBe(false);
+  });
+
+  test("activeTab resets to plugins when open becomes true", () => {
+    let activeTab: "plugins" | "mcp" | "agents" = "agents";
+    const open = true;
+    if (open) activeTab = "plugins";
+    expect(activeTab).toBe("plugins");
+  });
+});

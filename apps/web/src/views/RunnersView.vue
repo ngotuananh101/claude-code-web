@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { RunnerCapabilities } from "@cc-web/protocol";
+import type { RunnerCapabilities, RunnerModel } from "@cc-web/protocol";
 import { Pencil, SlidersHorizontal, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { toast } from "vue-sonner";
@@ -28,6 +28,7 @@ type RunnerRow = {
   createdAt: number;
   revokedAt: number | null;
   capabilities?: RunnerCapabilities;
+  models?: RunnerModel[];
 };
 
 const runners = ref<RunnerRow[]>([]);
@@ -318,6 +319,7 @@ onMounted(() => void load());
               {{ confirming === runner.runnerId ? t("runners.sureRevoke") : t("runners.revokeAction") }}
             </Button>
             <Button
+              v-if="runner.revokedAt === null"
               variant="ghost"
               size="icon-xs"
               :title="t('runners.inspectCapabilities')"
@@ -364,6 +366,7 @@ onMounted(() => void load());
       :runner-name="inspectedRunner?.name ?? null"
       :runner-id="inspectedRunner?.runnerId ?? ''"
       :capabilities="inspectedRunner?.capabilities ?? null"
+      :models="inspectedRunner?.models ?? []"
     />
   </ScrollArea>
 </template>

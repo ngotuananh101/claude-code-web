@@ -379,6 +379,9 @@ export type TranslationDictionary = {
     noPlugins: string;
     noMcpServers: string;
     noAgents: string;
+    noModels: string;
+    discoveredModels: string;
+    discoveredAgents: string;
     mcpStatusConnected: string;
     mcpStatusFailed: string;
     mcpStatusConfigured: string;

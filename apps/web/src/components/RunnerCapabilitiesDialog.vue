@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { RunnerCapabilities, RunnerMcpServer } from "@cc-web/protocol";
-import { computed, ref } from "vue";
+import type { RunnerCapabilities, RunnerMcpServer, RunnerModel } from "@cc-web/protocol";
+import { computed, ref, watch } from "vue";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +15,7 @@ const props = defineProps<{
   runnerName?: string | null;
   runnerId: string;
   capabilities?: RunnerCapabilities | null;
+  models?: RunnerModel[];
 }>();
 
 const emit = defineEmits<(e: "update:open", value: boolean) => void>();
@@ -28,10 +29,19 @@ const plugins = computed(() => props.capabilities?.plugins ?? []);
 const commands = computed(() => props.capabilities?.commands ?? []);
 const mcpServers = computed(() => props.capabilities?.mcpServers ?? []);
 const agents = computed(() => props.capabilities?.agents ?? []);
+const models = computed(() => props.models ?? []);
 
 const hasPluginsOrCommands = computed(() => plugins.value.length > 0 || commands.value.length > 0);
 const hasMcp = computed(() => mcpServers.value.length > 0);
 const hasAgents = computed(() => agents.value.length > 0);
+const hasModels = computed(() => models.value.length > 0);
+
+watch(
+  () => props.open,
+  (value) => {
+    if (value) activeTab.value = "plugins";
+  },
+);
 
 function mcpStatusClass(status: RunnerMcpServer["status"]): string {
   if (status === "connected") return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
@@ -196,26 +206,63 @@ function setOpen(value: boolean): void {
         </div>
 
         <div v-if="activeTab === 'agents'">
-          <div v-if="!hasAgents" class="py-6 text-center text-sm text-muted-foreground">
-            {{ t("runners.noAgents") }}
+          <div v-if="!hasModels && !hasAgents" class="py-6 text-center text-sm text-muted-foreground">
+            {{ t("runners.noModels") }}
           </div>
-          <ul v-else class="space-y-2">
-            <li
-              v-for="agent in agents"
-              :key="agent.name"
-              class="rounded-md border border-border bg-card p-3"
-            >
-              <div class="flex items-center gap-2">
-                <span class="font-medium text-foreground">{{ agent.name }}</span>
-                <span v-if="agent.model" class="text-xs text-muted-foreground">
-                  {{ agent.model }}
-                </span>
-              </div>
-              <p v-if="agent.description" class="mt-1 text-xs text-muted-foreground">
-                {{ agent.description }}
-              </p>
-            </li>
-          </ul>
+          <div v-else class="space-y-4">
+            <section v-if="models.length > 0">
+              <h3 class="mb-2 text-sm font-semibold text-foreground">
+                {{ t("runners.discoveredModels") }}
+              </h3>
+              <ul class="space-y-2">
+                <li
+                  v-for="model in models"
+                  :key="model.value"
+                  class="rounded-md border border-border bg-card p-3"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-sm font-medium text-foreground">{{ model.value }}</span>
+                    <span v-if="model.displayName && model.displayName !== model.value" class="text-xs text-muted-foreground">
+                      {{ model.displayName }}
+                    </span>
+                  </div>
+                  <p v-if="model.description" class="mt-1 text-xs text-muted-foreground">
+                    {{ model.description }}
+                  </p>
+                </li>
+              </ul>
+            </section>
+
+            <section v-if="agents.length > 0">
+              <h3 class="mb-2 text-sm font-semibold text-foreground">
+                {{ t("runners.discoveredAgents") }}
+              </h3>
+              <ul class="space-y-2">
+                <li
+                  v-for="agent in agents"
+                  :key="agent.name"
+                  class="rounded-md border border-border bg-card p-3"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-foreground">{{ agent.name }}</span>
+                    <span v-if="agent.model" class="text-xs text-muted-foreground">
+                      {{ agent.model }}
+                    </span>
+                  </div>
+                  <p v-if="agent.description" class="mt-1 text-xs text-muted-foreground">
+                    {{ agent.description }}
+                  </p>
+                </li>
+              </ul>
+            </section>
+
+            <div v-if="models.length === 0 && hasAgents" class="py-2 text-center text-xs text-muted-foreground">
+              {{ t("runners.noModels") }}
+            </div>
+            <div v-if="agents.length === 0 && hasModels" class="py-2 text-center text-xs text-muted-foreground">
+              {{ t("runners.noAgents") }}
+            </div>
+          </div>
         </div>
       </div>
     </DialogContent>

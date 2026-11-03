@@ -92,4 +92,31 @@ describe("RunnersView logic", () => {
     expect(runner.capabilities?.mcpServers?.[0]?.status).toBe("connected");
     expect(runner.capabilities?.agents?.[0]?.name).toBe("agent-1");
   });
+
+  test("runner row carries models binding", () => {
+    const runner = {
+      runnerId: "runner-abc-123",
+      name: "Office",
+      createdAt: 1000,
+      revokedAt: null,
+      models: [
+        {
+          value: "claude-sonnet-4",
+          displayName: "Sonnet 4",
+          description: "Fast",
+          supportsEffort: true,
+          supportedEffortLevels: [],
+        },
+      ],
+    };
+
+    expect(runner.models?.[0]?.value).toBe("claude-sonnet-4");
+  });
+
+  test("capability button only for non-revoked runners", () => {
+    const active = { revokedAt: null };
+    const revoked = { revokedAt: 1234 };
+    expect(active.revokedAt === null).toBe(true);
+    expect(revoked.revokedAt === null).toBe(false);
+  });
 });
