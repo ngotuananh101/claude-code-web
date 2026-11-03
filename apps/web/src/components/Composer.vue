@@ -20,7 +20,7 @@ import {
   Square,
   X,
 } from "@lucide/vue";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from "@/components/ui/input-group";
@@ -50,6 +50,7 @@ import {
   normalizeEffort,
   pickerModels,
 } from "@/features/composer/model-picker.ts";
+import { getAvailableCommands, type SlashCommandItem } from "@/features/composer/slash-commands.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { uploadSessionAttachments } from "../services/attachments-api";
@@ -65,6 +66,7 @@ import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api
 import { sessions } from "../stores/sessions.ts";
 import FolderBrowserModal from "./FolderBrowserModal.vue";
 import ModelPickerPopover from "./ModelPickerPopover.vue";
+import type SlashCommandMenu from "./SlashCommandMenu.vue";
 
 /**
  * The prompt box (§16.1). On the new-session page (sessionId null) it mints
@@ -99,6 +101,15 @@ const emit = defineEmits<{
 
 const prompt = ref("");
 const sending = ref(false);
+
+/** Slash-command autocomplete state. */
+const slashMenuVisible = ref(false);
+const slashQuery = ref("");
+const slashCommandMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null);
+const textareaEl = ref<HTMLTextAreaElement | null>(null);
+
+const selectedRunner = computed(() => runners.value.find((r) => r.runnerId === runnerId.value));
+const availableCommands = computed(() => getAvailableCommands(selectedRunner.value?.capabilities));
 
 /** The chosen runner; empty until the operator picks one. */
 const runnerId = ref("");
@@ -443,6 +454,63 @@ function dropFile(index: number): void {
   attachments.value.splice(index, 1);
 }
 
+function detectSlashQuery(text: string, cursor: number): void {
+  let start = cursor;
+  while (start > 0 && !/\s/.test(text[start - 1] ?? "")) start--;
+  const word = text.slice(start, cursor);
+  const atBoundary = start === 0 || /\s/.test(text[start - 1] ?? "");
+  if (atBoundary && word.startsWith("/") && !word.includes(" ")) {
+    slashQuery.value = word.slice(1);
+    slashMenuVisible.value = true;
+  } else {
+    slashMenuVisible.value = false;
+  }
+}
+
+function onPromptInput(event: Event): void {
+  const target = event.target as HTMLTextAreaElement;
+  textareaEl.value = target;
+  detectSlashQuery(target.value, target.selectionStart ?? target.value.length);
+}
+
+function handleTextareaKeyDown(event: KeyboardEvent): void {
+  if (slashMenuVisible.value) {
+    slashCommandMenuRef.value?.handleKeyDown(event);
+    if (event.defaultPrevented) return;
+  }
+  if (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    event.preventDefault();
+    void send();
+  }
+}
+
+async function applySlashCommand(command: SlashCommandItem): Promise<void> {
+  const textarea = textareaEl.value;
+  const cursor = textarea?.selectionStart ?? prompt.value.length;
+  let start = cursor;
+  while (start > 0 && !/\s/.test(prompt.value[start - 1] ?? "")) start--;
+  const before = prompt.value.slice(0, start);
+  const after = prompt.value.slice(cursor);
+  prompt.value = `${before}/${command.name} ${after}`;
+  slashMenuVisible.value = false;
+  await nextTick();
+  if (textarea) {
+    const pos = before.length + command.name.length + 2;
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = Math.min(pos, prompt.value.length);
+  }
+}
+
+function closeSlashMenu(): void {
+  slashMenuVisible.value = false;
+}
+
 async function send(): Promise<void> {
   if (!canSend.value) return;
   sending.value = true;
@@ -726,8 +794,18 @@ async function stop(): Promise<void> {
         class="max-h-52 min-h-12 w-full px-3.5 py-2.5 text-left text-[13px] leading-relaxed"
         placeholder="Gửi prompt cho runner…"
         aria-label="Ô soạn prompt"
-        @keydown.enter.exact.prevent="send"
+        @input="onPromptInput"
+        @keydown="handleTextareaKeyDown"
         @paste="onPaste"
+      />
+      <SlashCommandMenu
+        ref="slashCommandMenuRef"
+        :commands="availableCommands"
+        :query="slashQuery"
+        :visible="slashMenuVisible"
+        class="bottom-full left-0 mb-2"
+        @select="applySlashCommand"
+        @close="closeSlashMenu"
       />
       <!-- Drag & drop overlay backdrop -->
       <div

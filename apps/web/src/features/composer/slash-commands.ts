@@ -52,6 +52,20 @@ export function filterCommands(commands: SlashCommandItem[], query: string): Sla
   });
 }
 
+export function detectSlashQuery(
+  prompt: string,
+  cursor: number,
+): { active: boolean; query: string } {
+  let start = cursor;
+  while (start > 0 && !/\s/.test(prompt[start - 1] ?? "")) start--;
+  const word = prompt.slice(start, cursor);
+  const atBoundary = start === 0 || /\s/.test(prompt[start - 1] ?? "");
+  if (atBoundary && word.startsWith("/") && !word.includes(" ")) {
+    return { active: true, query: word.slice(1) };
+  }
+  return { active: false, query: "" };
+}
+
 export function applyCommandToPrompt(
   prompt: string,
   command: SlashCommandItem,

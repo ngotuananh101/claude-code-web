@@ -9,6 +9,11 @@ import {
   splitCompositeId,
   workspaceForPath,
 } from "../features/composer/composer-logic.ts";
+import {
+  applyCommandToPrompt,
+  detectSlashQuery,
+  type SlashCommandItem,
+} from "../features/composer/slash-commands";
 
 /**
  * Task 12 — Composer workspace & session picker logic tests (§15.1, §16.1).
@@ -369,5 +374,40 @@ describe("buildRunRequest — resumeSessionId handling", () => {
       prompt: "  hello world  ",
     });
     expect(body.prompt).toBe("hello world");
+  });
+});
+
+describe("Composer slash command autocomplete", () => {
+  test("detects slash query at start of input", () => {
+    const result = detectSlashQuery("/rev", 4);
+    expect(result.active).toBe(true);
+    expect(result.query).toBe("rev");
+  });
+
+  test("detects slash query after whitespace", () => {
+    const result = detectSlashQuery("hello /code", 11);
+    expect(result.active).toBe(true);
+    expect(result.query).toBe("code");
+  });
+
+  test("does not detect when slash is not at word boundary", () => {
+    const result = detectSlashQuery("hello/rev", 9);
+    expect(result.active).toBe(false);
+  });
+
+  test("does not detect when query contains a space", () => {
+    const result = detectSlashQuery("/rev now", 8);
+    expect(result.active).toBe(false);
+  });
+
+  test("applying a command updates the prompt", () => {
+    const command: SlashCommandItem = {
+      name: "review-pr",
+      displayName: "Review PR",
+      description: "Review a pull request",
+      category: "plugin",
+    };
+    const result = applyCommandToPrompt("", command);
+    expect(result.newPrompt).toBe("/review-pr");
   });
 });
