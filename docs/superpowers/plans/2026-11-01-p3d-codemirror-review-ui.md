@@ -1,5 +1,16 @@
 # P3-D CodeMirror Review UI Implementation Plan
 
+> **SUPERSEDED 2026-11-03 — DO NOT IMPLEMENT.**
+>
+> CodeMirror review UI was dropped by the owner and replaced by Monaco Editor.
+> Current review UI: Monaco Editor 0.57.0 (`MonacoCodeEditor.vue`,
+> `MonacoDiffEditor.vue`, `apps/web/src/features/monaco/`), see
+> `docs/superpowers/specs/2026-11-01-monaco-review-dialog-design.md` and
+> ARCHITECTURE §16. CodeMirror packages and components have been removed
+> from the codebase (no `codemirror` in `apps/web/package.json`, no
+> `CodeEditor.vue` in `apps/web/src`). This document is kept as history only.
+>
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace cc-web's plain-text file editor and diff rendering with CodeMirror 6 (`CodeEditor`, `UnifiedDiff`, `SplitDiff`, `ReviewToolbar`) and add the draft/revision conflict UI, per the P3-D roadmap row.

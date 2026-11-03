@@ -17,7 +17,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  getBrowserNotificationEnabled,
+  setBrowserNotificationEnabled,
+} from "@/features/notifications/notification-events.ts";
 import { useI18n } from "@/lib/i18n/index.ts";
+import {
+  createTelegramLink,
+  getTelegramStatus,
+  sendTelegramTest,
+  setTelegramEnabled,
+  type TelegramStatus,
+  unlinkTelegram,
+} from "@/services/notifications-api.ts";
 import { type UpdateMePayloadInternal, updateUserProfile } from "@/services/user-api.ts";
 import { sessions } from "@/stores/sessions.ts";
 
@@ -57,6 +69,108 @@ const avatarInitial = computed(() =>
 const isSaving = ref(false);
 const avatarLoading = ref(false);
 
+// Notifications state (N1)
+const telegramStatus = ref<TelegramStatus | null>(null);
+const telegramCode = ref<string | null>(null);
+const telegramBusy = ref(false);
+const browserEnabled = ref(true);
+const browserPermission = ref("unsupported");
+const browserStorage = {
+  getItem: (key: string) => window.localStorage.getItem(key),
+  setItem: (key: string, value: string) => window.localStorage.setItem(key, value),
+};
+const browserPermissionText = computed(() => {
+  if (browserPermission.value === "granted") return "Đã cho phép";
+  if (browserPermission.value === "denied") return "Đã bị từ chối (đổi trong cài đặt trình duyệt)";
+  if (browserPermission.value === "unsupported") return "Trình duyệt không hỗ trợ";
+  return "Chưa xin phép";
+});
+const telegramStatusText = computed(() => {
+  if (telegramStatus.value === null) return "Không tải được trạng thái";
+  if (!telegramStatus.value.configured) return "Chưa cấu hình bot trên máy chủ";
+  if (!telegramStatus.value.linked) return "Chưa liên kết";
+  return telegramStatus.value.enabled ? "Đã liên kết, đang bật" : "Đã liên kết, đang tắt";
+});
+
+async function loadNotifications(): Promise<void> {
+  browserEnabled.value = getBrowserNotificationEnabled(browserStorage);
+  browserPermission.value =
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  telegramStatus.value = await getTelegramStatus();
+}
+
+async function toggleBrowser(event: Event): Promise<void> {
+  const checked = (event.target as HTMLInputElement).checked;
+  if (checked && typeof Notification !== "undefined" && Notification.permission !== "granted") {
+    browserPermission.value = await Notification.requestPermission();
+    if (browserPermission.value !== "granted") {
+      browserEnabled.value = false;
+      toast.error("Trình duyệt chưa cho phép thông báo.");
+      return;
+    }
+  }
+  browserEnabled.value = checked;
+  setBrowserNotificationEnabled(browserStorage, checked);
+}
+
+async function createLink(): Promise<void> {
+  telegramBusy.value = true;
+  try {
+    const result = await createTelegramLink();
+    if (result === null) {
+      toast.error("Không tạo được mã liên kết. Kiểm tra bot đã cấu hình chưa.");
+      return;
+    }
+    telegramCode.value = result.code;
+  } finally {
+    telegramBusy.value = false;
+  }
+}
+
+async function copyCode(): Promise<void> {
+  if (telegramCode.value === null) return;
+  try {
+    await navigator.clipboard.writeText(`/start ${telegramCode.value}`);
+    toast.success("Đã sao chép lệnh liên kết.");
+  } catch {
+    toast.error("Không sao chép được, hãy gõ tay mã trên.");
+  }
+}
+
+async function testTelegram(): Promise<void> {
+  telegramBusy.value = true;
+  try {
+    if (await sendTelegramTest()) toast.success("Đã gửi tin thử qua Telegram.");
+    else toast.error("Gửi tin thử thất bại. Kiểm tra liên kết Telegram.");
+  } finally {
+    telegramBusy.value = false;
+  }
+}
+
+async function unlink(): Promise<void> {
+  telegramBusy.value = true;
+  try {
+    if (await unlinkTelegram()) {
+      telegramCode.value = null;
+      telegramStatus.value = await getTelegramStatus();
+      toast.success("Đã hủy liên kết Telegram.");
+    } else {
+      toast.error("Hủy liên kết thất bại.");
+    }
+  } finally {
+    telegramBusy.value = false;
+  }
+}
+
+async function toggleTelegramEnabled(event: Event): Promise<void> {
+  const checked = (event.target as HTMLInputElement).checked;
+  if (await setTelegramEnabled(checked)) {
+    telegramStatus.value = await getTelegramStatus();
+  } else {
+    toast.error("Đổi cài đặt Telegram thất bại.");
+  }
+}
+
 // Reset form when dialog opens
 watch(
   () => props.open,
@@ -68,6 +182,8 @@ watch(
       confirmPassword.value = "";
       stagedAvatar.value = null;
       avatarRemoved.value = false;
+      telegramCode.value = null;
+      void loadNotifications();
     }
   },
 );
@@ -272,6 +388,72 @@ const onClose = () => {
                 type="password"
                 :placeholder="t('user.confirmPasswordPlaceholder')"
               />
+            </div>
+          </div>
+        </div>
+        <!-- Notifications Section (N1) -->
+        <div class="flex flex-col gap-3 border-t pt-4">
+          <h4 class="text-sm font-medium">Thông báo</h4>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" :checked="browserEnabled" @change="toggleBrowser" />
+            Thông báo trình duyệt khi cần phê duyệt hoặc run kết thúc
+          </label>
+          <p class="text-xs text-muted-foreground">Trình duyệt: {{ browserPermissionText }}</p>
+          <div v-if="telegramStatus" class="flex flex-col gap-2">
+            <p class="text-sm">Telegram: {{ telegramStatusText }}</p>
+            <label v-if="telegramStatus.linked" class="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                :checked="telegramStatus.enabled"
+                @change="toggleTelegramEnabled"
+              />
+              Nhận thông báo qua Telegram
+            </label>
+            <div class="flex flex-wrap gap-2">
+              <Button
+                v-if="!telegramStatus.linked && telegramStatus.configured"
+                type="button"
+                variant="outline"
+                size="sm"
+                :disabled="telegramBusy"
+                @click="createLink"
+              >
+                Tạo mã liên kết Telegram
+              </Button>
+              <Button
+                v-if="telegramStatus.linked"
+                type="button"
+                variant="outline"
+                size="sm"
+                :disabled="telegramBusy"
+                @click="testTelegram"
+              >
+                Gửi tin thử
+              </Button>
+              <Button
+                v-if="telegramStatus.linked"
+                type="button"
+                variant="ghost"
+                size="sm"
+                :disabled="telegramBusy"
+                @click="unlink"
+              >
+                Hủy liên kết
+              </Button>
+            </div>
+            <p v-if="!telegramStatus.configured" class="text-xs text-muted-foreground">
+              Chưa cấu hình bot Telegram trên máy chủ (CC_WEB_TELEGRAM_BOT_TOKEN).
+            </p>
+            <div v-if="telegramCode" class="flex flex-col gap-2">
+              <p class="text-xs text-muted-foreground">
+                Gửi lệnh sau cho bot Telegram của bạn (mã dùng 1 lần, hết hạn sau 15 phút):
+              </p>
+              <p class="break-all text-sm"><code>/start {{ telegramCode }}</code></p>
+              <div>
+                <Button type="button" variant="outline" size="sm" @click="copyCode">
+                  Sao chép lệnh
+                </Button>
+              </div>
             </div>
           </div>
         </div>

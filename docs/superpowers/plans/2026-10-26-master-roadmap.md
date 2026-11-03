@@ -76,3 +76,26 @@ UI copy with English domain nouns; Tailwind only; generated `ui/**` never
 hand-edited; `.superpowers/` ledger local-only; whole-branch review at each
 milestone end, Critical/Important → one fix pass, Minor → ledger; push
 straight to `main`.
+
+## Next phase (2026-11-03) — Notifications, Export, Queue, Backup, Migration
+
+Planned after M1–M5, in this order, in
+`docs/superpowers/plans/2026-11-03-next-features.md`:
+
+1. **N1 — Approval notifications: browser + Telegram bot.**
+   Browser system notifications plus a Telegram bot (complete
+   notifications scope, approval decisions stay in the web UI
+   unless the owner separately approves Telegram actions) for
+   `approval.requested` and approval expiry. Telegram link via
+   a single-use `/start` code; bot token via
+   `CC_WEB_TELEGRAM_BOT_TOKEN` (environment only).
+2. **N2 — Export a session to Markdown.**
+3. **N3 — Queue a run when no runner is ready** (instead of 503).
+4. **N4 — Backup / restore (1-click, manual in v1).**
+5. **N5 — Session migration (§21.6)** — blocked on owner
+   decisions (snapshot policy, snapshot location, target
+   toolchain validation, epoch semantics, rollback).
+
+Explicitly NOT in this phase (owner decisions, 2026-11-03):
+prompt library / template, cost per model/profile, and
+CodeMirror review UI (superseded by Monaco Editor).

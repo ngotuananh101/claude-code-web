@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import {
   approvalForSession,
   CommandOutbox,
@@ -38,6 +39,68 @@ function parseBody(body: unknown): DecisionBody | undefined {
   return { decision, answers: answers as Record<string, unknown> };
 }
 
+export type ApprovalDecisionOutcome =
+  | { ok: true; runnerId: string }
+  | { ok: false; reason: "unknown" | "not_pending" | "expired" };
+
+/**
+ * The decision core shared by the web UI and Telegram callbacks.
+ * Both callers get the same checks: unknown approval, already-closed
+ * or expired approval, the 15s expiry grace, and the CAS inside
+ * recordApprovalDecision that makes only the first decision win.
+ * The command is durable before drain, exactly as the HTTP route did.
+ */
+export async function decideApproval(
+  db: Database,
+  dispatcher: Dispatcher | undefined,
+  approvalId: string,
+  decision: "allow" | "deny",
+  answers?: Record<string, unknown>,
+): Promise<ApprovalDecisionOutcome> {
+  const row = approvalForSession(db, approvalId);
+  if (row === undefined) {
+    return { ok: false, reason: "unknown" };
+  }
+  if (row.state === "expired") {
+    return { ok: false, reason: "expired" };
+  }
+  const EXPIRY_GRACE_MS = 15_000;
+  if (
+    row.state === "pending" &&
+    typeof row.expiresAt === "number" &&
+    row.expiresAt + EXPIRY_GRACE_MS < Date.now()
+  ) {
+    return { ok: false, reason: "expired" };
+  }
+  const commandId = crypto.randomUUID();
+  const answersJson = answers === undefined ? undefined : JSON.stringify(answers);
+  const fingerprint = await fingerprintOf({
+    commandId,
+    runnerId: row.runnerId,
+    kind: "approval.respond",
+    payload: {
+      approvalId,
+      decision,
+      answers: answers ?? null,
+      inputHash: row.inputHash,
+    },
+    issuedAt: new Date().toISOString(),
+  });
+  const result = recordApprovalDecision(db, {
+    approvalId,
+    decision,
+    ...(answersJson === undefined ? {} : { answersJson }),
+    outbox: new CommandOutbox(db),
+    commandId,
+    fingerprint,
+  });
+  if (!result.ok) {
+    return { ok: false, reason: result.reason };
+  }
+  dispatcher?.drain(result.runnerId);
+  return { ok: true, runnerId: result.runnerId };
+}
+
 export async function handleApprovalDecision(
   request: Request,
   options: ServerOptions,
@@ -70,74 +133,17 @@ export async function handleApprovalDecision(
     return new Response("bad request", { status: 400 });
   }
 
-  // Read before the transaction so the fingerprint is computed from the same
-  // values the command will carry. The authoritative once-guard is still the
-  // CAS inside `recordApprovalDecision` — this read only feeds the hash, and a
-  // row that changed underneath simply answers `not_pending` after it.
-  const row = approvalForSession(options.db, approvalId);
-  if (row === undefined) {
-    return new Response("not found", { status: 404 });
-  }
-
-  // Reconciliation's `abandon_approval` already closed this row (§14.3): there
-  // is no gate left to decide, and the route's generic "not_pending" would read
-  // to the browser as "someone already recorded your decision", which is false.
-  if (row.state === "expired") {
-    return new Response("expired", { status: 409 });
-  }
-
-  // A crash-orphaned row can outlive its window without a terminal event (the
-  // runner sweeps silently), so the projection can still say "pending" long
-  // after the gate is gone. Recording a decision then would write an audit
-  // trail the runner never honored — refuse, and let the sweep close the row.
-  // The grace covers clock skew and a decision already in flight at expiry;
-  // the runner's own expiry check stays the boundary authority.
-  //
-  // Only a still-pending row takes this branch: a `decided` one past its
-  // window was decided, and the honest answer is the CAS's `not_pending` —
-  // "expired" there would tell the operator their decision was never recorded.
-  const EXPIRY_GRACE_MS = 15_000;
-  if (
-    row.state === "pending" &&
-    typeof row.expiresAt === "number" &&
-    row.expiresAt + EXPIRY_GRACE_MS < Date.now()
-  ) {
-    return new Response("expired", { status: 409 });
-  }
-
-  const commandId = crypto.randomUUID();
-  const answersJson = decision.answers === undefined ? undefined : JSON.stringify(decision.answers);
-  const fingerprint = await fingerprintOf({
-    commandId,
-    runnerId: row.runnerId,
-    kind: "approval.respond",
-    payload: {
-      approvalId,
-      decision: decision.decision,
-      answers: decision.answers ?? null,
-      inputHash: row.inputHash,
-    },
-    issuedAt: new Date().toISOString(),
-  });
-
-  const result = recordApprovalDecision(options.db, {
+  const outcome = await decideApproval(
+    options.db,
+    dispatcher,
     approvalId,
-    decision: decision.decision,
-    ...(answersJson === undefined ? {} : { answersJson }),
-    outbox: new CommandOutbox(options.db),
-    commandId,
-    fingerprint,
-  });
-
-  if (!result.ok) {
-    const status = result.reason === "unknown" ? 404 : 409;
-    return new Response(result.reason, { status });
+    decision.decision,
+    decision.answers,
+  );
+  if (!outcome.ok) {
+    const status = outcome.reason === "unknown" ? 404 : 409;
+    return new Response(outcome.reason, { status });
   }
-
-  // The command is durable; delivery is best-effort here. A runner that is
-  // between sockets picks the command up on its next drain (§12.2).
-  dispatcher?.drain(result.runnerId);
-
   return new Response(JSON.stringify({ approvalId, state: "decided" }), {
     status: 202,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },

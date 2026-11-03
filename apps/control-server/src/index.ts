@@ -15,6 +15,7 @@ import { dirname } from "node:path";
 import { migrate } from "@cc-web/control-db";
 import { PROTOCOL_VERSION } from "@cc-web/protocol";
 import { buildServerOptions, resolveDataPaths } from "./config.ts";
+import { telegramSenderFromToken } from "./routes/notifications-routes.ts";
 import { createServer } from "./server.ts";
 
 export const serverInfo = {
@@ -70,6 +71,10 @@ function main(): void {
     throw new Error(`CC_WEB_PORT must be an integer between 0 and 65535, got: ${port}`);
   }
 
+  // Telegram notifications (N1) are optional: without a bot token the
+  // server still runs, Telegram routes report configured=false, and no
+  // polling loop starts. The token is held in memory only, never stored.
+  const telegramSender = telegramSenderFromToken(process.env["CC_WEB_TELEGRAM_BOT_TOKEN"]);
   const handle = createServer(
     buildServerOptions({
       db,
@@ -78,6 +83,15 @@ function main(): void {
       port,
       attachmentsDir,
       ...(secretBoxSecret === undefined ? {} : { secretBoxSecret }),
+      ...(telegramSender === undefined
+        ? {}
+        : {
+            telegram: {
+              sender: telegramSender,
+              ...(allowedOrigins[0] === undefined ? {} : { origin: allowedOrigins[0] }),
+            },
+            telegramPollMs: 10_000,
+          }),
     }),
   );
 

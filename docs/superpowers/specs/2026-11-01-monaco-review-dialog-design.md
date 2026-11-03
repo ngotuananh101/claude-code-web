@@ -1,6 +1,6 @@
 # Monaco Review & Editor Dialog Design
 
-Status: Draft for review, 2026-11-01.
+Status: Implemented — supersedes the P3-D CodeMirror review UI, updated 2026-11-03. Monaco is the review/file editor in the shipped code; see ARCHITECTURE §16.
 
 ## 1. Intent & Problem Statement
 
@@ -23,7 +23,7 @@ The operator requested switching to **Monaco Editor (VS Code engine)** rendered 
 
 ## 3. Non-Goals
 
-- Replacing the entire lightweight text display in small widgets if not needed; CodeMirror can either remain for fallback/small previews or be phased out in favor of Monaco.
+- CodeMirror: fully phased out, not kept as a fallback. No CodeMirror package remains in `apps/web/package.json` and no CodeMirror component remains in `apps/web/src`; Monaco handles all review and file viewing. This replaces the earlier open question in this document.
 - No changes to backend RPC or Runner protocol: all operations continue to use existing `file.read`, `file.write`, `git.diff`, `git.changes`, `file.revert`, and `snapshot.status`.
 - No full IDE workspace (ADR-010 stands: review-first surface).
 
@@ -70,4 +70,4 @@ The operator requested switching to **Monaco Editor (VS Code engine)** rendered 
 ## 5. What's Left to the Builder
 
 - Choosing exact component file names (e.g., `ReviewModal.vue` in `components/review/` or `ReviewDialog.vue`).
-- Retaining or deprecating existing CodeMirror packages in `package.json` once Monaco handles all review and file viewing needs.
+- CodeMirror deprecation: done. Packages and components removed; nothing left to retain or deprecate.

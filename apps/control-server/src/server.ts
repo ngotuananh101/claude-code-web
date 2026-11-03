@@ -38,6 +38,7 @@ import type { AuthService } from "./auth/auth-service.ts";
 import { clientKey, createRateLimiter, type RateLimiter } from "./auth/rate-limit.ts";
 import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import { Dispatcher, openSealedPayload } from "./dispatch/dispatcher.ts";
+import { dispatchTelegramNotification, NOTIFIABLE_EVENT_TYPES } from "./notifications/telegram.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
   handleGetAttachment,
@@ -68,6 +69,15 @@ import {
   handleFileWrite,
   handleWorkspaceRevert,
 } from "./routes/mutation-routes.ts";
+import {
+  handleTelegramEnabled,
+  handleTelegramLink,
+  handleTelegramPoll,
+  handleTelegramStatus,
+  handleTelegramTest,
+  handleTelegramUnlink,
+  type TelegramConfig,
+} from "./routes/notifications-routes.ts";
 import { handleListProfileModels } from "./routes/profile-models.ts";
 import {
   handleCreateRunner,
@@ -155,6 +165,18 @@ export type ServerOptions = {
    * tests compile and nothing is ever stored cleartext even without a secret.
    */
   secretBox?: SecretBox;
+  /**
+   * Telegram notification config (N1). Absent when no bot token is
+   * configured: Telegram routes then report configured=false and the
+   * polling loop never starts. Tests inject a fake sender here.
+   */
+  telegram?: TelegramConfig;
+  /**
+   * Telegram polling interval in ms. Only when > 0 does createServer
+   * start the getUpdates loop; production passes 10000, tests omit it
+   * (or pass 0) so no interval can race their assertions.
+   */
+  telegramPollMs?: number;
 };
 
 export type ServerHandle = {
@@ -323,6 +345,56 @@ export function createServer(options: ServerOptions): ServerHandle {
         ) {
           scheduler.release(event.runId);
         }
+
+        // N1 notifications: one bounded summary per stored, notifiable
+        // event, to both channels. Telegram delivery is best-effort and
+        // never blocks ingestion; the browser frame is filtered client-side
+        // by the operator's browser-notification toggle and by tab focus.
+        // A redelivered event is deduped by Telegram (event id) and by the
+        // browser client (event id), so this runs for duplicates too.
+        if (NOTIFIABLE_EVENT_TYPES.has(event.type)) {
+          const ownerId = sessionOwner(options.db, event.sessionId);
+          if (ownerId !== undefined) {
+            const payload =
+              typeof event.payload === "object" && event.payload !== null
+                ? (event.payload as Record<string, unknown>)
+                : {};
+            const toolName =
+              typeof payload["toolName"] === "string" ? payload["toolName"] : undefined;
+            const inputSummary =
+              typeof payload["inputSummary"] === "string"
+                ? payload["inputSummary"]
+                : payload["questions"] !== undefined
+                  ? JSON.stringify(payload["questions"])
+                  : undefined;
+            const approvalId =
+              typeof payload["approvalId"] === "string" ? payload["approvalId"] : undefined;
+            const approvalKind = typeof payload["kind"] === "string" ? payload["kind"] : undefined;
+            const approvalExpiresAt =
+              typeof payload["expiresAt"] === "number" ? payload["expiresAt"] : undefined;
+            const titleRow = options.db
+              .query("SELECT title FROM sessions WHERE id = ?")
+              .get(event.sessionId) as { title: string | null } | null;
+            const notification = {
+              eventId: event.eventId,
+              type: event.type,
+              sessionId: event.sessionId,
+              ...(titleRow?.title ? { sessionTitle: titleRow.title } : {}),
+              ...(toolName === undefined ? {} : { toolName }),
+              ...(inputSummary === undefined ? {} : { inputSummary }),
+              ...(approvalId === undefined ? {} : { approvalId }),
+              ...(approvalKind === undefined ? {} : { approvalKind }),
+              ...(approvalExpiresAt === undefined ? {} : { approvalExpiresAt }),
+            };
+            browserGateway.notify(ownerId, notification);
+            void dispatchTelegramNotification(
+              options.db,
+              options.telegram?.sender,
+              notification,
+              options.telegram?.origin,
+            ).catch(() => {});
+          }
+        }
       }
 
       const attempts = new Set(events.map((event) => event.attemptId));
@@ -373,6 +445,21 @@ export function createServer(options: ServerOptions): ServerHandle {
     runnerGateway,
     ...(options.scheduleTickMs === undefined ? {} : { intervalMs: options.scheduleTickMs }),
   });
+
+  // N1 Telegram polling: only when a sender is configured and an interval
+  // was explicitly requested. A failed tick is logged, never fatal.
+  const telegramPollTimer =
+    options.telegram?.sender !== undefined &&
+    options.telegramPollMs !== undefined &&
+    options.telegramPollMs > 0
+      ? setInterval(() => {
+          void handleTelegramPoll(options, dispatcher).catch((error) => {
+            console.error(
+              `telegram poll failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        }, options.telegramPollMs)
+      : undefined;
 
   const allowed = new Set(options.allowedOrigins);
   const loginRateLimiter = options.loginRateLimiter ?? createRateLimiter();
@@ -902,6 +989,26 @@ export function createServer(options: ServerOptions): ServerHandle {
         return upgraded ? undefined : new Response("bad request", { status: 400 });
       }
 
+      if (url.pathname === "/api/notifications/telegram" && request.method === "GET") {
+        return handleTelegramStatus(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/notifications/telegram/link" && request.method === "POST") {
+        return handleTelegramLink(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/notifications/telegram/unlink" && request.method === "POST") {
+        return handleTelegramUnlink(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/notifications/telegram/enabled" && request.method === "POST") {
+        return handleTelegramEnabled(request, options, allowed, browserGateway);
+      }
+
+      if (url.pathname === "/api/notifications/telegram/test" && request.method === "POST") {
+        return handleTelegramTest(request, options, allowed, browserGateway);
+      }
+
       return new Response("not found", { status: 404 });
     },
 
@@ -950,6 +1057,7 @@ export function createServer(options: ServerOptions): ServerHandle {
     dispatcher,
     scheduler,
     stop: () => {
+      if (telegramPollTimer !== undefined) clearInterval(telegramPollTimer);
       scheduleLoop.stop();
       server.stop(true);
     },

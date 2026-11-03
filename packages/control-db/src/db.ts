@@ -368,6 +368,59 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS config_profiles_owner
       ON config_profiles (owner_id, updated_at DESC);
   `);
+
+  // N1 notifications (complete scope): Telegram link state, link codes,
+  // per-event delivery dedupe, and the polling offset. All tables are
+  // single-owner; the bot token itself is never stored here.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_settings (
+      id         TEXT PRIMARY KEY,
+      chat_id    TEXT,
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_link_codes (
+      code       TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      used_at    INTEGER,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      event_id     TEXT NOT NULL,
+      channel      TEXT NOT NULL,
+      delivered_at INTEGER NOT NULL,
+      PRIMARY KEY (event_id, channel)
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_poll_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  // Telegram approval actions: one row per inline-button press token.
+  // The token is a random value, never an approval id, so callback data
+  // sent to Telegram reveals nothing about the approval it decides.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS telegram_action_tokens (
+      token      TEXT PRIMARY KEY,
+      approval_id TEXT NOT NULL,
+      decision   TEXT NOT NULL,
+      chat_id    TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at    INTEGER,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS telegram_action_tokens_approval
+      ON telegram_action_tokens (approval_id);
+  `);
 }
 
 /**

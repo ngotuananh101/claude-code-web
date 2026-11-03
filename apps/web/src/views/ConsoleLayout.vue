@@ -10,8 +10,16 @@ import {
   railOpenOnViewportChange,
   saveRailPreference,
 } from "../features/layout/layout-prefs.ts";
+import {
+  createNotificationDedupe,
+  formatBrowserNotification,
+  getBrowserNotificationEnabled,
+  shouldShowSystemNotification,
+} from "../features/notifications/notification-events.ts";
 import { useI18n } from "../lib/i18n/index.ts";
-import { loadSessions } from "../stores/sessions.ts";
+import { router } from "../router/index.ts";
+import { socket } from "../services/socket.ts";
+import { loadSessions, sessions } from "../stores/sessions.ts";
 
 const { t } = useI18n();
 
@@ -67,13 +75,65 @@ function onKeydown(event: KeyboardEvent): void {
 // The rail's session list stays fresh on every console page, not just the
 // journal's — the dashboard and the runners console read the same store.
 let refresh: ReturnType<typeof setInterval> | undefined;
+let unsubscribeNotifications: (() => void) | undefined;
+const notificationDedupe = createNotificationDedupe();
 
 onMounted(() => {
   refresh = setInterval(() => void loadSessions(), 15_000);
   window.addEventListener("keydown", onKeydown);
+  // N1 browser notifications: the server sends one bounded `notification`
+  // frame per notifiable event to every socket of the owner, so this fires
+  // even when the operator is on another session or the tab is hidden.
+  // The journal itself covers the case where the session is open and
+  // visible, so no system notification is shown there.
+  unsubscribeNotifications = socket.onFrame((frame) => {
+    if (frame["type"] !== "notification") return;
+    const eventId = typeof frame["eventId"] === "string" ? frame["eventId"] : "";
+    const sessionId = typeof frame["sessionId"] === "string" ? frame["sessionId"] : "";
+    if (eventId === "" || sessionId === "") return;
+    if (notificationDedupe.seen(eventId)) return;
+    const sessionTitle =
+      typeof frame["sessionTitle"] === "string" ? frame["sessionTitle"] : undefined;
+    const toolName = typeof frame["toolName"] === "string" ? frame["toolName"] : undefined;
+    const inputSummary =
+      typeof frame["inputSummary"] === "string" ? frame["inputSummary"] : undefined;
+    const content = formatBrowserNotification({
+      eventId,
+      type: typeof frame["notificationType"] === "string" ? frame["notificationType"] : "",
+      sessionId,
+      ...(sessionTitle === undefined ? {} : { sessionTitle }),
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(inputSummary === undefined ? {} : { inputSummary }),
+    });
+    if (content === null) return;
+    const permission =
+      typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+    const browserEnabled = getBrowserNotificationEnabled({
+      getItem: (key) => window.localStorage.getItem(key),
+      setItem: (key, value) => window.localStorage.setItem(key, value),
+    });
+    if (
+      !shouldShowSystemNotification({
+        permission,
+        browserEnabled,
+        documentHidden: document.hidden,
+        currentSessionId: sessions.activeId,
+        eventSessionId: sessionId,
+      })
+    ) {
+      return;
+    }
+    const notification = new Notification(content.title, { body: content.body });
+    notification.onclick = () => {
+      window.focus();
+      void router.push(`/sessions/${sessionId}`);
+      notification.close();
+    };
+  });
 });
 onUnmounted(() => {
   clearInterval(refresh);
+  unsubscribeNotifications?.();
   window.removeEventListener("keydown", onKeydown);
 });
 </script>

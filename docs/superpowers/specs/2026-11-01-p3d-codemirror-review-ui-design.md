@@ -1,6 +1,16 @@
 # P3-D — CodeMirror review UI
 
-Status: accepted for implementation 2026-11-01. The owner skipped the
+> **SUPERSEDED 2026-11-03 — DO NOT IMPLEMENT.**
+>
+> CodeMirror review UI was dropped by the owner and replaced by Monaco Editor.
+> Current review UI: Monaco Editor 0.57.0 (`MonacoCodeEditor.vue`,
+> `MonacoDiffEditor.vue`, `apps/web/src/features/monaco/`), see
+> `docs/superpowers/specs/2026-11-01-monaco-review-dialog-design.md` and
+> ARCHITECTURE §16. CodeMirror packages and components have been removed
+> from the codebase (no `codemirror` in `apps/web/package.json`, no
+> `CodeEditor.vue` in `apps/web/src`). This document is kept as history only.
+>
+Status: SUPERSEDED 2026-11-03 (was accepted for implementation 2026-11-01). The owner skipped the
 interview ("cứ làm"); the decisions below are the builder's calls and are
 recorded so the plan can argue from them.
 

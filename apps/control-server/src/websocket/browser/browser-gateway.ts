@@ -279,6 +279,43 @@ export class BrowserGateway {
     }
   }
 
+  /**
+   * Push one notification to every socket of one user (N1).
+   * Unlike `publish`, this is not subscription-scoped: the whole point
+   * is to reach a browser that is on another session, on the dashboard,
+   * or with its tab hidden. The payload is the same bounded summary
+   * Telegram gets (§19.4), never a full event payload. The client
+   * dedupes by eventId, so a redelivered notification is harmless.
+   */
+  notify(
+    userId: string,
+    notification: {
+      eventId: string;
+      type: string;
+      sessionId: string;
+      sessionTitle?: string;
+      toolName?: string;
+      inputSummary?: string;
+    },
+  ): void {
+    const sockets = this.#sockets.get(userId);
+    if (sockets === undefined) return;
+    const frame = {
+      type: "notification",
+      notificationType: notification.type,
+      eventId: notification.eventId,
+      sessionId: notification.sessionId,
+      ...(notification.sessionTitle === undefined
+        ? {}
+        : { sessionTitle: notification.sessionTitle }),
+      ...(notification.toolName === undefined ? {} : { toolName: notification.toolName }),
+      ...(notification.inputSummary === undefined
+        ? {}
+        : { inputSummary: notification.inputSummary }),
+    };
+    for (const socket of sockets) this.#send(socket, frame);
+  }
+
   handleClose(socket: BrowserSocket): void {
     if (!socket.data.authenticated) return;
     const sockets = this.#sockets.get(socket.data.userId);
