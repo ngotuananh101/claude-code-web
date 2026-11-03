@@ -200,7 +200,7 @@ export async function handleUpdateRunnerName(
  */
 export async function handleGetRunnerCapabilities(
   request: Request,
-  options: ServerOptions,
+  _options: ServerOptions,
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
   runnerGateway: RunnerGateway,
