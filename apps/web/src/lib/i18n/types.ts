@@ -485,4 +485,20 @@ export type TranslationDictionary = {
     expiresIn: string;
     refreshExpiresIn: string;
   };
+  subagentTree: {
+    title: string;
+    inspect: string;
+    status: string;
+    taskId: string;
+    parent: string;
+    started: string;
+    updated: string;
+    elapsed: string;
+    lastTool: string;
+    usage: string;
+    totalTokens: string;
+    toolUses: string;
+    duration: string;
+    noData: string;
+  };
 };

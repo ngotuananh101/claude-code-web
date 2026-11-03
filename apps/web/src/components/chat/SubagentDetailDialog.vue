@@ -1,0 +1,114 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
+
+const props = defineProps<{
+  open: boolean;
+  task: BackgroundTask | null;
+}>();
+
+const emit = defineEmits<(e: "update:open", value: boolean) => void>();
+
+function elapsedMs(task: BackgroundTask): number {
+  const started = Date.parse(task.startedAt);
+  const ended = Date.parse(task.updatedAt);
+  if (Number.isNaN(started)) return 0;
+  const end = Number.isNaN(ended) ? Date.now() : ended;
+  return Math.max(0, end - started);
+}
+
+const elapsedLabel = computed(() => {
+  if (props.task === null) return "";
+  return formatTaskElapsed(elapsedMs(props.task));
+});
+
+function statusBadgeClass(status: BackgroundTask["status"]): string {
+  switch (status) {
+    case "running":
+      return "bg-primary/10 text-primary";
+    case "completed":
+      return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+    case "failed":
+      return "bg-destructive/10 text-destructive";
+    case "stopped":
+      return "bg-muted text-muted-foreground";
+  }
+}
+</script>
+
+<template>
+  <Dialog :open="props.open" @update:open="(v: boolean) => emit('update:open', v)">
+    <DialogContent class="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle class="text-base">
+          {{ props.task?.description || props.task?.taskId || "Subagent" }}
+        </DialogTitle>
+        <DialogDescription class="text-xs text-muted-foreground">
+          {{ props.task?.taskId }}
+        </DialogDescription>
+      </DialogHeader>
+
+      <div v-if="props.task" class="space-y-3 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-muted-foreground">Status</span>
+          <span
+            class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+            :class="statusBadgeClass(props.task.status)"
+          >
+            {{ props.task.status }}
+          </span>
+          <span
+            v-if="props.task.subagentType"
+            class="inline-flex items-center rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
+          >
+            {{ props.task.subagentType }}
+          </span>
+          <span
+            v-if="props.task.workflowName"
+            class="inline-flex items-center rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground"
+          >
+            {{ props.task.workflowName }}
+          </span>
+        </div>
+
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          <dt class="text-muted-foreground">Task ID</dt>
+          <dd class="font-mono truncate">{{ props.task.taskId }}</dd>
+          <dt v-if="props.task.parentTaskId" class="text-muted-foreground">Parent</dt>
+          <dd v-if="props.task.parentTaskId" class="font-mono truncate">{{ props.task.parentTaskId }}</dd>
+          <dt class="text-muted-foreground">Started</dt>
+          <dd class="font-mono truncate">{{ props.task.startedAt }}</dd>
+          <dt class="text-muted-foreground">Updated</dt>
+          <dd class="font-mono truncate">{{ props.task.updatedAt }}</dd>
+          <dt class="text-muted-foreground">Elapsed</dt>
+          <dd class="font-mono">{{ elapsedLabel }}</dd>
+          <dt v-if="props.task.lastToolName" class="text-muted-foreground">Last tool</dt>
+          <dd v-if="props.task.lastToolName" class="font-mono truncate">{{ props.task.lastToolName }}</dd>
+        </dl>
+
+        <div v-if="props.task.usage" class="rounded-md border border-border/60 bg-muted/40 p-2.5">
+          <div class="mb-1 text-xs font-semibold text-foreground/70">Usage</div>
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <dt class="text-muted-foreground">Total tokens</dt>
+            <dd class="font-mono">{{ props.task.usage.totalTokens }}</dd>
+            <dt class="text-muted-foreground">Tool uses</dt>
+            <dd class="font-mono">{{ props.task.usage.toolUses }}</dd>
+            <dt class="text-muted-foreground">Duration</dt>
+            <dd class="font-mono">{{ formatTaskElapsed(props.task.usage.durationMs) }}</dd>
+          </dl>
+        </div>
+
+        <p v-if="props.task.summary" class="text-xs text-muted-foreground">
+          {{ props.task.summary }}
+        </p>
+      </div>
+    </DialogContent>
+  </Dialog>
+</template>

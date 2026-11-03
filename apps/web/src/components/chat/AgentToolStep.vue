@@ -15,6 +15,7 @@ import {
 } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
+import SubagentDetailDialog from "@/components/chat/SubagentDetailDialog.vue";
 import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
 import type { ToolStep } from "@/features/journal/chat-turns";
 
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 /** Collapsed by default. */
 const isOpen = ref(false);
+const inspectOpen = ref(false);
 
 /** Pick the icon component for the tool name. */
 function toolIcon(toolName: string): unknown {
@@ -139,6 +141,14 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           <span v-if="task.lastToolName" class="max-w-24 truncate font-mono">
             {{ task.lastToolName }}
           </span>
+          <button
+            type="button"
+            class="ml-1 inline-flex items-center rounded border border-border/40 px-1 text-[9px] text-muted-foreground hover:text-foreground"
+            title="Inspect"
+            @click.stop="inspectOpen = true"
+          >
+            inspect
+          </button>
         </span>
 
         <!-- Status badge. -->
@@ -238,4 +248,6 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       </div>
     </transition>
   </div>
+
+  <SubagentDetailDialog v-model:open="inspectOpen" :task="task ?? null" />
 </template>

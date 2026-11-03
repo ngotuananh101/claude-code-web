@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ChevronDown } from "@lucide/vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import SubagentDetailDialog from "@/components/chat/SubagentDetailDialog.vue";
+import SubagentProgressTree from "@/components/chat/SubagentProgressTree.vue";
 import {
   type BackgroundTask,
   type BackgroundTaskStatus,
@@ -32,6 +34,13 @@ onBeforeUnmount(() => {
 });
 
 const expanded = ref(false);
+const selectedTask = ref<BackgroundTask | null>(null);
+const detailOpen = ref(false);
+
+function onSelectTask(task: BackgroundTask): void {
+  selectedTask.value = task;
+  detailOpen.value = true;
+}
 
 function elapsedFor(task: BackgroundTask): string {
   const started = Date.parse(task.startedAt);
@@ -98,41 +107,10 @@ const oldestElapsed = computed(() => {
       />
     </button>
 
-    <ul v-if="expanded" class="mt-2 space-y-1.5 border-t border-primary/20 pt-2">
-      <li v-for="task in tasks" :key="task.taskId" class="min-w-0">
-        <div class="flex min-w-0 items-baseline gap-2">
-          <i
-            class="size-[7px] shrink-0 rounded-full"
-            :class="dotClass(task.status)"
-            aria-hidden="true"
-          />
-          <span class="min-w-0 flex-1 truncate" :title="labelFor(task)">{{ labelFor(task) }}</span>
-          <span
-            v-if="task.subagentType"
-            class="shrink-0 rounded-sm border border-border px-1 font-mono text-[10px] text-muted-foreground"
-          >
-            {{ task.subagentType }}
-          </span>
-          <span v-if="statusLabel(task.status)" class="shrink-0 text-[11px] text-muted-foreground">
-            {{ statusLabel(task.status) }}
-          </span>
-          <span v-if="task.lastToolName" class="shrink-0 font-mono text-[11px] text-muted-foreground">
-            {{ task.lastToolName }}
-          </span>
-          <span class="shrink-0 font-mono text-[11px] text-muted-foreground">
-            {{ elapsedFor(task) }}
-          </span>
-        </div>
-        <p
-          v-if="task.summary || task.usage"
-          class="mt-0.5 truncate pl-4 text-[12px] text-muted-foreground"
-        >
-          {{ task.summary }}
-          <span v-if="task.usage">
-            · {{ task.usage.totalTokens }} tokens · {{ task.usage.toolUses }} tool
-          </span>
-        </p>
-      </li>
-    </ul>
+    <div v-if="expanded" class="mt-2 border-t border-primary/20 pt-2">
+      <SubagentProgressTree :tasks="tasks" @select-task="onSelectTask" />
+    </div>
+
+    <SubagentDetailDialog v-model:open="detailOpen" :task="selectedTask" />
   </div>
 </template>
