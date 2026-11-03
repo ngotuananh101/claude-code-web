@@ -9,6 +9,16 @@
 # origin is what keeps the cc_session cookie and the Origin allowlist
 # unchanged: the browser talks to Caddy for everything.
 
+# The generated theme (apps/web/src/styles/index.css) starts with a Google
+# Fonts `@import`, so the CSP must allow that stylesheet and the font files it
+# points at — otherwise the browser blocks both and the SPA falls back to a
+# system font. The same font is also bundled locally via
+# @fontsource-variable/figtree, so an offline build still renders correctly.
+# The snippet is defined once so the two SPA routes cannot drift apart.
+(csp) {
+	header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' wss: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+}
+
 {$CC_WEB_SITE_ADDRESS::80} {
 	encode zstd gzip
 
@@ -36,12 +46,12 @@
 		# CSP only on the SPA responses: API and attachment responses keep
 		# their own headers (attachments carry a sandbox CSP from the
 		# control server, which a site-level CSP would overwrite).
-		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		import csp
 		root * /srv
 		file_server
 	}
 	handle {
-		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		import csp
 		root * /srv
 		try_files {path} /index.html
 		file_server
