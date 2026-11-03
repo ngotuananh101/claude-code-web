@@ -485,6 +485,23 @@ describe("runner registry routes", () => {
     expect(response.status).toBe(404);
   });
 
+  test("GET /api/runners/:id/capabilities answers 404 for another user's runner", async () => {
+    const { url, db, cookie } = await start();
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other", "hash", 1, Date.now());
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-user-2",
+      "user-2",
+      Date.now(),
+    );
+
+    const response = await fetch(`${url}/api/runners/runner-user-2/capabilities`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(404);
+  });
+
   test("GET /api/runners/:id/capabilities is authenticated like every browser route", async () => {
     const { url, cookie } = await start();
     const minted = (await (

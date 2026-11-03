@@ -69,10 +69,21 @@ export function detectSlashQuery(
 export function applyCommandToPrompt(
   prompt: string,
   command: SlashCommandItem,
+  cursor?: number,
 ): { newPrompt: string; cursorPosition: number } {
   const commandText = `/${command.name}`;
-  const newPrompt = `${commandText} ${prompt}`.trim();
-  const cursorPosition = commandText.length + 1;
+  if (cursor === undefined) {
+    const newPrompt = `${commandText} ${prompt}`.trim();
+    const cursorPosition = commandText.length + 1;
+    return { newPrompt, cursorPosition };
+  }
+
+  let start = cursor;
+  while (start > 0 && !/\s/.test(prompt[start - 1] ?? "")) start--;
+  const before = prompt.slice(0, start);
+  const after = prompt.slice(cursor);
+  const newPrompt = `${before}${commandText} ${after}`;
+  const cursorPosition = before.length + commandText.length + 1;
 
   return { newPrompt, cursorPosition };
 }

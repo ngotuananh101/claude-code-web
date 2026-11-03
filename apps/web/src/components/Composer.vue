@@ -50,7 +50,11 @@ import {
   normalizeEffort,
   pickerModels,
 } from "@/features/composer/model-picker.ts";
-import { getAvailableCommands, type SlashCommandItem } from "@/features/composer/slash-commands.ts";
+import {
+  applyCommandToPrompt,
+  getAvailableCommands,
+  type SlashCommandItem,
+} from "@/features/composer/slash-commands.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { uploadSessionAttachments } from "../services/attachments-api";
@@ -498,17 +502,16 @@ function handleTextareaKeyDown(event: KeyboardEvent): void {
 async function applySlashCommand(command: SlashCommandItem): Promise<void> {
   const textarea = textareaEl.value;
   const cursor = textarea?.selectionStart ?? prompt.value.length;
-  let start = cursor;
-  while (start > 0 && !/\s/.test(prompt.value[start - 1] ?? "")) start--;
-  const before = prompt.value.slice(0, start);
-  const after = prompt.value.slice(cursor);
-  prompt.value = `${before}/${command.name} ${after}`;
+  const result = applyCommandToPrompt(prompt.value, command, cursor);
+  prompt.value = result.newPrompt;
   slashMenuVisible.value = false;
   await nextTick();
   if (textarea) {
-    const pos = before.length + command.name.length + 2;
     textarea.focus();
-    textarea.selectionStart = textarea.selectionEnd = Math.min(pos, prompt.value.length);
+    textarea.selectionStart = textarea.selectionEnd = Math.min(
+      result.cursorPosition,
+      prompt.value.length,
+    );
   }
 }
 

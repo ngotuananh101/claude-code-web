@@ -206,7 +206,7 @@ export async function handleUpdateRunnerName(
  */
 export async function handleGetRunnerCapabilities(
   request: Request,
-  _options: ServerOptions,
+  options: ServerOptions,
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
   runnerGateway: RunnerGateway,
@@ -223,6 +223,11 @@ export async function handleGetRunnerCapabilities(
   });
   if (!authorized.ok) {
     return new Response("unauthorized", { status: 401 });
+  }
+
+  const owned = listRunners(options.db, authorized.userId).some((r) => r.runnerId === runnerId);
+  if (!owned) {
+    return new Response("not found", { status: 404 });
   }
 
   const capabilities = runnerGateway.runnerCapabilitiesOf(runnerId);

@@ -89,5 +89,17 @@ describe("slash-commands", () => {
       expect(result.newPrompt).toBe("/clear Hello");
       expect(result.cursorPosition).toBe(7);
     });
+
+    it("replaces slash token at cursor position", () => {
+      const command: SlashCommandItem = {
+        name: "clear",
+        displayName: "Clear",
+        description: "Clear the conversation",
+        category: "builtin",
+      };
+      const result = applyCommandToPrompt("Please /cl", command, 10);
+      expect(result.newPrompt).toBe("Please /clear ");
+      expect(result.cursorPosition).toBe(14);
+    });
   });
 });
