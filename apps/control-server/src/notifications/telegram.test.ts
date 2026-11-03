@@ -103,6 +103,38 @@ describe("formatNotificationMessage", () => {
       expect(message).toContain(word);
     }
   });
+
+  test("formatNotificationMessage formats user_question with header, question and options cleanly", () => {
+    const message = formatNotificationMessage(
+      {
+        eventId: "evt-q",
+        type: "approval.requested",
+        sessionId: "session-1",
+        sessionTitle: "Deploy Flow",
+        approvalKind: "user_question",
+        questions: [
+          {
+            question: "Which deployment target should we use?",
+            header: "Deploy target",
+            options: [
+              { label: "Staging", description: "Deploy to staging environment for testing" },
+              {
+                label: "Production",
+                description: "Deploy directly to production (requires approval)",
+              },
+            ],
+          },
+        ],
+      },
+      "https://cc.example.test",
+    );
+    expect(message).not.toBeNull();
+    expect(message!).toContain("Deploy target: Which deployment target should we use?");
+    expect(message!).toContain("1. Staging — Deploy to staging environment for testing");
+    expect(message!).toContain("2. Production — Deploy directly to production (requires approval)");
+    expect(message!).not.toContain("[{");
+    expect(message!).toContain("https://cc.example.test/sessions/session-1");
+  });
 });
 
 describe("dispatchTelegramNotification", () => {
@@ -204,7 +236,7 @@ describe("polling", () => {
 });
 
 describe("telegram approval actions", () => {
-  test("tool_permission messages carry Duyệt/Từ chối buttons; user_question does not", async () => {
+  test("tool_permission messages carry Duyệt/Từ chối buttons", async () => {
     const db = freshDb();
     const sender = new FakeSender();
     link(db);
@@ -228,7 +260,12 @@ describe("telegram approval actions", () => {
     expect(markup.inline_keyboard[0]!.map((b) => b.text)).toEqual(["✅ Duyệt", "❌ Từ chối"]);
     expect(markup.inline_keyboard[0]!.every((b) => b.callback_data.startsWith("act:"))).toBe(true);
     expect(actionTokenCount(db)).toBe(2);
+  });
 
+  test("user_question messages carry buttons for each option", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db);
     const question = await dispatchTelegramNotification(
       db,
       sender,
@@ -239,12 +276,241 @@ describe("telegram approval actions", () => {
         approvalId: "appr-2",
         approvalKind: "user_question",
         approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          {
+            question: "Choose target?",
+            options: [
+              { label: "Option A", description: "First choice" },
+              { label: "Option B", description: "Second choice" },
+            ],
+          },
+        ],
       },
       undefined,
     );
     expect(question).toBe("sent");
-    expect(sender.sent[1]!.replyMarkup).toBeUndefined();
-    expect(actionTokenCount(db)).toBe(2);
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    // 2 options + 1 fallback Deny button = 3 rows
+    expect(markup.inline_keyboard).toHaveLength(3);
+    expect(markup.inline_keyboard[0]![0]!.text).toBe("Option A");
+    expect(markup.inline_keyboard[1]![0]!.text).toBe("Option B");
+    expect(markup.inline_keyboard[2]![0]!.text).toBe("❌ Từ chối");
+    expect(actionTokenCount(db)).toBe(3);
+  });
+
+  test("user_question that already has a deny/cancel option does not duplicate the Deny button", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db);
+    const question = await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-q-with-deny",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-3",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          {
+            question: "Proceed with git push?",
+            options: [
+              { label: "Duyệt (Phê duyệt) (Recommended)" },
+              { label: "Tạo Pull Request" },
+              { label: "Từ chối / Hủy" },
+            ],
+          },
+        ],
+      },
+      undefined,
+    );
+    expect(question).toBe("sent");
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(markup.inline_keyboard).toHaveLength(3);
+    expect(markup.inline_keyboard[0]![0]!.text).toBe("Duyệt (Phê duyệt) (Recommended)");
+    expect(markup.inline_keyboard[1]![0]!.text).toBe("Tạo Pull Request");
+    expect(markup.inline_keyboard[2]![0]!.text).toBe("Từ chối / Hủy");
+    expect(actionTokenCount(db)).toBe(3);
+  });
+
+  test("clicking a user_question option button submits answers to decide handler", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-q-answer",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-question",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          {
+            question: "Confirm deployment?",
+            options: [{ label: "Yes, deploy" }, { label: "Cancel" }],
+          },
+        ],
+      },
+      undefined,
+    );
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    const yesButton = markup.inline_keyboard[0]![0]!;
+    expect(yesButton.text).toBe("Yes, deploy");
+
+    const calls: Array<{ approvalId: string; decision: string; answers?: unknown }> = [];
+    const decide = async (
+      approvalId: string,
+      decision: string,
+      answers?: Record<string, unknown>,
+    ) => {
+      calls.push({ approvalId, decision, answers });
+      return { ok: true as const };
+    };
+
+    const callback = {
+      update_id: 1,
+      callback_query: {
+        id: "cb-q-1",
+        data: yesButton.callback_data,
+        message: { chat: { id: 12345 }, message_id: 10, text: "⏳ Cần phê duyệt" },
+      },
+    };
+    await processTelegramUpdates(db, sender, [callback], Date.now(), decide);
+    expect(calls).toEqual([
+      {
+        approvalId: "appr-question",
+        decision: "allow",
+        answers: { "Confirm deployment?": "Yes, deploy" },
+      },
+    ]);
+    expect(sender.answers[0]!.text).toContain("Yes, deploy");
+    expect(sender.edits[0]!.text).toContain("✅ Đã chọn: Yes, deploy");
+  });
+
+  test("clicking a deny-style option button marks edit message with ❌ icon", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-q-deny-opt",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-deny-opt",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [
+          {
+            question: "Push branch?",
+            options: [{ label: "Duyệt" }, { label: "Từ chối / Hủy" }],
+          },
+        ],
+      },
+      undefined,
+    );
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    const cancelBtn = markup.inline_keyboard[1]![0]!;
+    expect(cancelBtn.text).toBe("Từ chối / Hủy");
+
+    const calls: Array<{ approvalId: string; decision: string; answers?: unknown }> = [];
+    const decide = async (
+      approvalId: string,
+      decision: string,
+      answers?: Record<string, unknown>,
+    ) => {
+      calls.push({ approvalId, decision, answers });
+      return { ok: true as const };
+    };
+
+    const callback = {
+      update_id: 1,
+      callback_query: {
+        id: "cb-q-cancel",
+        data: cancelBtn.callback_data,
+        message: { chat: { id: 12345 }, message_id: 11, text: "⏳ Cần phê duyệt" },
+      },
+    };
+    await processTelegramUpdates(db, sender, [callback], Date.now(), decide);
+    expect(calls).toEqual([
+      {
+        approvalId: "appr-deny-opt",
+        decision: "allow",
+        answers: { "Push branch?": "Từ chối / Hủy" },
+      },
+    ]);
+    expect(sender.answers[0]!.text).toContain("Từ chối / Hủy");
+    expect(sender.edits[0]!.text).toContain("❌ Đã chọn: Từ chối / Hủy");
+  });
+
+  test("user_question without options renders fallback deny button", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-q-freeform",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-freeform",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        questions: [{ question: "Please type your API key:" }],
+      },
+      undefined,
+    );
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(markup.inline_keyboard).toHaveLength(1);
+    expect(markup.inline_keyboard[0]![0]!.text).toBe("❌ Từ chối");
+  });
+
+  test("user_question parsed from inputSummary string generates option buttons", async () => {
+    const db = freshDb();
+    const sender = new FakeSender();
+    link(db, "12345");
+    await dispatchTelegramNotification(
+      db,
+      sender,
+      {
+        eventId: "evt-q-serialized",
+        type: "approval.requested",
+        sessionId: "session-1",
+        approvalId: "appr-serialized",
+        approvalKind: "user_question",
+        approvalExpiresAt: Date.now() + 60_000,
+        inputSummary: JSON.stringify([
+          {
+            question: "Choose color:",
+            options: [{ label: "Blue" }, { label: "Red" }],
+          },
+        ]),
+      },
+      undefined,
+    );
+    const markup = sender.sent[0]!.replyMarkup as {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    };
+    expect(markup.inline_keyboard).toHaveLength(3);
+    expect(markup.inline_keyboard[0]![0]!.text).toBe("Blue");
+    expect(markup.inline_keyboard[1]![0]!.text).toBe("Red");
+    expect(markup.inline_keyboard[2]![0]!.text).toBe("❌ Từ chối");
   });
 
   test("a valid callback decides once; a second press is refused without deciding again", async () => {

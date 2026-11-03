@@ -172,8 +172,8 @@ export async function handleTelegramPoll(
 ): Promise<void> {
   const sender = options.telegram?.sender;
   if (sender === undefined) return;
-  await pollTelegramOnce(options.db, sender, async (approvalId, decision) => {
-    const outcome = await decideApproval(options.db, dispatcher, approvalId, decision);
+  await pollTelegramOnce(options.db, sender, async (approvalId, decision, answers) => {
+    const outcome = await decideApproval(options.db, dispatcher, approvalId, decision, answers);
     return outcome.ok ? { ok: true } : { ok: false, reason: outcome.reason };
   });
 }

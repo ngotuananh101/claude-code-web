@@ -408,15 +408,19 @@ export function migrate(db: Database): void {
   // sent to Telegram reveals nothing about the approval it decides.
   db.exec(`
     CREATE TABLE IF NOT EXISTS telegram_action_tokens (
-      token      TEXT PRIMARY KEY,
+      token       TEXT PRIMARY KEY,
       approval_id TEXT NOT NULL,
-      decision   TEXT NOT NULL,
-      chat_id    TEXT NOT NULL,
-      expires_at INTEGER NOT NULL,
-      used_at    INTEGER,
-      created_at INTEGER NOT NULL
+      decision    TEXT NOT NULL,
+      chat_id     TEXT NOT NULL,
+      expires_at  INTEGER NOT NULL,
+      answers     TEXT,
+      label       TEXT,
+      used_at     INTEGER,
+      created_at  INTEGER NOT NULL
     );
   `);
+  addColumnIfMissing(db, "telegram_action_tokens", "answers", "TEXT");
+  addColumnIfMissing(db, "telegram_action_tokens", "label", "TEXT");
   db.exec(`
     CREATE INDEX IF NOT EXISTS telegram_action_tokens_approval
       ON telegram_action_tokens (approval_id);

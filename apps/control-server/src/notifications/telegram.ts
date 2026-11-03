@@ -54,6 +54,7 @@ export type NotificationInput = {
   sessionTitle?: string;
   toolName?: string;
   inputSummary?: string;
+  questions?: unknown[];
   /** Present only for approval.requested, from the event payload. */
   approvalId?: string;
   approvalKind?: string;
@@ -65,6 +66,49 @@ export type TelegramSettings = {
   enabled: boolean;
   chatId: string | null;
 };
+
+export type TelegramQuestionOption = {
+  label: string;
+  description?: string | undefined;
+};
+
+export type TelegramQuestion = {
+  question: string;
+  header?: string | undefined;
+  options?: TelegramQuestionOption[] | undefined;
+};
+
+export function parseTelegramQuestions(input: NotificationInput): TelegramQuestion[] {
+  let source: unknown = input.questions;
+  if (
+    !Array.isArray(source) &&
+    typeof input.inputSummary === "string" &&
+    input.inputSummary.trim().startsWith("[")
+  ) {
+    try {
+      source = JSON.parse(input.inputSummary);
+    } catch {
+      source = undefined;
+    }
+  }
+  if (!Array.isArray(source)) return [];
+  return source
+    .filter((q): q is Record<string, unknown> => typeof q === "object" && q !== null)
+    .map((q) => ({
+      question: typeof q["question"] === "string" ? q["question"] : "",
+      header: typeof q["header"] === "string" ? q["header"] : undefined,
+      options: Array.isArray(q["options"])
+        ? q["options"]
+            .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)
+            .map((o) => ({
+              label: typeof o["label"] === "string" ? o["label"] : "",
+              description: typeof o["description"] === "string" ? o["description"] : undefined,
+            }))
+            .filter((o) => o.label !== "")
+        : undefined,
+    }))
+    .filter((q) => q.question !== "");
+}
 
 function cap(value: unknown, limit: number): string {
   if (typeof value !== "string") return "";
@@ -92,13 +136,32 @@ export function formatNotificationMessage(
   const summary = cap(input.inputSummary, SUMMARY_LIMIT);
   const tool = cap(input.toolName, TOOL_LIMIT);
   switch (input.type) {
-    case "approval.requested":
+    case "approval.requested": {
+      const questions = parseTelegramQuestions(input);
+      let details = "";
+      if (questions.length > 0) {
+        for (const q of questions) {
+          const header = q.header ? `${q.header}: ` : "";
+          details += `\n\n${header}${q.question}`;
+          if (q.options && q.options.length > 0) {
+            for (let i = 0; i < q.options.length; i++) {
+              const opt = q.options[i]!;
+              const desc = opt.description ? ` — ${opt.description}` : "";
+              details += `\n${i + 1}. ${opt.label}${desc}`;
+            }
+          }
+        }
+        details = details.slice(0, 1500).trimEnd();
+      } else if (summary !== "") {
+        details = `\n${summary}`;
+      }
       return (
         `⏳ Cần phê duyệt\nPhiên: ${session}` +
         (tool !== "" ? `\nCông cụ: ${tool}` : "") +
-        (summary !== "" ? `\n${summary}` : "") +
+        details +
         linkLine(input, origin)
       );
+    }
     case "approval.expired":
       return `⌛ Phê duyệt đã hết hạn\nPhiên: ${session}${linkLine(input, origin)}`;
     case "run.finished":
@@ -174,7 +237,39 @@ export type TelegramActionDecision = "allow" | "deny";
 export type TelegramDecisionHandler = (
   approvalId: string,
   decision: TelegramActionDecision,
+  answers?: Record<string, unknown>,
 ) => Promise<{ ok: true } | { ok: false; reason: "unknown" | "not_pending" | "expired" }>;
+
+/** Create a custom action token with arbitrary decision, answers and label. */
+export function createCustomActionToken(
+  db: Database,
+  approvalId: string,
+  chatId: string,
+  expiresAt: number,
+  options: {
+    decision: TelegramActionDecision;
+    answers?: Record<string, unknown>;
+    label?: string;
+    now?: number;
+  },
+): string {
+  const token = randomBytes(16).toString("hex");
+  const answersJson = options.answers !== undefined ? JSON.stringify(options.answers) : null;
+  const now = options.now ?? Date.now();
+  db.query(
+    "INSERT INTO telegram_action_tokens (token, approval_id, decision, chat_id, expires_at, answers, label, used_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+  ).run(
+    token,
+    approvalId,
+    options.decision,
+    chatId,
+    expiresAt,
+    answersJson,
+    options.label ?? null,
+    now,
+  );
+  return token;
+}
 
 /** Create the two action tokens for one tool_permission approval. */
 export function createActionTokens(
@@ -184,18 +279,27 @@ export function createActionTokens(
   expiresAt: number,
   now: number = Date.now(),
 ): { approveToken: string; rejectToken: string } {
-  const approveToken = randomBytes(16).toString("hex");
-  const rejectToken = randomBytes(16).toString("hex");
-  const stmt = db.query(
-    "INSERT INTO telegram_action_tokens (token, approval_id, decision, chat_id, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
-  );
-  stmt.run(approveToken, approvalId, "allow", chatId, expiresAt, now);
-  stmt.run(rejectToken, approvalId, "deny", chatId, expiresAt, now);
+  const approveToken = createCustomActionToken(db, approvalId, chatId, expiresAt, {
+    decision: "allow",
+    label: "Duyệt",
+    now,
+  });
+  const rejectToken = createCustomActionToken(db, approvalId, chatId, expiresAt, {
+    decision: "deny",
+    label: "Từ chối",
+    now,
+  });
   return { approveToken, rejectToken };
 }
 
 export type ActionTokenClaim =
-  | { ok: true; approvalId: string; decision: TelegramActionDecision }
+  | {
+      ok: true;
+      approvalId: string;
+      decision: TelegramActionDecision;
+      answers?: Record<string, unknown>;
+      label?: string;
+    }
   | { ok: false; reason: "unknown" | "wrong_chat" | "expired" | "used" };
 
 /**
@@ -212,13 +316,15 @@ export function claimActionToken(
 ): ActionTokenClaim {
   const row = db
     .query(
-      "SELECT approval_id, decision, chat_id, expires_at, used_at FROM telegram_action_tokens WHERE token = ?",
+      "SELECT approval_id, decision, chat_id, expires_at, answers, label, used_at FROM telegram_action_tokens WHERE token = ?",
     )
     .get(token) as {
     approval_id: string;
     decision: string;
     chat_id: string;
     expires_at: number;
+    answers: string | null;
+    label: string | null;
     used_at: number | null;
   } | null;
   if (row === null) return { ok: false, reason: "unknown" };
@@ -229,10 +335,23 @@ export function claimActionToken(
     .query("UPDATE telegram_action_tokens SET used_at = ? WHERE token = ? AND used_at IS NULL")
     .run(now, token);
   if (claimed.changes === 0) return { ok: false, reason: "used" };
+  let parsedAnswers: Record<string, unknown> | undefined;
+  if (row.answers !== null && row.answers !== "") {
+    try {
+      const parsed = JSON.parse(row.answers);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        parsedAnswers = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
   return {
     ok: true,
     approvalId: row.approval_id,
     decision: row.decision === "deny" ? "deny" : "allow",
+    ...(parsedAnswers === undefined ? {} : { answers: parsedAnswers }),
+    ...(row.label !== null && row.label !== undefined ? { label: row.label } : {}),
   };
 }
 
@@ -387,29 +506,87 @@ export async function dispatchTelegramNotification(
     )
     .run(input.eventId, Date.now());
   if (claimed.changes === 0) return "skipped";
-  // Buttons only for tool_permission approvals: a user_question needs
-  // free-form answers, and every other event type has nothing to decide.
+  // Buttons for tool_permission approvals AND user_question approvals
   const withButtons =
     input.type === "approval.requested" &&
-    input.approvalKind === "tool_permission" &&
     input.approvalId !== undefined &&
-    typeof input.approvalExpiresAt === "number";
+    typeof input.approvalExpiresAt === "number" &&
+    (input.approvalKind === "tool_permission" || input.approvalKind === "user_question");
   let replyMarkup: InlineKeyboardMarkup | undefined;
   if (withButtons) {
-    const tokens = createActionTokens(
-      db,
-      input.approvalId as string,
-      settings.chatId,
-      input.approvalExpiresAt as number,
-    );
-    replyMarkup = {
-      inline_keyboard: [
-        [
-          { text: "✅ Duyệt", callback_data: `act:${tokens.approveToken}` },
-          { text: "❌ Từ chối", callback_data: `act:${tokens.rejectToken}` },
+    if (input.approvalKind === "tool_permission") {
+      const tokens = createActionTokens(
+        db,
+        input.approvalId as string,
+        settings.chatId,
+        input.approvalExpiresAt as number,
+      );
+      replyMarkup = {
+        inline_keyboard: [
+          [
+            { text: "✅ Duyệt", callback_data: `act:${tokens.approveToken}` },
+            { text: "❌ Từ chối", callback_data: `act:${tokens.rejectToken}` },
+          ],
         ],
-      ],
-    };
+      };
+    } else if (input.approvalKind === "user_question") {
+      const questions = parseTelegramQuestions(input);
+      const firstQuestion = questions.length === 1 ? questions[0] : undefined;
+      const questionOptions = firstQuestion?.options;
+      if (
+        firstQuestion !== undefined &&
+        questionOptions !== undefined &&
+        questionOptions.length > 0
+      ) {
+        const rows: InlineKeyboardButton[][] = [];
+        const hasDenyOption = questionOptions.some((opt) =>
+          /^(từ chối|hủy|deny|cancel|reject)/i.test(opt.label.trim()),
+        );
+        for (const opt of questionOptions.slice(0, 8)) {
+          const token = createCustomActionToken(
+            db,
+            input.approvalId as string,
+            settings.chatId,
+            input.approvalExpiresAt as number,
+            {
+              decision: "allow",
+              answers: { [firstQuestion.question]: opt.label },
+              label: opt.label,
+            },
+          );
+          const text = opt.label.length > 50 ? `${opt.label.slice(0, 47)}…` : opt.label;
+          rows.push([{ text, callback_data: `act:${token}` }]);
+        }
+        if (!hasDenyOption) {
+          const denyToken = createCustomActionToken(
+            db,
+            input.approvalId as string,
+            settings.chatId,
+            input.approvalExpiresAt as number,
+            {
+              decision: "deny",
+              label: "Từ chối",
+            },
+          );
+          rows.push([{ text: "❌ Từ chối", callback_data: `act:${denyToken}` }]);
+        }
+        replyMarkup = { inline_keyboard: rows };
+      } else {
+        const denyToken = createCustomActionToken(
+          db,
+          input.approvalId as string,
+          settings.chatId,
+          input.approvalExpiresAt as number,
+          {
+            decision: "deny",
+            label: "Từ chối",
+          },
+        );
+        replyMarkup = {
+          inline_keyboard: [[{ text: "❌ Từ chối", callback_data: `act:${denyToken}` }]],
+        };
+      }
+    }
   }
   const fail = () => {
     if (withButtons && input.approvalId !== undefined) {
@@ -469,11 +646,17 @@ async function handleCallbackQuery(
     await sender.answerCallbackQuery(callback.id, answer);
     return;
   }
-  const outcome = await decide(claim.approvalId, claim.decision);
+  const outcome = await decide(claim.approvalId, claim.decision, claim.answers);
+  const label = claim.label ?? (claim.decision === "allow" ? "Duyệt" : "Từ chối");
+  const isDeny =
+    claim.decision === "deny" || /^(từ chối|hủy|deny|cancel|reject)/i.test(label.trim());
+  const icon = isDeny ? "❌" : "✅";
   const answer = outcome.ok
-    ? claim.decision === "allow"
-      ? "Đã duyệt."
-      : "Đã từ chối."
+    ? claim.label !== undefined && claim.label !== "Duyệt" && claim.label !== "Từ chối"
+      ? `Đã chọn: ${claim.label}`
+      : claim.decision === "allow"
+        ? "Đã duyệt."
+        : "Đã từ chối."
     : outcome.reason === "expired"
       ? "Phê duyệt đã hết hạn."
       : "Phê duyệt này đã được quyết định rồi.";
@@ -481,10 +664,14 @@ async function handleCallbackQuery(
   const message = callback.message;
   if (message !== undefined && typeof message.message_id === "number") {
     const original = typeof message.text === "string" ? message.text : "";
+    const decisionText =
+      claim.label !== undefined && claim.label !== "Duyệt" && claim.label !== "Từ chối"
+        ? `${icon} Đã chọn: ${claim.label}`
+        : claim.decision === "allow"
+          ? "✅ Đã duyệt"
+          : "❌ Đã từ chối";
     const suffix = outcome.ok
-      ? claim.decision === "allow"
-        ? "\n\n✅ Đã duyệt"
-        : "\n\n❌ Đã từ chối"
+      ? `\n\n${decisionText}`
       : "\n\n⌛ Phê duyệt này không còn quyết định được nữa";
     await sender.editMessageText(chatId, message.message_id, original + suffix);
   }

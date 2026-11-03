@@ -124,6 +124,19 @@ describe("scheduled-task indexes (§11.5)", () => {
   });
 });
 
+describe("telegram_action_tokens migration", () => {
+  test("telegram_action_tokens carries answers and label columns", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+
+    const columns = (
+      db.query("PRAGMA table_info(telegram_action_tokens)").all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    expect(columns).toContain("answers");
+    expect(columns).toContain("label");
+  });
+});
+
 describe("workspaces.branches migration (M4)", () => {
   test("a database created before the column gains it on migrate", () => {
     const db = new Database(":memory:");

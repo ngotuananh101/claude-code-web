@@ -361,11 +361,14 @@ export function createServer(options: ServerOptions): ServerHandle {
                 : {};
             const toolName =
               typeof payload["toolName"] === "string" ? payload["toolName"] : undefined;
+            const rawQuestions = Array.isArray(payload["questions"])
+              ? payload["questions"]
+              : undefined;
             const inputSummary =
               typeof payload["inputSummary"] === "string"
                 ? payload["inputSummary"]
-                : payload["questions"] !== undefined
-                  ? JSON.stringify(payload["questions"])
+                : rawQuestions !== undefined
+                  ? JSON.stringify(rawQuestions)
                   : undefined;
             const approvalId =
               typeof payload["approvalId"] === "string" ? payload["approvalId"] : undefined;
@@ -382,6 +385,7 @@ export function createServer(options: ServerOptions): ServerHandle {
               ...(titleRow?.title ? { sessionTitle: titleRow.title } : {}),
               ...(toolName === undefined ? {} : { toolName }),
               ...(inputSummary === undefined ? {} : { inputSummary }),
+              ...(rawQuestions === undefined ? {} : { questions: rawQuestions }),
               ...(approvalId === undefined ? {} : { approvalId }),
               ...(approvalKind === undefined ? {} : { approvalKind }),
               ...(approvalExpiresAt === undefined ? {} : { approvalExpiresAt }),
