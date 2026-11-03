@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
+import { useI18n } from "@/lib/i18n";
 
 const props = defineProps<{
   open: boolean;
@@ -15,6 +16,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<(e: "update:open", value: boolean) => void>();
+
+const { t } = useI18n();
 
 function elapsedMs(task: BackgroundTask): number {
   const started = Date.parse(task.startedAt);
@@ -48,7 +51,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle class="text-base">
-          {{ props.task?.description || props.task?.taskId || "Subagent" }}
+          {{ props.task?.description || props.task?.taskId || t("subagentTree.title") }}
         </DialogTitle>
         <DialogDescription class="text-xs text-muted-foreground">
           {{ props.task?.taskId }}
@@ -57,7 +60,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
 
       <div v-if="props.task" class="space-y-3 text-sm">
         <div class="flex items-center gap-2">
-          <span class="text-xs text-muted-foreground">Status</span>
+          <span class="text-xs text-muted-foreground">{{ t("subagentTree.status") }}</span>
           <span
             class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
             :class="statusBadgeClass(props.task.status)"
@@ -79,28 +82,28 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
         </div>
 
         <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <dt class="text-muted-foreground">Task ID</dt>
+          <dt class="text-muted-foreground">{{ t("subagentTree.taskId") }}</dt>
           <dd class="font-mono truncate">{{ props.task.taskId }}</dd>
-          <dt v-if="props.task.parentTaskId" class="text-muted-foreground">Parent</dt>
+          <dt v-if="props.task.parentTaskId" class="text-muted-foreground">{{ t("subagentTree.parentTask") }}</dt>
           <dd v-if="props.task.parentTaskId" class="font-mono truncate">{{ props.task.parentTaskId }}</dd>
-          <dt class="text-muted-foreground">Started</dt>
+          <dt class="text-muted-foreground">{{ t("subagentTree.started") }}</dt>
           <dd class="font-mono truncate">{{ props.task.startedAt }}</dd>
-          <dt class="text-muted-foreground">Updated</dt>
+          <dt class="text-muted-foreground">{{ t("subagentTree.updated") }}</dt>
           <dd class="font-mono truncate">{{ props.task.updatedAt }}</dd>
-          <dt class="text-muted-foreground">Elapsed</dt>
+          <dt class="text-muted-foreground">{{ t("subagentTree.elapsed") }}</dt>
           <dd class="font-mono">{{ elapsedLabel }}</dd>
-          <dt v-if="props.task.lastToolName" class="text-muted-foreground">Last tool</dt>
+          <dt v-if="props.task.lastToolName" class="text-muted-foreground">{{ t("subagentTree.lastTool") }}</dt>
           <dd v-if="props.task.lastToolName" class="font-mono truncate">{{ props.task.lastToolName }}</dd>
         </dl>
 
         <div v-if="props.task.usage" class="rounded-md border border-border/60 bg-muted/40 p-2.5">
-          <div class="mb-1 text-xs font-semibold text-foreground/70">Usage</div>
+          <div class="mb-1 text-xs font-semibold text-foreground/70">{{ t("subagentTree.usage") }}</div>
           <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-            <dt class="text-muted-foreground">Total tokens</dt>
+            <dt class="text-muted-foreground">{{ t("subagentTree.tokens") }}</dt>
             <dd class="font-mono">{{ props.task.usage.totalTokens }}</dd>
-            <dt class="text-muted-foreground">Tool uses</dt>
+            <dt class="text-muted-foreground">{{ t("subagentTree.toolUses") }}</dt>
             <dd class="font-mono">{{ props.task.usage.toolUses }}</dd>
-            <dt class="text-muted-foreground">Duration</dt>
+            <dt class="text-muted-foreground">{{ t("subagentTree.duration") }}</dt>
             <dd class="font-mono">{{ formatTaskElapsed(props.task.usage.durationMs) }}</dd>
           </dl>
         </div>

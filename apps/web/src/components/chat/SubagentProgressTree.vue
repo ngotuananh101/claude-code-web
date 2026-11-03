@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ChevronDown, ChevronRight } from "@lucide/vue";
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
 import { formatTaskElapsed } from "@/features/journal/background-tasks.ts";
 import { buildSubagentTree, type SubagentTreeNode } from "@/features/journal/subagent-tree.ts";
@@ -14,6 +14,20 @@ const emit = defineEmits<(e: "select-task", task: BackgroundTask) => void>();
 const tree = computed(() => buildSubagentTree(props.tasks));
 
 const collapsed = ref<Set<string>>(new Set());
+
+const now = ref(Date.now());
+let timer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  timer = setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
+});
+onBeforeUnmount(() => {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+});
 
 function toggle(taskId: string): void {
   const next = new Set(collapsed.value);
@@ -37,7 +51,9 @@ const visible = computed<SubagentTreeNode[]>(() => {
 function elapsedFor(task: BackgroundTask): string {
   const started = Date.parse(task.startedAt);
   if (Number.isNaN(started)) return "";
-  return formatTaskElapsed(Date.now() - started);
+  // Touch `now` so the template re-renders as time advances.
+  const current = now.value;
+  return formatTaskElapsed(current - started);
 }
 
 function labelFor(task: BackgroundTask): string {

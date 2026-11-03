@@ -488,15 +488,21 @@ export type TranslationDictionary = {
   subagentTree: {
     title: string;
     inspect: string;
+    inspectSubagent: string;
+    close: string;
     status: string;
     taskId: string;
+    subagentType: string;
+    workflow: string;
     parent: string;
+    parentTask: string;
     started: string;
     updated: string;
     elapsed: string;
     lastTool: string;
     usage: string;
     totalTokens: string;
+    tokens: string;
     toolUses: string;
     duration: string;
     noData: string;

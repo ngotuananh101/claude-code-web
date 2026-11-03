@@ -18,6 +18,7 @@ import { toast } from "vue-sonner";
 import SubagentDetailDialog from "@/components/chat/SubagentDetailDialog.vue";
 import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
 import type { ToolStep } from "@/features/journal/chat-turns";
+import { useI18n } from "@/lib/i18n";
 
 const props = defineProps<{
   /** The tool step to render. */
@@ -29,6 +30,8 @@ const props = defineProps<{
 /** Collapsed by default. */
 const isOpen = ref(false);
 const inspectOpen = ref(false);
+
+const { t } = useI18n();
 
 /** Pick the icon component for the tool name. */
 function toolIcon(toolName: string): unknown {
@@ -144,10 +147,10 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           <button
             type="button"
             class="ml-1 inline-flex items-center rounded border border-border/40 px-1 text-[9px] text-muted-foreground hover:text-foreground"
-            title="Inspect"
+            :title="t('subagentTree.inspectSubagent')"
             @click.stop="inspectOpen = true"
           >
-            inspect
+            {{ t("subagentTree.inspectSubagent") }}
           </button>
         </span>
 
