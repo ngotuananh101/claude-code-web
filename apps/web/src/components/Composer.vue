@@ -66,7 +66,8 @@ import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api
 import { sessions } from "../stores/sessions.ts";
 import FolderBrowserModal from "./FolderBrowserModal.vue";
 import ModelPickerPopover from "./ModelPickerPopover.vue";
-import type SlashCommandMenu from "./SlashCommandMenu.vue";
+// biome-ignore lint/style/useImportType: runtime component used in template
+import SlashCommandMenu from "./SlashCommandMenu.vue";
 
 /**
  * The prompt box (§16.1). On the new-session page (sessionId null) it mints
@@ -108,7 +109,11 @@ const slashQuery = ref("");
 const slashCommandMenuRef = ref<InstanceType<typeof SlashCommandMenu> | null>(null);
 const textareaEl = ref<HTMLTextAreaElement | null>(null);
 
-const selectedRunner = computed(() => runners.value.find((r) => r.runnerId === runnerId.value));
+const selectedRunner = computed(() =>
+  runners.value.find(
+    (r) => r.runnerId === (runnerId.value !== "" ? runnerId.value : pickerRunnerId.value),
+  ),
+);
 const availableCommands = computed(() => getAvailableCommands(selectedRunner.value?.capabilities));
 
 /** The chosen runner; empty until the operator picks one. */
