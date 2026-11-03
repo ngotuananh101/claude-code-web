@@ -593,6 +593,37 @@ describe("event ingestion", () => {
 
     expect(gateway.capabilitiesOf("nobody")).toBeUndefined();
   });
+
+  test("exposes the runner capabilities the hello discovered", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    const catalogue = {
+      commands: [{ name: "/foo", description: "foo command" }],
+      plugins: [],
+      mcpServers: [],
+      agents: [],
+    };
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, runnerCapabilities: catalogue } }),
+    );
+
+    expect(gateway.runnerCapabilitiesOf("runner-a")).toEqual(catalogue);
+  });
+
+  test("reports no runner capabilities for an offline runner", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+    });
+
+    expect(gateway.runnerCapabilitiesOf("nobody")).toBeUndefined();
+  });
 });
 
 describe("declared workspaces reach the projection", () => {

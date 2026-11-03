@@ -79,11 +79,12 @@ export async function handleListRunners(
   // Each live runner's advertised models ride along (§5.2), so the composer can
   // list what that host's Claude Code actually offers — including the custom
   // names an operator configured. An offline runner has no live hello, so its
-  // list is empty; the composer reads that as "unknown", not "none".
+  // list is empty; the composer reads that as "unknown", not "none". The same
+  // lifetime carries the §4.1 catalogue, which the capabilities dialog renders.
   const runners = listRunners(options.db, authorized.userId).map((runner) => ({
     ...runner,
     models: runnerGateway.modelsOf(runner.runnerId),
-    capabilities: runnerGateway.capabilitiesOf(runner.runnerId),
+    capabilities: runnerGateway.runnerCapabilitiesOf(runner.runnerId),
   }));
 
   return new Response(JSON.stringify({ runners }), {
@@ -195,8 +196,13 @@ export async function handleUpdateRunnerName(
 }
 
 /**
- * Delete a runner and cascade delete all its sessions and related data.
- * If runner has an active socket connection, disconnect it.
+ * One runner's discovered catalogue (§4.1): the commands, plugins, MCP servers
+ * and agents its Claude Code advertised in the hello.
+ *
+ * The dedicated route exists because the list only carries what fits next to
+ * the registry row, while the dialog wants the whole catalogue. `undefined`
+ * from the gateway means no live hello — an offline runner, or one that
+ * predates discovery — which reads as 404: there is nothing to show.
  */
 export async function handleGetRunnerCapabilities(
   request: Request,
@@ -219,7 +225,7 @@ export async function handleGetRunnerCapabilities(
     return new Response("unauthorized", { status: 401 });
   }
 
-  const capabilities = runnerGateway.capabilitiesOf(runnerId);
+  const capabilities = runnerGateway.runnerCapabilitiesOf(runnerId);
   if (!capabilities) {
     return new Response("not found", { status: 404 });
   }
@@ -230,6 +236,10 @@ export async function handleGetRunnerCapabilities(
   });
 }
 
+/**
+ * Delete a runner and cascade delete all its sessions and related data.
+ * If runner has an active socket connection, disconnect it.
+ */
 export async function handleDeleteRunner(
   request: Request,
   options: ServerOptions,

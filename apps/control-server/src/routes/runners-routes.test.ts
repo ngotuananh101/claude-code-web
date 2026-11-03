@@ -409,4 +409,96 @@ describe("runner registry routes", () => {
     const sessionRow = db.query("SELECT id FROM sessions WHERE id = 'sess-r'").get();
     expect(sessionRow).toBeNull();
   });
+
+  test("GET /api/runners/:id/capabilities returns the full catalogue for a live runner", async () => {
+    const { url, wsUrl, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string; token: string };
+
+    const socket = new WebSocket(`${wsUrl}/ws/runner`, {
+      headers: { Authorization: `Bearer ${minted.token}` },
+    } as never);
+    const messages: Array<Record<string, unknown>> = [];
+    socket.addEventListener("message", (event) => {
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () => reject(new Error("connect failed")));
+    });
+
+    const catalogue = {
+      commands: [{ name: "/foo", description: "foo command" }],
+      plugins: [{ name: "plugin-a", version: "1.0.0" }],
+      mcpServers: [{ name: "mcp-a", status: "connected" }],
+      agents: [{ name: "agent-a", description: "an agent" }],
+    };
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        hello: {
+          protocolVersion: 1,
+          runnerId: minted.runnerId,
+          bootId: "boot-1",
+          runnerVersion: "0.0.0",
+          sdkVersion: "0.3.309",
+          platform: "linux/x64",
+          maxConcurrentRuns: 1,
+          activeRuns: [],
+          eventOffsets: [],
+          runnerCapabilities: catalogue,
+        },
+      }),
+    );
+
+    const deadline = Date.now() + 3000;
+    while (messages.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+    expect(messages[0]).toMatchObject({ type: "hello.ok" });
+
+    const response = await fetch(`${url}/api/runners/${minted.runnerId}/capabilities`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { capabilities: unknown };
+    expect(body.capabilities).toEqual(catalogue);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+
+    socket.close();
+  });
+
+  test("GET /api/runners/:id/capabilities answers 404 for an offline runner", async () => {
+    const { url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string };
+
+    const response = await fetch(`${url}/api/runners/${minted.runnerId}/capabilities`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(404);
+  });
+
+  test("GET /api/runners/:id/capabilities is authenticated like every browser route", async () => {
+    const { url, cookie } = await start();
+    const minted = (await (
+      await fetch(`${url}/api/runners`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).json()) as { runnerId: string };
+
+    const path = `${url}/api/runners/${minted.runnerId}/capabilities`;
+    expect((await fetch(path, { headers: { Origin: origin } })).status).toBe(401);
+    expect(
+      (await fetch(path, { headers: { Origin: "https://evil.example.test", Cookie: cookie } }))
+        .status,
+    ).toBe(403);
+  });
 });

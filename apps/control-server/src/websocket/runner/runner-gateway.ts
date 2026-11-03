@@ -33,6 +33,7 @@ import {
   parseDeclaredWorkspaces,
   parseRpcResultFrame,
   type RpcResultFrame,
+  type RunnerCapabilities,
   type RunnerCommandEnvelope,
   type RunnerEvent,
   type RunnerModel,
@@ -92,6 +93,13 @@ type Connection = {
   capabilities: string[];
   /** The models the runner's Claude Code offers (§5.2), same lifetime. */
   models: RunnerModel[];
+  /**
+   * The commands, plugins, MCP servers and agents the runner's Claude Code
+   * discovered at boot (§4.1), same lifetime as `models`. Discovery data, and
+   * deliberately separate from `capabilities`: those are the RPC feature flags
+   * the permission gates read, this is what the capabilities dialog renders.
+   */
+  runnerCapabilities?: RunnerCapabilities;
 };
 
 /** The subset of `ServerWebSocket` used here; keeps tests free of a real server. */
@@ -403,12 +411,23 @@ export class RunnerGateway {
   }
 
   /**
-   * What the runner's hello declared it can serve. The ready connection's
-   * copy, `[]` when nothing is live — and deliberately `[]` after a close, so
-   * a caller that gatekeeps on this cannot act on a stale declaration.
+   * What the runner's hello declared it can serve: the RPC feature flags the
+   * permission gates read. `undefined` when nothing is live — and deliberately
+   * so after a close, so a caller that gatekeeps on this cannot act on a stale
+   * declaration.
    */
   capabilitiesOf(runnerId: string): readonly string[] | undefined {
     return this.#live.get(runnerId)?.capabilities;
+  }
+
+  /**
+   * The catalogue the runner's hello discovered (§4.1): commands, plugins, MCP
+   * servers and agents. `undefined` when nothing is live — the same lifetime as
+   * `modelsOf`'s answer, and read the same way: absence means "unknown", never
+   * "nothing to offer". A reconnect that re-hello'd replaces it wholesale.
+   */
+  runnerCapabilitiesOf(runnerId: string): RunnerCapabilities | undefined {
+    return this.#live.get(runnerId)?.runnerCapabilities;
   }
 
   /**
@@ -482,6 +501,7 @@ export class RunnerGateway {
     connection.negotiated = true;
     connection.capabilities = [...result.capabilities];
     connection.models = [...result.models];
+    connection.runnerCapabilities = result.runnerCapabilities;
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 

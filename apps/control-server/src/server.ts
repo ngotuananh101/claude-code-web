@@ -71,6 +71,7 @@ import { handleListProfileModels } from "./routes/profile-models.ts";
 import {
   handleCreateRunner,
   handleDeleteRunner,
+  handleGetRunnerCapabilities,
   handleListRunners,
   handleRevokeRunner,
   handleUpdateRunnerName,
@@ -406,6 +407,18 @@ export function createServer(options: ServerOptions): ServerHandle {
 
       if (url.pathname === "/api/runners" && request.method === "GET") {
         return handleListRunners(request, options, allowed, browserGateway, runnerGateway);
+      }
+
+      const capsMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/capabilities$/);
+      if (capsMatch && request.method === "GET") {
+        return handleGetRunnerCapabilities(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          runnerGateway,
+          decodeURIComponent(capsMatch[1]!),
+        );
       }
 
       const revokeMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/revoke$/);
