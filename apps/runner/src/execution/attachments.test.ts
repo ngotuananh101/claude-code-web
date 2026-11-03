@@ -108,14 +108,18 @@ describe("downloadRunnerAttachments", () => {
       expect(files).toHaveLength(2);
       const attachmentsDir = join(runnerHome, `tmp/sessions/${sessionId}/attachments`);
       expect(files[0]).toEqual({
+        id: "att-1",
         name: "hello.txt",
         path: join(attachmentsDir, "att-1-hello.txt"),
         mimeType: "text/plain",
+        size: 5,
       });
       expect(files[1]).toEqual({
+        id: "att-2",
         name: "data.json",
         path: join(attachmentsDir, "att-2-data.json"),
         mimeType: "application/json",
+        size: 16,
       });
 
       // Verify the downloaded content matches.

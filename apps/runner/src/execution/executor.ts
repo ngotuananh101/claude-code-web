@@ -387,15 +387,12 @@ export async function executeRun(
           runnerHome: options.runnerHome,
           attachments,
         });
-        attachmentInfos = downloaded.map((f) => {
-          const match = attachments.find((a) => a.name === f.name);
-          return {
-            id: match?.id ?? f.name,
-            name: f.name,
-            mimeType: f.mimeType,
-            size: match?.size ?? 0,
-          };
-        });
+        attachmentInfos = downloaded.map((f) => ({
+          id: f.id,
+          name: f.name,
+          mimeType: f.mimeType,
+          size: f.size,
+        }));
         effectivePrompt = injectAttachmentsContext(prompt, downloaded);
       } catch (error) {
         state = "failed";

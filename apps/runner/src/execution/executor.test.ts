@@ -2022,6 +2022,84 @@ describe("attachments (§attachments)", () => {
     }
   });
 
+  test("keeps attachment ids distinct when two files share a display name", async () => {
+    // Two images pasted from the clipboard are both named `image.png`. The name
+    // is not an identity: the browser renders each thumbnail by id, so echoing
+    // one id twice shows the first image twice and loses the second.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const runnerHome = await freshDir();
+
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        const id = url.pathname.split("/").pop();
+        if (id === "att-1") {
+          return new Response("first-image", {
+            headers: { "content-type": "image/png" },
+          });
+        }
+        if (id === "att-2") {
+          return new Response("second-image-longer", {
+            headers: { "content-type": "image/png" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    try {
+      const commandWithAttachments = {
+        ...COMMAND,
+        payload: {
+          prompt: "compare these",
+          attachments: [
+            { id: "att-1", name: "image.png", mimeType: "image/png", size: 11 },
+            { id: "att-2", name: "image.png", mimeType: "image/png", size: 19 },
+          ],
+        },
+      };
+
+      await executeRun(db, commandWithAttachments, {
+        workspacePath: "/home/runner/project",
+        sdk: () =>
+          (async function* () {
+            yield { type: "result", subtype: "success", result: "ok" };
+          })(),
+        runnerHome,
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: "test-token",
+      });
+
+      const started = events(db).find((e) => e.type === "run.started");
+      const startedPayload = JSON.parse(started!.payload) as Record<string, unknown>;
+      const attachments = startedPayload.attachments as Array<Record<string, unknown>>;
+
+      expect(attachments).toHaveLength(2);
+      expect(attachments[0]).toEqual({
+        id: "att-1",
+        name: "image.png",
+        mimeType: "image/png",
+        size: 11,
+      });
+      expect(attachments[1]).toEqual({
+        id: "att-2",
+        name: "image.png",
+        mimeType: "image/png",
+        size: 19,
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
   test("when downloading attachments fails, run fails and releases workspace lock", async () => {
     const { db } = setup();
     beginAttempt(db, {

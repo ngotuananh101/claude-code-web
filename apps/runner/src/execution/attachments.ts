@@ -14,12 +14,16 @@ import { basename, join } from "node:path";
 import type { RunnerAttachmentItem } from "@cc-web/protocol";
 
 export type DownloadedFile = {
+  /** The attachment's identity on the control server. */
+  id: string;
   /** The original display name from the attachment metadata. */
   name: string;
   /** Absolute path on the runner filesystem where the file was saved. */
   path: string;
   /** The MIME type declared on the attachment. */
   mimeType: string;
+  /** The byte size declared on the attachment metadata. */
+  size: number;
 };
 
 export type DownloadOptions = {
@@ -64,9 +68,11 @@ export async function downloadRunnerAttachments(
     await writeFile(localPath, buffer, { mode: 0o600 });
 
     downloaded.push({
+      id: att.id,
       name: att.name,
       path: localPath,
       mimeType: att.mimeType,
+      size: att.size,
     });
   }
 
@@ -79,7 +85,10 @@ export async function downloadRunnerAttachments(
  *
  * When `files` is empty the prompt is returned unchanged.
  */
-export function injectAttachmentsContext(prompt: string, files: DownloadedFile[]): string {
+export function injectAttachmentsContext(
+  prompt: string,
+  files: ReadonlyArray<Pick<DownloadedFile, "name" | "path" | "mimeType">>,
+): string {
   if (files.length === 0) return prompt;
 
   const listing = files.map((f) => `- ${f.name}: ${f.path} (${f.mimeType})`).join("\n");
