@@ -14,15 +14,11 @@ import "./styles/app.css";
 import "vue-sonner/style.css";
 import { createApp } from "vue";
 import App from "./App.vue";
+import { initTheme } from "./lib/theme.ts";
 import { router } from "./router/index.ts";
 
-// The generated theme defines a .dark palette; follow the OS preference so
-// both palettes apply without an in-app toggle.
-const scheme = window.matchMedia("(prefers-color-scheme: dark)");
-const applyScheme = (): void => {
-  document.documentElement.classList.toggle("dark", scheme.matches);
-};
-applyScheme();
-scheme.addEventListener("change", applyScheme);
+// Syncs <html> with the saved theme preference ("light" | "dark" | "system",
+// defaulting to "system") and listens for OS color-scheme changes.
+initTheme();
 
 createApp(App).use(router).mount("#app");

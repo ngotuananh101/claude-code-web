@@ -571,7 +571,7 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <div
-              class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#09090b] min-h-[260px] sm:min-h-[420px]"
+              class="relative flex-1 overflow-hidden rounded-xl border border-border bg-background min-h-[260px] sm:min-h-[420px]"
             >
               <MonacoCodeEditor
                 :content="json"

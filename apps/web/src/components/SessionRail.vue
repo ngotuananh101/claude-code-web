@@ -10,12 +10,15 @@ import {
   Key,
   LayoutDashboard,
   LogOut,
+  Monitor,
+  Moon,
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
   Search,
   Server,
   SquarePen,
+  Sun,
   Trash2,
 } from "@lucide/vue";
 import type { Component } from "vue";
@@ -34,6 +37,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useI18n } from "@/lib/i18n";
+import { useTheme } from "@/lib/theme";
 import {
   groupSessions,
   nextGrouping,
@@ -61,6 +65,7 @@ import UserProfileDialog from "./profiles/UserProfileDialog.vue";
 import RenameDialog from "./RenameDialog.vue";
 
 const { locale, setLocale, t } = useI18n();
+const { theme, setTheme } = useTheme();
 
 const route = useRoute();
 const router = useRouter();
@@ -550,7 +555,7 @@ async function handleDeleteConfirm(): Promise<void> {
           </button>
         </PopoverTrigger>
         <PopoverContent
-          class="w-56 gap-0.5 p-1 rounded-lg"
+          class="w-64 gap-0.5 p-1 rounded-lg"
           align="end"
           :side-offset="4"
           @open-auto-focus="(e: Event) => e.preventDefault()"
@@ -576,6 +581,38 @@ async function handleDeleteConfirm(): Promise<void> {
             >
               <span>🇺🇸</span>
               <span>EN</span>
+            </Button>
+          </div>
+          <div class="px-2 pt-1 pb-1 text-[11px] font-medium text-muted-foreground">
+            {{ t("user.theme") }}
+          </div>
+          <div class="grid grid-cols-3 gap-1 px-2 pb-1.5">
+            <Button
+              :variant="theme === 'light' ? 'secondary' : 'ghost'"
+              size="xs"
+              class="gap-1 px-1.5"
+              @click="() => { setTheme('light'); userMenuOpen = false }"
+            >
+              <Sun :size="12" />
+              <span class="truncate">{{ t("user.light") }}</span>
+            </Button>
+            <Button
+              :variant="theme === 'dark' ? 'secondary' : 'ghost'"
+              size="xs"
+              class="gap-1 px-1.5"
+              @click="() => { setTheme('dark'); userMenuOpen = false }"
+            >
+              <Moon :size="12" />
+              <span class="truncate">{{ t("user.dark") }}</span>
+            </Button>
+            <Button
+              :variant="theme === 'system' ? 'secondary' : 'ghost'"
+              size="xs"
+              class="gap-1 px-1.5"
+              @click="() => { setTheme('system'); userMenuOpen = false }"
+            >
+              <Monitor :size="12" />
+              <span class="truncate">{{ t("user.system") }}</span>
             </Button>
           </div>
           <div class="my-1 h-px bg-border" />

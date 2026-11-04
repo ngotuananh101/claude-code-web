@@ -407,7 +407,7 @@ function percent(index: number): string {
           class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
           @click="emit('update:ultracode', !ultracode)"
         >
-          <Zap :size="13" class="shrink-0" :class="ultracode ? 'text-amber-400' : 'text-muted-foreground'" />
+          <Zap :size="13" class="shrink-0" :class="ultracode ? 'text-amber-500 dark:text-amber-400' : 'text-muted-foreground'" />
           <span class="flex-1 text-left">
             <span class="block text-[13px] leading-tight">Ultracode</span>
             <span class="block text-[11px] text-muted-foreground">

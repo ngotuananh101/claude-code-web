@@ -3,6 +3,8 @@ import type * as monaco from "monaco-editor";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { monacoLanguageForPath } from "@/features/monaco/monaco-languages";
 import { initMonaco } from "@/features/monaco/monaco-setup";
+import { monacoThemeForResolvedTheme } from "@/features/monaco/monaco-theme";
+import { useTheme } from "@/lib/theme";
 
 const props = withDefaults(
   defineProps<{
@@ -22,7 +24,9 @@ const emit = defineEmits<{
   "update:content": [value: string];
 }>();
 
+const { resolvedTheme } = useTheme();
 const containerRef = ref<HTMLDivElement | null>(null);
+let monacoRef: typeof monaco | null = null;
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let model: monaco.editor.ITextModel | null = null;
 // `setValue` below also fires `onDidChangeContent`; without this flag the
@@ -33,12 +37,13 @@ onMounted(() => {
   if (!containerRef.value) return;
 
   const monacoInstance = initMonaco();
+  monacoRef = monacoInstance;
   const language = props.path ? monacoLanguageForPath(props.path) : "plaintext";
 
   editor = monacoInstance.editor.create(containerRef.value, {
     value: props.content,
     language,
-    theme: "cc-web-dark",
+    theme: monacoThemeForResolvedTheme(resolvedTheme.value),
     automaticLayout: true,
     readOnly: props.readOnly,
     minimap: { enabled: props.minimap },
@@ -54,6 +59,10 @@ onMounted(() => {
       }
     });
   }
+});
+
+watch(resolvedTheme, (next) => {
+  monacoRef?.editor.setTheme(monacoThemeForResolvedTheme(next));
 });
 
 watch(

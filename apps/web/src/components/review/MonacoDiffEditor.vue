@@ -3,7 +3,9 @@ import type * as monaco from "monaco-editor";
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import { monacoLanguageForPath } from "@/features/monaco/monaco-languages";
 import { initMonaco } from "@/features/monaco/monaco-setup";
+import { monacoThemeForResolvedTheme } from "@/features/monaco/monaco-theme";
 import { type LineChangeSummary, summariseLineChanges } from "@/features/review/diff-stats";
+import { useTheme } from "@/lib/theme";
 
 const props = withDefaults(
   defineProps<{
@@ -24,7 +26,9 @@ const emit = defineEmits<{
   stats: [value: LineChangeSummary];
 }>();
 
+const { resolvedTheme } = useTheme();
 const containerRef = ref<HTMLDivElement | null>(null);
+let monacoRef: typeof monaco | null = null;
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 let originalModel: monaco.editor.ITextModel | null = null;
 let modifiedModel: monaco.editor.ITextModel | null = null;
@@ -37,13 +41,14 @@ onMounted(() => {
   if (!containerRef.value) return;
 
   const monacoInstance = initMonaco();
+  monacoRef = monacoInstance;
   const language = props.path ? monacoLanguageForPath(props.path) : "plaintext";
 
   originalModel = monacoInstance.editor.createModel(props.original, language);
   modifiedModel = monacoInstance.editor.createModel(props.modified, language);
 
   diffEditor = monacoInstance.editor.createDiffEditor(containerRef.value, {
-    theme: "cc-web-dark",
+    theme: monacoThemeForResolvedTheme(resolvedTheme.value),
     automaticLayout: true,
     renderSideBySide: props.renderSideBySide,
     minimap: { enabled: props.minimap },
@@ -65,6 +70,10 @@ onMounted(() => {
       emit("update:modified", modifiedModel.getValue());
     }
   });
+});
+
+watch(resolvedTheme, (next) => {
+  monacoRef?.editor.setTheme(monacoThemeForResolvedTheme(next));
 });
 
 watch(
