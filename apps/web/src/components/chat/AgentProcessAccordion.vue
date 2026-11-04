@@ -37,6 +37,10 @@ const props = defineProps<{
   taskFor?: ((toolCallId: string) => BackgroundTask | undefined) | undefined;
 }>();
 
+const emit = defineEmits<{
+  inspectSubagent: [subagentId: string];
+}>();
+
 const { t } = useI18n();
 
 const summary = computed(() => summarizeProcessState(props.steps, props.status));
@@ -142,6 +146,7 @@ const summaryLabel = computed(() => {
                 v-else-if="step.kind === 'tool'"
                 :step="step"
                 :task="taskFor?.(step.toolCallId)"
+                @inspect-subagent="(id) => emit('inspectSubagent', id)"
               />
             </template>
             <ApprovalCard

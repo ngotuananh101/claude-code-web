@@ -69,12 +69,22 @@ describe("createStreamNormalizer", () => {
     expect(normalize(streamEvent(textDelta("orphan")))).toEqual([]);
   });
 
-  test("sidechain and main-chain ids do not bleed", () => {
+  test("sidechain and main-chain ids do not bleed and sidechain events carry parentToolUseId", () => {
     const normalize = createStreamNormalizer();
-    normalize(streamEvent(messageStart("msg_main")));
-    normalize(streamEvent(messageStart("msg_sub"), "tool-1"));
+    expect(normalize(streamEvent(messageStart("msg_main")))).toEqual([
+      { type: "message.started", payload: { messageId: "msg_main" } },
+    ]);
+    expect(normalize(streamEvent(messageStart("msg_sub"), "tool-1"))).toEqual([
+      {
+        type: "message.started",
+        payload: { messageId: "msg_sub", parentToolUseId: "tool-1" },
+      },
+    ]);
     expect(normalize(streamEvent(textDelta("sub text"), "tool-1"))).toEqual([
-      { type: "message.delta", payload: { messageId: "msg_sub", text: "sub text" } },
+      {
+        type: "message.delta",
+        payload: { messageId: "msg_sub", text: "sub text", parentToolUseId: "tool-1" },
+      },
     ]);
     expect(normalize(streamEvent(textDelta("main text")))).toEqual([
       { type: "message.delta", payload: { messageId: "msg_main", text: "main text" } },
@@ -140,10 +150,9 @@ describe("createStreamNormalizer", () => {
     ).toEqual([{ type: "tool.started", payload: { toolCallId: "toolu-1", toolName: "Bash" } }]);
   });
 
-  test("a sidechain tool_use block start still emits its own tool.started", () => {
-    // Tool ids are globally unique across chains, so unlike text deltas the
-    // event needs no chain correlation — a subagent's tool call is real tool
-    // activity in the session.
+  test("a sidechain tool_use block start still emits its own tool.started with parentToolUseId", () => {
+    // Tool ids are globally unique across chains, and parentToolUseId lets the
+    // browser isolate subagent tool steps from the main chat stream.
     const normalize = createStreamNormalizer();
     normalize(streamEvent(messageStart("msg_sub"), "tool-1"));
     expect(
@@ -157,7 +166,12 @@ describe("createStreamNormalizer", () => {
           "tool-1",
         ),
       ),
-    ).toEqual([{ type: "tool.started", payload: { toolCallId: "toolu-2", toolName: "Read" } }]);
+    ).toEqual([
+      {
+        type: "tool.started",
+        payload: { toolCallId: "toolu-2", toolName: "Read", parentToolUseId: "tool-1" },
+      },
+    ]);
   });
 
   test("a tool_use block missing id or name emits nothing", () => {

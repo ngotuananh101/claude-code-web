@@ -25,6 +25,10 @@ const props = defineProps<{
   taskFor?: ((toolCallId: string) => BackgroundTask | undefined) | undefined;
 }>();
 
+const emit = defineEmits<{
+  inspectSubagent: [subagentId: string];
+}>();
+
 /** Whether the raw payload panel is open. */
 const showRaw = ref(false);
 
@@ -191,6 +195,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
           :duration-text="row.isLastProcess ? segmentDurationText : undefined"
           :terminal-for="terminalFor"
           :task-for="taskFor"
+          @inspect-subagent="(id) => emit('inspectSubagent', id)"
         />
 
         <div
@@ -211,6 +216,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         :duration-text="turn.durationText"
         :terminal-for="terminalFor"
         :task-for="taskFor"
+        @inspect-subagent="(id) => emit('inspectSubagent', id)"
       />
 
       <div

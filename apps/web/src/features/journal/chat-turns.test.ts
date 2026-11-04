@@ -1551,7 +1551,7 @@ describe("toolStepLabel", () => {
       "Sửa file: src/a.ts",
     );
     expect(toolStepLabel({ ...base, toolName: "Write", filePath: "src/b.ts" })).toBe(
-      "Sửa file: src/b.ts",
+      "Ghi file: src/b.ts",
     );
     expect(toolStepLabel({ ...base, toolName: "Read", filePath: "src/c.ts" })).toBe(
       "Đọc file: src/c.ts",
@@ -1560,10 +1560,17 @@ describe("toolStepLabel", () => {
       "Chạy: bun test",
     );
     expect(toolStepLabel({ ...base, toolName: "Grep", inputSummary: "TODO" })).toBe("Tìm: TODO");
+    expect(toolStepLabel({ ...base, toolName: "Agent", inputSummary: "Explore codebase" })).toBe(
+      "Agent: Explore codebase",
+    );
   });
 
-  test("falls back to the tool name and truncates long labels", () => {
+  test("falls back to clean tool label without repeating tool name when detail is absent", () => {
     expect(toolStepLabel({ ...base, toolName: "WebFetch" })).toBe("WebFetch");
+    expect(toolStepLabel({ ...base, toolName: "Read" })).toBe("Đọc file");
+    expect(toolStepLabel({ ...base, toolName: "Write" })).toBe("Ghi file");
+    expect(toolStepLabel({ ...base, toolName: "Edit" })).toBe("Sửa file");
+    expect(toolStepLabel({ ...base, toolName: "Grep" })).toBe("Grep");
     const long = toolStepLabel({ ...base, toolName: "Edit", filePath: "x".repeat(200) });
     expect(long.length).toBeLessThanOrEqual(81);
     expect(long.endsWith("…")).toBe(true);
@@ -1773,6 +1780,278 @@ describe("resolveActiveStatus", () => {
     });
     expect(resolveActiveStatus([], false, false)).toEqual({
       label: "Đang xử lý…",
+    });
+  });
+});
+
+describe("tool input formatting and snake_case file_path extraction", () => {
+  test("extracts snake_case file_path for Read, Write, Edit and notebook_path for NotebookEdit", () => {
+    const turns = deriveChatTurns(
+      [
+        assistantMsg({
+          type: "assistant",
+          content: [
+            toolUseBlock("t-read", "Read", { file_path: "apps/web/src/App.vue", limit: 100 }),
+            toolUseBlock("t-write", "Write", {
+              file_path: "apps/web/src/new.ts",
+              content: "export const x = 1;",
+            }),
+            toolUseBlock("t-edit", "Edit", {
+              file_path: "apps/web/src/edit.ts",
+              old_string: "a",
+              new_string: "b",
+            }),
+            toolUseBlock("t-nb", "NotebookEdit", {
+              notebook_path: "notebooks/demo.ipynb",
+              new_source: "print(1)",
+            }),
+            toolUseBlock("t-agent", "Agent", {
+              description: "Explore session handlers",
+              subagent_type: "Explore",
+              prompt: "Find all session handlers",
+            }),
+          ],
+        }),
+      ],
+      [],
+    );
+
+    const steps = (turns[0] as AgentTurn).steps as ToolStep[];
+    expect(steps[0]).toMatchObject({
+      toolName: "Read",
+      filePath: "apps/web/src/App.vue",
+      inputSummary: "apps/web/src/App.vue",
+    });
+    expect(steps[1]).toMatchObject({
+      toolName: "Write",
+      filePath: "apps/web/src/new.ts",
+      inputSummary: "apps/web/src/new.ts",
+    });
+    expect(steps[2]).toMatchObject({
+      toolName: "Edit",
+      filePath: "apps/web/src/edit.ts",
+      inputSummary: "apps/web/src/edit.ts",
+      diffStats: { added: 1, removed: 1 },
+    });
+    expect(steps[3]).toMatchObject({
+      toolName: "NotebookEdit",
+      filePath: "notebooks/demo.ipynb",
+      inputSummary: "notebooks/demo.ipynb",
+    });
+    expect(steps[4]).toMatchObject({
+      toolName: "Agent",
+      inputSummary: "Explore session handlers",
+    });
+    expect(steps[4]!.filePath).toBeUndefined();
+  });
+
+  test("returns null inputSummary when tool.started has no input yet instead of '{}'", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { prompt: "read file" }, "r-empty"),
+        liveEvent("tool.started", { toolCallId: "t-1", toolName: "Read" }, "r-empty"),
+      ],
+    );
+
+    const agent = turns[1] as AgentTurn;
+    const step = agent.steps[0] as ToolStep;
+    expect(step.toolName).toBe("Read");
+    expect(step.inputSummary).toBeNull();
+  });
+});
+
+describe("deriveChatTurns — subagent separation from main stream", () => {
+  test("filters live subagent events with parentToolUseId / parent_tool_use_id out of main turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { prompt: "Audit codebase" }, "r-sub"),
+        liveEvent(
+          "message.completed",
+          {
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: {
+              id: "msg-main-1",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "toolu-agent-1",
+                  name: "Agent",
+                  input: {
+                    description: "Explore runner execution",
+                    subagent_type: "Explore",
+                    prompt: "Check executor.ts",
+                  },
+                },
+              ],
+            },
+          },
+          "r-sub",
+        ),
+        liveEvent("tool.started", { toolCallId: "toolu-agent-1", toolName: "Agent" }, "r-sub"),
+        // Subagent events stamped with parentToolUseId / parent_tool_use_id
+        liveEvent(
+          "message.started",
+          { messageId: "msg-sub-1", parentToolUseId: "toolu-agent-1" },
+          "r-sub",
+        ),
+        liveEvent(
+          "message.delta",
+          {
+            messageId: "msg-sub-1",
+            text: "Subagent internal text that must not leak",
+            parentToolUseId: "toolu-agent-1",
+          },
+          "r-sub",
+        ),
+        liveEvent(
+          "message.completed",
+          {
+            type: "assistant",
+            parent_tool_use_id: "toolu-agent-1",
+            message: {
+              id: "msg-sub-1",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "toolu-sub-read-1",
+                  name: "Read",
+                  input: { file_path: "apps/runner/src/execution/executor.ts" },
+                },
+              ],
+            },
+          },
+          "r-sub",
+        ),
+        liveEvent(
+          "tool.started",
+          {
+            toolCallId: "toolu-sub-read-1",
+            toolName: "Read",
+            parentToolUseId: "toolu-agent-1",
+          },
+          "r-sub",
+        ),
+        liveEvent(
+          "tool.completed",
+          {
+            toolCallId: "toolu-sub-read-1",
+            isError: false,
+            outputSummary: "100 lines",
+            parentToolUseId: "toolu-agent-1",
+          },
+          "r-sub",
+        ),
+        // Main agent receives completion of the Agent tool call
+        liveEvent(
+          "tool.completed",
+          {
+            toolCallId: "toolu-agent-1",
+            isError: false,
+            outputSummary: "Subagent finished report",
+          },
+          "r-sub",
+        ),
+        liveEvent("message.started", { messageId: "msg-main-2" }, "r-sub"),
+        liveEvent(
+          "message.delta",
+          { messageId: "msg-main-2", text: "Here is the main synthesis." },
+          "r-sub",
+        ),
+        liveEvent("run.finished", { durationMs: 2000 }, "r-sub"),
+      ],
+    );
+
+    expect(turns).toHaveLength(2);
+    const agent = turns[1] as AgentTurn;
+    expect(agent.text).toBe("Here is the main synthesis.");
+    expect(agent.steps).toHaveLength(1);
+    expect(agent.steps[0]).toMatchObject({
+      kind: "tool",
+      toolCallId: "toolu-agent-1",
+      toolName: "Agent",
+      inputSummary: "Explore runner execution",
+      state: "done",
+    });
+  });
+
+  test("filters historical subagent SessionMessages with parentToolUseId out of main turn", () => {
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "Check files" }, "u-1"),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [
+              toolUseBlock("toolu-agent-hist", "Agent", {
+                description: "Search configs",
+                subagent_type: "Explore",
+              }),
+            ],
+          },
+          "a-main-1",
+        ),
+        {
+          type: "user",
+          uuid: "u-sub-prompt",
+          parentToolUseId: "toolu-agent-hist",
+          message: { content: "Find all config files" },
+        },
+        {
+          type: "assistant",
+          uuid: "a-sub-1",
+          parentToolUseId: "toolu-agent-hist",
+          message: {
+            type: "assistant",
+            content: [
+              toolUseBlock("toolu-sub-glob", "Glob", { pattern: "**/*.json" }),
+              { type: "text", text: "Subagent found 3 files" },
+            ],
+          },
+        },
+        {
+          type: "user",
+          uuid: "u-sub-res",
+          parentToolUseId: "toolu-agent-hist",
+          message: {
+            type: "tool_result",
+            tool_use_id: "toolu-sub-glob",
+            content: "package.json\ntsconfig.json",
+          },
+        },
+        userMsg(
+          {
+            type: "tool_result",
+            tool_use_id: "toolu-agent-hist",
+            content: "Found package.json and tsconfig.json",
+          },
+          "u-main-res",
+        ),
+        assistantMsg(
+          {
+            type: "assistant",
+            content: [{ type: "text", text: "Main answer after subagent." }],
+          },
+          "a-main-2",
+        ),
+      ],
+      [],
+    );
+
+    expect(turns).toHaveLength(2);
+    const agent = turns[1] as AgentTurn;
+    expect(agent.text).toBe("Main answer after subagent.");
+    expect(agent.steps).toHaveLength(1);
+    expect(agent.steps[0]).toMatchObject({
+      kind: "tool",
+      toolCallId: "toolu-agent-hist",
+      toolName: "Agent",
+      inputSummary: "Search configs",
+      state: "done",
     });
   });
 });

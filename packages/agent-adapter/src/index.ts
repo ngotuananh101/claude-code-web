@@ -90,6 +90,8 @@ export function createSdkStream(
     systemPrompt: { type: "preset", preset: "claude_code" },
     // §12.3: partial messages are what let the browser stream rather than wait.
     includePartialMessages: true,
+    // Emit full subagent conversation frames stamped with parent_tool_use_id.
+    forwardSubagentText: true,
     abortController: controller,
   };
 

@@ -9,9 +9,11 @@ import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useI18n } from "@/lib/i18n";
 import Composer from "../components/Composer.vue";
+import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
 import { liveActivityTasks, taskStateFromEvents } from "../features/journal/background-tasks.ts";
+import { deriveSubagentItems } from "../features/journal/subagent-events.ts";
 import {
   initialInspectOpen,
   loadInspectPreference,
@@ -164,6 +166,24 @@ const liveRunId = computed(() => {
 const backgroundTaskState = computed(() => taskStateFromEvents(sessions.stream?.events ?? []));
 const backgroundTasks = computed(() => liveActivityTasks(backgroundTaskState.value));
 
+const subagentItems = computed(() =>
+  deriveSubagentItems(
+    historicalMessages.value,
+    sessions.stream?.events ?? [],
+    backgroundTaskState.value,
+  ),
+);
+
+const subagentDialogOpen = ref(false);
+const selectedSubagentId = ref<string | null>(null);
+
+function openSubagentsDialog(subagentId?: string): void {
+  if (subagentId !== undefined) {
+    selectedSubagentId.value = subagentId;
+  }
+  subagentDialogOpen.value = true;
+}
+
 // A terminal event for the run this page started is the honest "it is over":
 // the composer's stop button disappears with it, not on a timer.
 watch(
@@ -279,6 +299,8 @@ function followRoute(): void {
   const id = routeSession.value;
   historicalMessages.value = [];
   fetchedResume.value = null;
+  subagentDialogOpen.value = false;
+  selectedSubagentId.value = null;
   if (id === null) {
     if (sessions.activeId !== null) closeSession();
     return;
@@ -344,6 +366,7 @@ async function refreshNow(): Promise<void> {
               :background-task-state="backgroundTaskState"
               :historical-messages="historicalMessages"
               :pending-run="activePendingRun"
+              @inspect-subagent="openSubagentsDialog"
             />
             <div v-else class="z-10 flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 class="size-4 animate-spin text-muted-foreground" />
@@ -355,9 +378,17 @@ async function refreshNow(): Promise<void> {
                 class="mx-auto max-w-4xl"
                 :session-id="routeSession"
                 :active-run-id="liveRunId"
+                :subagents="subagentItems"
                 @started="onStarted"
+                @open-subagents="openSubagentsDialog()"
               />
             </div>
+
+            <SubagentListDialog
+              v-model:open="subagentDialogOpen"
+              v-model:selected-id="selectedSubagentId"
+              :subagents="subagentItems"
+            />
           </div>
         </ResizablePanel>
 

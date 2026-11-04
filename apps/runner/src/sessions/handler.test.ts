@@ -289,7 +289,20 @@ describe("workspace.sessions.messages", () => {
   test("calls sdk.getSessionMessages with sessionId and resolved dir", async () => {
     const messages = [
       { type: "user" as const, uuid: "m1", session_id: "s1", message: { content: "hi" } },
-      { type: "assistant" as const, uuid: "m2", session_id: "s1", message: { content: "hello" } },
+      {
+        type: "assistant" as const,
+        uuid: "m2",
+        session_id: "s1",
+        parent_tool_use_id: null,
+        message: { content: "hello" },
+      },
+      {
+        type: "assistant" as const,
+        uuid: "m3",
+        session_id: "s1",
+        parent_tool_use_id: "toolu-agent-1",
+        message: { content: "subagent step" },
+      },
     ];
     const { sdk, getSessionMessagesCalls } = makeMockSdk([], messages);
     const handler = createSessionsHandler({
@@ -308,13 +321,25 @@ describe("workspace.sessions.messages", () => {
     const result = frame.result as {
       op: string;
       sessionId: string;
-      messages: Array<{ type: string; uuid: string; message: unknown }>;
+      messages: Array<{
+        type: string;
+        uuid: string;
+        message: unknown;
+        parentToolUseId?: string;
+      }>;
     };
     expect(result.op).toBe("sessions.messages");
     expect(result.sessionId).toBe("s1");
-    expect(result.messages).toHaveLength(2);
+    expect(result.messages).toHaveLength(3);
     expect(result.messages[0]).toMatchObject({ type: "user", uuid: "m1" });
+    expect("parentToolUseId" in result.messages[0]!).toBe(false);
     expect(result.messages[1]).toMatchObject({ type: "assistant", uuid: "m2" });
+    expect("parentToolUseId" in result.messages[1]!).toBe(false);
+    expect(result.messages[2]).toMatchObject({
+      type: "assistant",
+      uuid: "m3",
+      parentToolUseId: "toolu-agent-1",
+    });
     expect(getSessionMessagesCalls).toEqual([
       [
         "s1",
@@ -601,7 +626,7 @@ describe("maps SDK session info to SessionSummary", () => {
 
     expect(frame.result.messages).toEqual([
       { type: "user", uuid: "m1", message: { text: "hi" } },
-      { type: "system", uuid: "m2", message: { text: "sys" } },
+      { type: "system", uuid: "m2", message: { text: "sys" }, parentToolUseId: "x" },
     ]);
   });
 });

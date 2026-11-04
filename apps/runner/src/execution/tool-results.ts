@@ -20,6 +20,7 @@ export type ToolCompletion = {
   toolCallId: string;
   isError: boolean;
   outputSummary?: string;
+  parentToolUseId?: string;
 };
 
 function contentBlocks(message: Record<string, unknown>): unknown[] | null {
@@ -61,6 +62,8 @@ function flattenText(content: unknown): string {
 export function toolCompletionsOf(message: Record<string, unknown>): ToolCompletion[] {
   const blocks = contentBlocks(message);
   if (blocks === null) return [];
+  const rawParent = message["parent_tool_use_id"];
+  const parentToolUseId = typeof rawParent === "string" && rawParent !== "" ? rawParent : undefined;
   const completions: ToolCompletion[] = [];
   for (const block of blocks) {
     if (!isToolResultBlock(block)) continue;
@@ -69,6 +72,7 @@ export function toolCompletionsOf(message: Record<string, unknown>): ToolComplet
       toolCallId: block["tool_use_id"] as string,
       isError: block["is_error"] === true,
       ...(summary === "" ? {} : { outputSummary: summary }),
+      ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
     };
     completions.push(completion);
   }

@@ -3,7 +3,6 @@ import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web
 import { ArrowDown } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AgentChatTurn from "@/components/chat/AgentChatTurn.vue";
-import BackgroundTaskBand from "@/components/chat/BackgroundTaskBand.vue";
 import UserChatBubble from "@/components/chat/UserChatBubble.vue";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -36,6 +35,10 @@ const props = defineProps<{
   /** Every task the journal has seen, live or settled (tool-step badges). */
   backgroundTaskState?: BackgroundTaskState;
   pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] } | undefined;
+}>();
+
+const emit = defineEmits<{
+  inspectSubagent: [subagentId: string];
 }>();
 
 // Chat turns fuse the resumed session's historical `SessionMessage`s with the
@@ -317,11 +320,6 @@ watch(
   >
     <ScrollArea ref="scrollAreaRef" class="min-h-0 min-w-0 flex-1 overscroll-contain">
       <div ref="contentRef" class="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-6 px-4 py-6 md:px-6">
-        <BackgroundTaskBand
-          v-if="(backgroundTasks?.length ?? 0) > 0"
-          :tasks="backgroundTasks ?? []"
-        />
-
         <p
           v-if="needsResync"
           class="border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
@@ -353,6 +351,7 @@ watch(
               :terminal-for="terminalFor"
               :task-for="taskFor"
               :data-turn-key="turn.key"
+              @inspect-subagent="(id) => emit('inspectSubagent', id)"
             />
           </template>
         </template>

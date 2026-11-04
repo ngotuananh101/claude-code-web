@@ -67,6 +67,7 @@ type SDKSessionMessage = {
   type: "user" | "assistant" | "system";
   uuid: string;
   message: unknown;
+  parent_tool_use_id?: string | null;
 };
 
 export type SessionsHandlerOptions = {
@@ -221,9 +222,13 @@ function toSessionSummary(sdk: SDKSessionInfoLike): SessionSummary {
 }
 
 function toSessionMessage(msg: SDKSessionMessage): SessionMessage {
-  return {
+  const out: SessionMessage = {
     type: msg.type,
     uuid: msg.uuid,
     message: msg.message,
   };
+  if (typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "") {
+    out.parentToolUseId = msg.parent_tool_use_id;
+  }
+  return out;
 }

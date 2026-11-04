@@ -226,19 +226,29 @@ export function toolStepLabel(step: ToolStep): string {
   const detail = step.filePath ?? step.command ?? step.inputSummary ?? undefined;
   switch (step.toolName) {
     case "Edit":
+    case "NotebookEdit":
+      return detail !== undefined
+        ? truncateLabel(t("chat.toolEditWithDetail", { detail }))
+        : t("chat.toolEdit");
     case "Write":
-      return truncateLabel(t("chat.toolEditWithDetail", { detail: detail ?? step.toolName }));
+      return detail !== undefined
+        ? truncateLabel(t("chat.toolWriteWithDetail", { detail }))
+        : t("chat.toolWrite");
     case "Read":
-      return truncateLabel(t("chat.toolReadWithDetail", { detail: detail ?? step.toolName }));
-    case "Bash":
-      return truncateLabel(
-        t("chat.toolRunWithDetail", {
-          detail: step.command ?? detail ?? t("chat.commandFallback"),
-        }),
-      );
+      return detail !== undefined
+        ? truncateLabel(t("chat.toolReadWithDetail", { detail }))
+        : t("chat.toolRead");
+    case "Bash": {
+      const cmdDetail = step.command ?? detail;
+      return cmdDetail !== undefined
+        ? truncateLabel(t("chat.toolRunWithDetail", { detail: cmdDetail }))
+        : step.toolName;
+    }
     case "Grep":
     case "Glob":
-      return truncateLabel(t("chat.toolSearchWithDetail", { detail: detail ?? step.toolName }));
+      return detail !== undefined
+        ? truncateLabel(t("chat.toolSearchWithDetail", { detail }))
+        : step.toolName;
     default:
       return truncateLabel(detail !== undefined ? `${step.toolName}: ${detail}` : step.toolName);
   }
@@ -438,17 +448,44 @@ function userPromptText(message: SessionMessage): string {
   return textFromContentBlocks(msg["content"]);
 }
 
-function extractToolField(
+export function isFileTool(name: string): boolean {
+  return name === "Edit" || name === "Write" || name === "Read" || name === "NotebookEdit";
+}
+
+export function extractToolField(
   name: string,
   input?: Record<string, unknown> | null,
 ): string | undefined {
   const record = input ?? {};
   if (name === "Bash") return asString(record["command"]);
-  if (name === "Edit" || name === "Write" || name === "Read") return asString(record["filePath"]);
+  if (name === "Edit" || name === "Write" || name === "Read") {
+    return (
+      asString(record["file_path"]) ?? asString(record["filePath"]) ?? asString(record["path"])
+    );
+  }
+  if (name === "NotebookEdit") {
+    return (
+      asString(record["notebook_path"]) ??
+      asString(record["file_path"]) ??
+      asString(record["filePath"])
+    );
+  }
   if (name === "Grep" || name === "Glob") {
     const pattern = asString(record["pattern"]);
     if (pattern !== undefined) return pattern;
     return asString(record["path"]);
+  }
+  if (name === "Agent" || name === "Task") {
+    return asString(record["description"]) ?? asString(record["prompt"]);
+  }
+  if (name === "WebFetch") {
+    return asString(record["url"]);
+  }
+  if (name === "WebSearch" || name === "ToolSearch") {
+    return asString(record["query"]);
+  }
+  if (name === "Skill") {
+    return asString(record["skill"]);
   }
   return undefined;
 }
@@ -457,11 +494,12 @@ function extractToolField(
  * Summarize a tool_use input into a compact string for display.
  * Bash -> command, Edit/Write/Read -> filePath, Grep/Glob -> pattern/path.
  */
-function summarizeToolInput(name: string, input: Record<string, unknown>[]): string | null {
+export function summarizeToolInput(name: string, input: Record<string, unknown>[]): string | null {
   const record = input[0] ?? {};
   // Build a representative summary: the most relevant field for each tool kind.
   const field = extractToolField(name, record as Record<string, unknown> | undefined);
   if (field !== undefined) return field;
+  if (Object.keys(record).length === 0) return null;
   // Fallback: JSON of the whole input (redacted of nothing here — the executor
   // already redacted secrets before persistence).
   try {
@@ -470,6 +508,10 @@ function summarizeToolInput(name: string, input: Record<string, unknown>[]): str
   } catch {
     return null;
   }
+}
+
+export function eventParentToolUseId(payload: Record<string, unknown>): string | undefined {
+  return asString(payload["parentToolUseId"]) ?? asString(payload["parent_tool_use_id"]);
 }
 
 type PendingTool = {
@@ -606,6 +648,7 @@ export function deriveChatTurns(
 
   for (const event of liveEvents) {
     const payload = asRecord(event.payload) ?? {};
+    if (eventParentToolUseId(payload) !== undefined) continue;
     if (event.type === "run.started") {
       hasLiveRuns = true;
       const prompt = asString(payload["prompt"]);
@@ -647,6 +690,7 @@ export function deriveChatTurns(
 
   for (const message of historicalMessages) {
     if (message.type === "system") continue;
+    if (asString(message.parentToolUseId) !== undefined) continue;
 
     if (message.type === "user") {
       const msg = asRecord(message.message);
@@ -761,7 +805,7 @@ export function deriveChatTurns(
             const filePath = extractToolField(name, input);
             if (filePath !== undefined) {
               if (name === "Bash") toolStep.command = filePath;
-              else toolStep.filePath = filePath;
+              else if (isFileTool(name)) toolStep.filePath = filePath;
             }
             const diffStats = extractDiffStats(name, input);
             if (diffStats !== null) toolStep.diffStats = diffStats;
@@ -830,6 +874,7 @@ export function deriveChatTurns(
 
   for (const event of liveEvents) {
     const payload = asRecord(event.payload) ?? {};
+    if (eventParentToolUseId(payload) !== undefined) continue;
 
     if (event.type === "run.started") {
       if (liveAgentTurn !== null) {
@@ -1109,7 +1154,7 @@ function newLiveToolStep(
   const filePath = extractToolField(toolName, input);
   if (filePath !== undefined) {
     if (toolName === "Bash") step.command = filePath;
-    else step.filePath = filePath;
+    else if (isFileTool(toolName)) step.filePath = filePath;
   }
   const diffStats = extractDiffStats(toolName, input);
   if (diffStats !== null) step.diffStats = diffStats;
@@ -1150,7 +1195,7 @@ function finalizeAgentTurn(
       const filePath = extractToolField(step.toolName, resolvedInput);
       if (filePath !== undefined) {
         if (step.toolName === "Bash") step.command = filePath;
-        else step.filePath = filePath;
+        else if (isFileTool(step.toolName)) step.filePath = filePath;
       }
       const diffStats = extractDiffStats(step.toolName, resolvedInput);
       if (diffStats !== null) step.diffStats = diffStats;

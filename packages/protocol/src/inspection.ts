@@ -255,6 +255,7 @@ export type SessionMessage = {
   type: "user" | "assistant" | "system";
   uuid: string;
   message: unknown;
+  parentToolUseId?: string;
 };
 
 /** The runner's answer to a `workspace.sessions.messages` command. */

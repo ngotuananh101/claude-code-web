@@ -544,6 +544,16 @@ export type TranslationDictionary = {
     toolUses: string;
     duration: string;
     noData: string;
+    dialogTitle: string;
+    dialogSubtitle: string;
+    eventsCount: string;
+    eventsEmpty: string;
+    summaryLabel: string;
+    statusRunning: string;
+    statusCompleted: string;
+    statusFailed: string;
+    statusStopped: string;
+    selectPrompt: string;
   };
   approval: {
     allowed: string;
@@ -593,6 +603,7 @@ export type TranslationDictionary = {
     toolWrite: string;
     toolRead: string;
     toolEditWithDetail: string;
+    toolWriteWithDetail: string;
     toolReadWithDetail: string;
     toolRunWithDetail: string;
     toolSearchWithDetail: string;
@@ -680,6 +691,12 @@ export type TranslationDictionary = {
     stopRequested: string;
     errorRunNotRunning: string;
     errorStopFailed: string;
+    subagentsCountSingular: string;
+    subagentsCountPlural: string;
+    subagentsRunningCount: string;
+    subagentsCompletedCount: string;
+    subagentsFailedCount: string;
+    viewSubagents: string;
   };
   modelPicker: {
     default: string;

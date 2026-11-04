@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AlertCircle,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -15,9 +16,8 @@ import {
 } from "@lucide/vue";
 import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
-import SubagentDetailDialog from "@/components/chat/SubagentDetailDialog.vue";
 import { type BackgroundTask, formatTaskElapsed } from "@/features/journal/background-tasks.ts";
-import type { ToolStep } from "@/features/journal/chat-turns";
+import { type ToolStep, toolStepLabel } from "@/features/journal/chat-turns";
 import { useI18n } from "@/lib/i18n";
 
 const props = defineProps<{
@@ -27,41 +27,31 @@ const props = defineProps<{
   task?: BackgroundTask | undefined;
 }>();
 
+const emit = defineEmits<{
+  inspectSubagent: [subagentId: string];
+}>();
+
 /** Collapsed by default. */
 const isOpen = ref(false);
-const inspectOpen = ref(false);
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 /** Pick the icon component for the tool name. */
 function toolIcon(toolName: string): unknown {
   const name = toolName.toLowerCase();
   if (name === "bash" || name === "terminal") return Terminal;
-  if (name === "edit") return FileEdit;
+  if (name === "edit" || name === "notebookedit") return FileEdit;
   if (name === "write") return FilePlus;
   if (name === "read") return FileText;
-  if (["grep", "glob", "explore"].includes(name)) return Search;
+  if (["grep", "glob", "explore", "websearch", "toolsearch"].includes(name)) return Search;
+  if (name === "agent" || name === "task") return Bot;
   return Wrench;
 }
 
-/** Localized label for the tool when it operates on a file. */
-const fileLabels = computed<Record<string, string>>(() => ({
-  Edit: t("chat.toolEdit"),
-  Write: t("chat.toolWrite"),
-  Read: t("chat.toolRead"),
-}));
-
 /** Short, one-line label shown in the collapsed header. */
 const toolLabel = computed(() => {
-  if (props.step.command) {
-    return props.step.command;
-  }
-  if (props.step.filePath) {
-    const label = fileLabels.value[props.step.toolName] ?? props.step.toolName;
-    return `${label}: ${props.step.filePath}`;
-  }
-  const base = props.step.inputSummary ?? props.step.toolName;
-  return base.length > 60 ? `${base.slice(0, 60)}…` : base;
+  void locale.value;
+  return toolStepLabel(props.step);
 });
 
 /** The icon component to render. */
@@ -135,20 +125,23 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
         <!-- Background task badge: status dot + elapsed, joined by tool-use id. -->
         <span
-          v-if="task"
+          v-if="task || step.toolName === 'Agent' || step.toolName === 'Task'"
           class="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/5 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
-          :title="task.description || task.subagentType || task.taskId"
+          :title="task?.description || task?.subagentType || task?.taskId || step.inputSummary || step.toolName"
         >
-          <i class="size-[6px] shrink-0 rounded-full" :class="taskDotClass" aria-hidden="true" />
-          <span class="font-mono">{{ taskElapsed }}</span>
-          <span v-if="task.lastToolName" class="max-w-24 truncate font-mono">
-            {{ task.lastToolName }}
-          </span>
+          <template v-if="task">
+            <i class="size-[6px] shrink-0 rounded-full" :class="taskDotClass" aria-hidden="true" />
+            <span class="font-mono">{{ taskElapsed }}</span>
+            <span v-if="task.lastToolName" class="max-w-24 truncate font-mono">
+              {{ task.lastToolName }}
+            </span>
+          </template>
           <button
             type="button"
-            class="ml-1 inline-flex min-h-8 items-center rounded border border-border/40 px-2 text-[10px] text-muted-foreground hover:text-foreground sm:min-h-0 sm:px-1 sm:text-[9px]"
+            class="inline-flex min-h-8 cursor-pointer items-center rounded border border-border/40 px-2 text-[10px] text-muted-foreground hover:text-foreground sm:min-h-0 sm:px-1 sm:text-[9px]"
+            :class="{ 'ml-1': Boolean(task) }"
             :title="t('subagentTree.inspectSubagent')"
-            @click.stop="inspectOpen = true"
+            @click.stop="emit('inspectSubagent', task?.taskId ?? step.toolCallId)"
           >
             {{ t("subagentTree.inspectSubagent") }}
           </button>
@@ -251,6 +244,4 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       </div>
     </transition>
   </div>
-
-  <SubagentDetailDialog v-model:open="inspectOpen" :task="task ?? null" />
 </template>

@@ -87,8 +87,10 @@ describe("mapping a run to SDK options", () => {
     expect(sdkController.signal.aborted).toBe(true);
   });
 
-  test("requests partial messages so the UI can stream", () => {
-    expect(captureOptions({ prompt: "hi", cwd: "/w" }).options?.includePartialMessages).toBe(true);
+  test("requests partial messages and subagent text so the UI can stream", () => {
+    const options = captureOptions({ prompt: "hi", cwd: "/w" }).options;
+    expect(options?.includePartialMessages).toBe(true);
+    expect(options?.forwardSubagentText).toBe(true);
   });
 
   test("forwards permissionMode when the run carries one", () => {

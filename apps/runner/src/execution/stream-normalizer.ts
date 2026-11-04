@@ -31,7 +31,9 @@ export function createStreamNormalizer(): (
 
   return (sdkMessage: Record<string, unknown>): NormalizedStreamEvent[] => {
     if (sdkMessage["type"] !== "stream_event") return [];
-    const parentKey = String(sdkMessage["parent_tool_use_id"] ?? "");
+    const parentKey =
+      typeof sdkMessage["parent_tool_use_id"] === "string" ? sdkMessage["parent_tool_use_id"] : "";
+    const parentField = parentKey !== "" ? { parentToolUseId: parentKey } : {};
     const event = sdkMessage["event"];
     if (typeof event !== "object" || event === null) return [];
     const raw = event as Record<string, unknown>;
@@ -44,7 +46,7 @@ export function createStreamNormalizer(): (
           : undefined;
       if (typeof id !== "string" || id === "") return [];
       currentId.set(parentKey, id);
-      return [{ type: "message.started", payload: { messageId: id } }];
+      return [{ type: "message.started", payload: { messageId: id, ...parentField } }];
     }
 
     if (raw["type"] === "content_block_start") {
@@ -61,7 +63,7 @@ export function createStreamNormalizer(): (
       const toolName = toolUse["name"];
       if (typeof toolCallId !== "string" || toolCallId === "") return [];
       if (typeof toolName !== "string" || toolName === "") return [];
-      return [{ type: "tool.started", payload: { toolCallId, toolName } }];
+      return [{ type: "tool.started", payload: { toolCallId, toolName, ...parentField } }];
     }
 
     if (raw["type"] === "content_block_delta") {
@@ -72,7 +74,7 @@ export function createStreamNormalizer(): (
       const text = fragment["text"];
       const id = currentId.get(parentKey);
       if (typeof text !== "string" || id === undefined) return [];
-      return [{ type: "message.delta", payload: { messageId: id, text } }];
+      return [{ type: "message.delta", payload: { messageId: id, text, ...parentField } }];
     }
 
     return [];

@@ -8,7 +8,8 @@ import type {
 } from "@cc-web/protocol";
 import {
   ArrowUp,
-  FileImage,
+  ArrowUpRight,
+  Bot,
   FileText,
   FolderGit2,
   FolderOpen,
@@ -55,6 +56,7 @@ import {
   getAvailableCommands,
   type SlashCommandItem,
 } from "@/features/composer/slash-commands.ts";
+import { type SubagentItem, summarizeSubagentCounts } from "@/features/journal/subagent-events.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { useI18n } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time.ts";
@@ -99,13 +101,34 @@ const props = defineProps<{
   sessionId: string | null;
   /** The run currently in flight, when there is one to stop. */
   activeRunId?: string | null;
+  /** Subagents spawned in this session, shown in the top bar when inside a session. */
+  subagents?: SubagentItem[];
 }>();
 
 const emit = defineEmits<{
   started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
+  openSubagents: [];
 }>();
 
 const { t } = useI18n();
+
+const subagentCounts = computed(() => summarizeSubagentCounts(props.subagents ?? []));
+
+const subagentTotalLabel = computed(() => {
+  const total = subagentCounts.value.total;
+  return total === 1
+    ? t("composer.subagentsCountSingular", { count: total })
+    : t("composer.subagentsCountPlural", { count: total });
+});
+
+const subagentBreakdownLabel = computed(() => {
+  const { running, completed, failed } = subagentCounts.value;
+  const parts: string[] = [];
+  if (running > 0) parts.push(t("composer.subagentsRunningCount", { count: running }));
+  if (completed > 0) parts.push(t("composer.subagentsCompletedCount", { count: completed }));
+  if (failed > 0) parts.push(t("composer.subagentsFailedCount", { count: failed }));
+  return parts.length > 0 ? `(${parts.join(" · ")})` : "";
+});
 
 const prompt = ref("");
 const sending = ref(false);
@@ -628,11 +651,14 @@ async function stop(): Promise<void> {
 </script>
 
 <template>
-  <InputGroup class="gap-0 bg-card shadow-sm items-stretch text-left" v-bind="$attrs">
-    <InputGroupAddon
+  <div
+    class="rounded-xl border border-border/80 bg-muted/40 p-1 text-left shadow-xs"
+    v-bind="$attrs"
+  >
+    <!-- Top Bar on New Session page: Runner, Browse Folder, Folder Chip, Session History, Branch -->
+    <div
       v-if="sessionId === null"
-      align="block-start"
-      class="flex-wrap gap-1.5 px-3.5 pt-2.5 pb-0"
+      class="flex flex-wrap items-center gap-1.5 px-2.5 pt-1 pb-1.5"
     >
       <!-- Bước 1: Chọn runner -->
       <Select v-model="runnerId">
@@ -682,14 +708,14 @@ async function stop(): Promise<void> {
       <!-- Thư mục đã duyệt tới; bỏ chọn để duyệt lại chỗ khác -->
       <span
         v-if="selectedFolder"
-        class="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-lg bg-muted/60 px-2 text-xs text-muted-foreground sm:max-w-[280px]"
+        class="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-lg bg-background/70 px-2 text-xs text-muted-foreground sm:max-w-[280px]"
         :title="selectedFolder.path"
       >
         <FolderOpen :size="13" class="shrink-0" />
         <span class="truncate font-mono">{{ selectedFolder.path }}</span>
         <button
           type="button"
-          class="shrink-0 cursor-pointer rounded p-1.5 hover:bg-background hover:text-foreground sm:p-0.5"
+          class="shrink-0 cursor-pointer rounded p-1.5 hover:bg-muted hover:text-foreground sm:p-0.5"
           :aria-label="t('composer.clearFolderAria')"
           :title="t('composer.clearFolderTitle')"
           @click="selectedFolder = null"
@@ -738,14 +764,43 @@ async function stop(): Promise<void> {
         <GitBranch :size="13" class="shrink-0" />
         <span class="max-w-[140px] truncate font-mono">{{ selectedFolder.currentBranch }}</span>
       </span>
-    </InputGroupAddon>
+    </div>
 
+    <!-- Top Bar inside an active Session: only shown when subagents exist -->
     <div
-      class="relative w-full text-left"
-      @dragover="onDragOver"
-      @dragleave="onDragLeave"
-      @drop="onDrop"
+      v-else-if="subagentCounts.total > 0"
+      class="flex flex-wrap items-center justify-between gap-2 px-2.5 pt-1 pb-1.5"
     >
+      <button
+        type="button"
+        class="inline-flex h-7 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 text-xs font-medium text-foreground transition-colors hover:border-border hover:bg-background"
+        @click="emit('openSubagents')"
+      >
+        <i
+          v-if="subagentCounts.running > 0"
+          class="size-2 shrink-0 animate-pulse rounded-full bg-primary"
+          aria-hidden="true"
+        />
+        <Bot v-else :size="13" class="shrink-0 text-muted-foreground" />
+        <span>{{ subagentTotalLabel }}</span>
+        <span v-if="subagentBreakdownLabel" class="font-normal text-muted-foreground">
+          {{ subagentBreakdownLabel }}
+        </span>
+        <span class="inline-flex items-center gap-0.5 text-[11px] text-primary">
+          <span>{{ t("composer.viewSubagents") }}</span>
+          <ArrowUpRight :size="11" />
+        </span>
+      </button>
+    </div>
+
+    <!-- Inner Prompt Card -->
+    <InputGroup class="gap-0 rounded-lg bg-card shadow-2xs items-stretch text-left">
+      <div
+        class="relative w-full text-left"
+        @dragover="onDragOver"
+        @dragleave="onDragLeave"
+        @drop="onDrop"
+      >
       <!-- Tệp đính kèm ở trên phần nhập nội dung -->
       <TooltipProvider :delay-duration="150">
         <div v-if="attachments.length > 0" class="flex w-full flex-wrap gap-2 px-3.5 pt-2.5 pb-1">
@@ -896,7 +951,8 @@ async function stop(): Promise<void> {
         </Button>
       </div>
     </InputGroupAddon>
-  </InputGroup>
+    </InputGroup>
+  </div>
 
   <FolderBrowserModal
     :open="browserOpen"

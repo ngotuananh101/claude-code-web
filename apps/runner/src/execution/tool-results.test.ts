@@ -114,4 +114,26 @@ describe("toolCompletionsOf", () => {
     expect(toolCompletionsOf({ type: "user", message: null })).toEqual([]);
     expect(toolCompletionsOf({})).toEqual([]);
   });
+
+  test("preserves parentToolUseId when the user frame came from a subagent", () => {
+    const completions = toolCompletionsOf({
+      ...userFrame([toolResult("toolu-sub-1", "subagent output")]),
+      parent_tool_use_id: "toolu-agent-parent",
+    });
+    expect(completions).toEqual([
+      {
+        toolCallId: "toolu-sub-1",
+        isError: false,
+        outputSummary: "subagent output",
+        parentToolUseId: "toolu-agent-parent",
+      },
+    ]);
+
+    const mainCompletions = toolCompletionsOf({
+      ...userFrame([toolResult("toolu-main-1", "main output")]),
+      parent_tool_use_id: null,
+    });
+    expect(mainCompletions[0]).toBeDefined();
+    expect("parentToolUseId" in (mainCompletions[0] ?? {})).toBe(false);
+  });
 });
