@@ -8,6 +8,7 @@
  */
 
 import { EFFORT_LEVELS, type EffortLevel, MODEL_IDS, type RunnerModel } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 
 /** The model rows the picker shows for a runner. */
 export type PickerModel = RunnerModel;
@@ -55,8 +56,21 @@ export const EFFORT_LABELS: Record<string, string> = {
 
 /** Get the localized label for an effort level, or 'tự động' when null. */
 export function effortLabel(effort: EffortLevel | null): string {
-  if (effort === null) return "tự động";
-  return EFFORT_LABELS[effort] ?? effort;
+  if (effort === null) return t("modelPicker.effortAuto");
+  switch (effort) {
+    case "low":
+      return t("modelPicker.effortLow");
+    case "medium":
+      return t("modelPicker.effortMedium");
+    case "high":
+      return t("modelPicker.effortHigh");
+    case "xhigh":
+      return t("modelPicker.effortXhigh");
+    case "max":
+      return t("modelPicker.effortMax");
+    default:
+      return effort;
+  }
 }
 
 /**
@@ -112,7 +126,7 @@ export function modelTier(model: PickerModel): string | null {
  */
 export function formatModelDisplayName(model: PickerModel): string {
   if (model.value === "default" || model.displayName.toLowerCase().startsWith("default")) {
-    return "Mặc định (khuyến nghị)";
+    return t("modelPicker.defaultRecommended");
   }
 
   const name = model.displayName.trim() || model.value;
@@ -139,16 +153,20 @@ export function formatModelDescription(model: PickerModel): string {
   if (model.value === "default" || descLower.startsWith("use the default model")) {
     const match = desc.match(/\((?:currently|hiện tại)\s+([^)]+)\)/i);
     if (match) {
-      return `Để Claude Code tự chọn model (hiện tại ${match[1]})`;
+      return t("modelPicker.autoChooseCurrent", { model: match[1] ?? "" });
     }
-    return "Để Claude Code tự chọn model";
+    return t("modelPicker.autoChoose");
   }
 
-  if (descLower === "custom opus model") return "Model Opus tùy chỉnh";
-  if (descLower === "custom sonnet model") return "Model Sonnet tùy chỉnh";
-  if (descLower === "custom haiku model") return "Model Haiku tùy chỉnh";
-  if (descLower === "custom fable model") return "Model Fable tùy chỉnh";
-  if (descLower === "custom mythos model") return "Model Mythos tùy chỉnh";
+  if (descLower === "custom opus model") return t("modelPicker.customOpus");
+  if (descLower === "custom sonnet model") return t("modelPicker.customSonnet");
+  if (descLower === "custom haiku model") return t("modelPicker.customHaiku");
+  if (descLower === "custom fable model") return t("modelPicker.customFable");
+  if (descLower === "custom mythos model") return t("modelPicker.customMythos");
+
+  if (descLower === "runner chưa báo danh sách model") {
+    return t("modelPicker.runnerNoModelList");
+  }
 
   return desc;
 }
@@ -176,7 +194,7 @@ export function modelFor(models: readonly PickerModel[], value: string): PickerM
 /** The label on the closed trigger: the row's display name, else the raw value. */
 export function modelLabel(models: readonly PickerModel[], value: string): string {
   if (value === "default") {
-    return "Mặc định";
+    return t("modelPicker.default");
   }
   const model = modelFor(models, value);
   if (!model) {

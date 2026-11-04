@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { breadcrumbs, createFolderBrowser } from "@/features/browse/folder-browser.ts";
+import { useI18n } from "@/lib/i18n";
 import { fetchDirectory, registerWorkspace } from "@/services/browse-api.ts";
 
 /**
@@ -39,7 +40,7 @@ import { fetchDirectory, registerWorkspace } from "@/services/browse-api.ts";
  *
  * All navigation state and the pure helpers live in `folder-browser.ts`; this
  * component only wires the DOM to the controller and renders with shadcn-vue
- * primitives. Vietnamese UI copy throughout.
+ * primitives. Localized UI copy throughout.
  */
 
 const props = withDefaults(
@@ -58,6 +59,8 @@ const emit = defineEmits<{
   (e: "close"): void;
   (e: "select", path: string): void;
 }>();
+
+const { t } = useI18n();
 
 const controller = createFolderBrowser(props.runnerId, { fetchDirectory, registerWorkspace });
 
@@ -124,14 +127,14 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
 
 <template>
   <Dialog :open="open" @update:open="val => { if (!val) emit('close'); }">
-    <DialogContent class="sm:max-w-2xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
-      <DialogHeader class="shrink-0 border-b border-border px-6 py-4">
+    <DialogContent class="sm:max-w-2xl max-h-[85dvh] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogHeader class="shrink-0 border-b border-border px-4 py-4 pr-12 sm:px-6 sm:pr-12">
         <DialogTitle class="flex items-center gap-2">
           <FolderGit2 :size="20" class="text-primary shrink-0" />
-          <span>Chọn thư mục trên Runner</span>
+          <span>{{ t("dialogs.selectFolderTitle") }}</span>
         </DialogTitle>
-        <div class="mt-2 flex items-center gap-2">
-          <Badge variant="secondary" class="font-mono text-xs shrink-0">
+        <div class="mt-2 flex min-w-0 items-center gap-2">
+          <Badge variant="secondary" class="min-w-0 max-w-[45%] shrink-0 truncate font-mono text-xs">
             {{ state.runnerId }}
           </Badge>
           <span class="text-xs text-muted-foreground truncate">
@@ -143,13 +146,13 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       <!-- Shortcuts bar: clickable badges to jump to common roots -->
       <div
         v-if="state.shortcuts.length > 0"
-        class="flex shrink-0 flex-wrap gap-1.5 border-b border-border px-6 py-2.5"
+        class="flex shrink-0 flex-wrap gap-1.5 border-b border-border px-4 py-2.5 sm:px-6"
       >
         <button
           v-for="shortcut in state.shortcuts"
           :key="shortcut.path"
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          class="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-border px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:min-h-0 sm:px-2.5 sm:py-1"
           @click="onShortcutClick(shortcut)"
         >
           <HardDrive :size="12" />
@@ -158,12 +161,12 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       </div>
 
       <!-- Breadcrumbs bar: clickable segments to jump to any ancestor -->
-      <div class="flex shrink-0 items-center gap-1 border-b border-border px-6 py-2 text-xs">
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-4 py-2 text-xs sm:px-6">
         <Button
           v-if="state.parentPath !== null"
           variant="ghost"
           size="sm"
-          class="h-6 px-1.5 shrink-0"
+          class="h-9 w-9 shrink-0 px-1.5 sm:h-6 sm:w-auto"
           @click="onGoUp"
         >
           <ArrowUp :size="12" />
@@ -190,10 +193,10 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
       </div>
 
       <!-- Content area: loading / error / entries -->
-      <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         <div v-if="state.loading" class="flex items-center justify-center py-8">
           <Loader2 :size="24" class="animate-spin text-muted-foreground" />
-          <span class="ml-2 text-sm text-muted-foreground">Đang tải…</span>
+          <span class="ml-2 text-sm text-muted-foreground">{{ t("dialogs.loading") }}</span>
         </div>
 
         <div
@@ -208,7 +211,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
             class="ml-auto shrink-0"
             @click="onRetry"
           >
-            Thử lại
+            {{ t("dialogs.retry") }}
           </Button>
         </div>
 
@@ -222,7 +225,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
           >
             <ArrowUp :size="14" class="text-muted-foreground" />
             <span class="text-foreground">..</span>
-            <span class="text-xs text-muted-foreground">Thư mục cha</span>
+            <span class="text-xs text-muted-foreground">{{ t("dialogs.parentFolder") }}</span>
           </button>
 
           <!-- Folder list -->
@@ -231,7 +234,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
               <li
                 v-for="entry in state.entries"
                 :key="entry.path"
-                class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer transition-colors"
+                class="flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-2 text-sm transition-colors sm:min-h-0 sm:py-1.5"
                 :class="state.selectedPath === entry.path ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-muted'"
                 @click="entry.isDir ? onRowClick(entry) : undefined"
               >
@@ -258,7 +261,7 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
                   v-if="entry.isDir"
                   variant="ghost"
                   size="sm"
-                  class="h-6 shrink-0 px-1.5"
+                  class="h-9 shrink-0 px-2 sm:h-6 sm:px-1.5"
                   @click.stop="onFolderSelect(entry)"
                 >
                   <Check :size="12" />
@@ -272,30 +275,31 @@ function onRowClick(entry: { path: string; isDir: boolean }): void {
             v-else
             class="py-4 text-center text-sm text-muted-foreground"
           >
-            Thư mục này không có thư mục con.
+            {{ t("dialogs.noSubfolders") }}
           </p>
         </template>
       </div>
 
-      <DialogFooter class="shrink-0 border-t border-border bg-popover px-6 py-4 sm:items-center sm:justify-between">
+      <DialogFooter class="shrink-0 border-t border-border bg-popover px-4 py-4 sm:items-center sm:justify-between sm:px-6">
         <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground font-mono sm:mr-auto">
-          <span class="shrink-0">Đang chọn:</span>
+          <span class="shrink-0">{{ t("dialogs.selected") }}</span>
           <code class="truncate rounded border border-border/60 bg-muted/30 px-1.5 py-0.5">
             {{ state.selectedPath || "—" }}
           </code>
         </div>
 
-        <div class="flex items-center justify-end gap-2 shrink-0">
-          <Button variant="outline" @click="onCancel">
+        <div class="flex w-full items-center justify-end gap-2 shrink-0">
+          <Button variant="outline" class="max-sm:h-11" @click="onCancel">
             <X :size="14" />
-            Hủy
+            {{ t("dialogs.cancel") }}
           </Button>
           <Button
             :disabled="!state.selectedPath || state.loading"
+            class="max-sm:h-11"
             @click="onConfirm"
           >
             <Check :size="14" />
-            Chọn thư mục này
+            {{ t("dialogs.chooseFolder") }}
           </Button>
         </div>
       </DialogFooter>

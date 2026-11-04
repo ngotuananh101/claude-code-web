@@ -78,5 +78,6 @@ export const proseClasses =
   "[&_h2]:mt-3 [&_h2]:mb-1.5 [&_h2]:font-semibold [&_h3]:mt-2.5 [&_h3]:mb-1 [&_h3]:font-medium " +
   "[&_blockquote]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border " +
   "[&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground " +
-  "[&_table]:my-1.5 [&_table]:w-full [&_table]:text-left [&_th]:px-2 [&_th]:py-1 " +
+  "[&_table]:my-1.5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto " +
+  "[&_table]:text-left [&_th]:px-2 [&_th]:py-1 " +
   "[&_th]:font-medium [&_td]:px-2 [&_td]:py-1";

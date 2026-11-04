@@ -18,6 +18,7 @@ import type {
   ProfileDetail,
   ProfileSummary,
 } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 
 /**
  * The env-var names Claude Code reads, keyed by the model role a profile maps.
@@ -353,11 +354,11 @@ export function validateSettingsJson(
   try {
     const parsed = JSON.parse(json);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { valid: false, error: "Cấu hình phải là một đối tượng JSON." };
+      return { valid: false, error: t("profiles.jsonObjectRequired") };
     }
     return { valid: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "JSON không hợp lệ.";
+    const message = err instanceof Error ? err.message : t("profiles.invalidJson");
     return { valid: false, error: message };
   }
 }

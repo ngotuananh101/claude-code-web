@@ -45,11 +45,11 @@ function toolIcon(toolName: string): unknown {
 }
 
 /** Localized label for the tool when it operates on a file. */
-const fileLabels: Record<string, string> = {
-  Edit: "Sửa file",
-  Write: "Ghi file",
-  Read: "Đọc file",
-};
+const fileLabels = computed<Record<string, string>>(() => ({
+  Edit: t("chat.toolEdit"),
+  Write: t("chat.toolWrite"),
+  Read: t("chat.toolRead"),
+}));
 
 /** Short, one-line label shown in the collapsed header. */
 const toolLabel = computed(() => {
@@ -57,7 +57,7 @@ const toolLabel = computed(() => {
     return props.step.command;
   }
   if (props.step.filePath) {
-    const label = fileLabels[props.step.toolName] ?? props.step.toolName;
+    const label = fileLabels.value[props.step.toolName] ?? props.step.toolName;
     return `${label}: ${props.step.filePath}`;
   }
   const base = props.step.inputSummary ?? props.step.toolName;
@@ -97,7 +97,7 @@ const taskDotClass = computed(() => {
 /** Copy a string to the clipboard with a toast. */
 async function copyToClipboard(text: string, label: string): Promise<void> {
   await navigator.clipboard.writeText(text);
-  toast.success(`Đã sao chép ${label}.`);
+  toast.success(t("chat.copiedItem", { item: label }));
 }
 </script>
 
@@ -107,7 +107,7 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       type="button"
       :aria-expanded="isOpen"
       @click="isOpen = !isOpen"
-      class="flex items-center justify-between w-full min-w-0 max-w-full rounded-md px-2 py-1.5 text-xs hover:bg-muted/50 transition-colors text-left"
+      class="flex min-h-9 w-full min-w-0 max-w-full flex-wrap items-center justify-between gap-y-1 rounded-md px-2 py-1.5 text-xs hover:bg-muted/50 transition-colors text-left sm:min-h-0"
     >
       <div class="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
         <component :is="IconComponent" :size="13" class="text-muted-foreground shrink-0" />
@@ -118,21 +118,21 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           <span
             v-if="step.diffStats.added > 0"
             class="inline-flex shrink-0 items-center font-mono text-[11px] text-emerald-600 dark:text-emerald-400"
-            title="+dòng thêm"
+            :title="t('chat.addedLines')"
           >
             +{{ step.diffStats.added }}
           </span>
           <span
             v-if="step.diffStats.removed > 0"
             class="inline-flex shrink-0 items-center font-mono text-[11px] text-rose-600 dark:text-rose-400"
-            title="-dòng xoá"
+            :title="t('chat.removedLines')"
           >
             -{{ step.diffStats.removed }}
           </span>
         </template>
       </div>
 
-      <div class="flex items-center gap-1.5 shrink-0">
+      <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
         <!-- Background task badge: status dot + elapsed, joined by tool-use id. -->
         <span
           v-if="task"
@@ -146,7 +146,7 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           </span>
           <button
             type="button"
-            class="ml-1 inline-flex items-center rounded border border-border/40 px-1 text-[9px] text-muted-foreground hover:text-foreground"
+            class="ml-1 inline-flex min-h-8 items-center rounded border border-border/40 px-2 text-[10px] text-muted-foreground hover:text-foreground sm:min-h-0 sm:px-1 sm:text-[9px]"
             :title="t('subagentTree.inspectSubagent')"
             @click.stop="inspectOpen = true"
           >
@@ -158,30 +158,30 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
         <span
           v-if="step.state === 'running'"
           class="inline-flex items-center gap-1 rounded border border-border/40 bg-muted/30 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
-          title="Đang chạy"
+          :title="t('chat.running')"
         >
           <Loader2 :size="10" class="animate-spin" />
-          <span>Đang chạy</span>
+          <span>{{ t("chat.running") }}</span>
         </span>
         <span
           v-else-if="step.state === 'error'"
           class="inline-flex items-center gap-1 rounded border border-destructive/20 bg-destructive/10 px-1.5 py-0.25 text-[10px] font-medium text-destructive"
-          title="Thất bại"
+          :title="t('chat.failed')"
         >
           <AlertCircle :size="10" />
-          <span>[Thất bại]</span>
+          <span>{{ t("chat.failedBracket") }}</span>
         </span>
         <span
           v-else-if="step.state === 'interrupted'"
           class="inline-flex items-center rounded border border-border/40 bg-muted/30 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
-          title="Bị dừng"
+          :title="t('chat.stopped')"
         >
-          Bị dừng
+          {{ t("chat.stopped") }}
         </span>
         <span
           v-else-if="step.state === 'done'"
           class="inline-flex items-center gap-0.5 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.25 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-          title="Hoàn thành"
+          :title="t('chat.completed')"
         >
           <Check :size="10" />
         </span>
@@ -208,12 +208,12 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
             class="rounded-md border border-border/60 bg-muted/40 p-2.5 font-mono text-[11px] text-muted-foreground"
           >
             <div class="mb-1 flex items-center justify-between">
-              <span class="font-semibold text-foreground/60">Đầu vào</span>
+              <span class="font-semibold text-foreground/60">{{ t("chat.input") }}</span>
               <button
                 type="button"
-                @click.stop="copyToClipboard(step.inputSummary!, 'đầu vào')"
+                @click.stop="copyToClipboard(step.inputSummary!, t('chat.input'))"
                 class="inline-flex items-center gap-0.5 rounded border border-border/30 px-1 py-0.25 text-[10px] text-muted-foreground hover:text-foreground"
-                title="Sao chép đầu vào"
+                :title="t('chat.copyInput')"
               >
                 <Copy :size="10" />
               </button>
@@ -227,12 +227,12 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
             class="rounded-md border border-border/60 bg-muted/40 p-2.5 font-mono text-[11px] text-muted-foreground"
           >
             <div class="mb-1 flex items-center justify-between">
-              <span class="font-semibold text-foreground/60">Đầu ra</span>
+              <span class="font-semibold text-foreground/60">{{ t("chat.output") }}</span>
               <button
                 type="button"
-                @click.stop="copyToClipboard(step.outputSummary!, 'đầu ra')"
+                @click.stop="copyToClipboard(step.outputSummary!, t('chat.output'))"
                 class="inline-flex items-center gap-0.5 rounded border border-border/30 px-1 py-0.25 text-[10px] text-muted-foreground hover:text-foreground"
-                title="Sao chép đầu ra"
+                :title="t('chat.copyOutput')"
               >
                 <Copy :size="10" />
               </button>
@@ -245,7 +245,7 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
             v-if="!step.inputSummary && !step.outputSummary"
             class="rounded-md border border-border/60 bg-muted/40 p-2.5 text-center font-mono text-[11px] text-muted-foreground"
           >
-            Không có dữ liệu chi tiết.
+            {{ t("chat.noDetails") }}
           </div>
         </div>
       </div>

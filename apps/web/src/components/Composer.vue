@@ -56,6 +56,7 @@ import {
   type SlashCommandItem,
 } from "@/features/composer/slash-commands.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
+import { useI18n } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { uploadSessionAttachments } from "../services/attachments-api";
 import { listProfiles } from "../services/profiles-api";
@@ -103,6 +104,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
 }>();
+
+const { t } = useI18n();
 
 const prompt = ref("");
 const sending = ref(false);
@@ -166,12 +169,12 @@ const selectedSession = ref<typeof NEW_SESSION | string>(NEW_SESSION);
 /** Whether the FolderBrowserModal is open. */
 const browserOpen = ref(false);
 
-const permissionLabels: Record<string, string> = {
-  default: "Hỏi từng lệnh",
-  acceptEdits: "Tự chấp nhận sửa file",
-  plan: "Chỉ lập kế hoạch",
-  bypassPermissions: "Toàn quyền",
-};
+const permissionLabels = computed<Record<string, string>>(() => ({
+  default: t("composer.permissionDefault"),
+  acceptEdits: t("composer.permissionAcceptEdits"),
+  plan: t("composer.permissionPlan"),
+  bypassPermissions: t("composer.permissionBypass"),
+}));
 /** The runners the operator chooses from — no run is placed without a choice. */
 const runners = ref<OwnerRunner[]>([]);
 const workspaces = ref<OwnerWorkspace[]>([]);
@@ -261,7 +264,7 @@ const selectedRunnerName = computed(() => {
 });
 
 const selectedSessionLabel = computed(() => {
-  if (selectedSession.value === NEW_SESSION) return "Phiên mới";
+  if (selectedSession.value === NEW_SESSION) return t("composer.newSession");
   const found = workspaceSessions.value?.find((s) => s.sessionId === selectedSession.value);
   return found ? found.summary || found.sessionId : selectedSession.value;
 });
@@ -328,7 +331,7 @@ watch(
 async function onBrowseSelect(path: string): Promise<void> {
   const runner = runnerId.value;
   if (runner === "") {
-    toast.error("Chọn một runner trước khi duyệt thư mục.");
+    toast.error(t("composer.errorNoRunnerForBrowse"));
     return;
   }
 
@@ -573,25 +576,25 @@ async function send(): Promise<void> {
       return;
     }
     if (result.reason === "session_busy") {
-      toast.error("Phiên đang có run — hãy đợi run hiện tại kết thúc.");
+      toast.error(t("composer.errorSessionBusy"));
       return;
     }
     if (result.reason === "session_pinned") {
-      toast.error("Phiên này đã ghim runner/workspace khác — không thể đổi giữa chừng.");
+      toast.error(t("composer.errorSessionPinned"));
       return;
     }
     if (result.reason === "runner_unavailable") {
-      toast.error("Chưa có runner sẵn sàng nhận run — kiểm tra trang runners.");
+      toast.error(t("composer.errorRunnerUnavailable"));
       return;
     }
     if (result.reason === "unauthorized") {
-      toast.error("Đăng nhập đã hết hạn — hãy đăng nhập lại.");
+      toast.error(t("composer.errorUnauthorized"));
       return;
     }
     if (result.reason === "unknown_profile") {
       // The selected profile was deleted elsewhere: retrying unchanged cannot
       // work, so drop the stale selection and say why.
-      toast.error("Profile đã bị xoá — hãy chọn lại profile trước khi gửi.");
+      toast.error(t("composer.errorProfileDeleted"));
       profileId.value = null;
       void refreshProfiles();
       return;
@@ -599,10 +602,10 @@ async function send(): Promise<void> {
     if (result.reason === "profile_key_unreadable") {
       // The stored key cannot be opened with the server's current secret
       // (usually after a JWT rotation). Retrying unchanged cannot work.
-      toast.error("Không đọc được API key đã lưu của profile — vào trang Profiles nhập lại key.");
+      toast.error(t("composer.errorProfileKeyUnreadable"));
       return;
     }
-    toast.error("Không gửi được prompt — thử lại.");
+    toast.error(t("composer.errorSendFailed"));
   } finally {
     sending.value = false;
   }
@@ -613,14 +616,14 @@ async function stop(): Promise<void> {
   if (!runId) return;
   const outcome = await cancelRun(runId);
   if (outcome === "accepted") {
-    toast.success("Đã gửi yêu cầu dừng run.");
+    toast.success(t("composer.stopRequested"));
     return;
   }
   if (outcome === "not_found") {
-    toast.error("Run không còn đang chạy.");
+    toast.error(t("composer.errorRunNotRunning"));
     return;
   }
-  toast.error("Không dừng được run — thử lại.");
+  toast.error(t("composer.errorStopFailed"));
 }
 </script>
 
@@ -635,14 +638,14 @@ async function stop(): Promise<void> {
       <Select v-model="runnerId">
         <SelectTrigger
           size="sm"
-          aria-label="Chọn runner"
+          :aria-label="t('composer.selectRunner')"
           class="h-7! max-w-[170px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-          :title="runnerId ? (selectedRunnerName ? `${selectedRunnerName} (${runnerId})` : `Runner: ${runnerId}`) : 'Chọn runner'"
+          :title="runnerId ? (selectedRunnerName ? `${selectedRunnerName} (${runnerId})` : t('composer.runnerLabel', { id: runnerId })) : t('composer.selectRunner')"
         >
           <Server :size="13" class="shrink-0" />
           <span v-if="selectedRunnerName" class="truncate font-sans font-medium text-xs text-foreground">{{ selectedRunnerName }}</span>
           <span v-else-if="runnerId" class="truncate font-mono text-xs">{{ shortRunnerId(runnerId) }}</span>
-          <span v-else class="text-xs">Chọn runner</span>
+          <span v-else class="text-xs">{{ t("composer.selectRunner") }}</span>
         </SelectTrigger>
         <SelectContent position="popper">
           <SelectItem
@@ -668,27 +671,27 @@ async function stop(): Promise<void> {
         variant="ghost"
         size="sm"
         class="h-7! shrink-0 gap-1 border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-        aria-label="Duyệt thư mục trên runner"
-        title="Duyệt thư mục trên runner..."
+        :aria-label="t('composer.browseFolderAria')"
+        :title="t('composer.browseFolderTitle')"
         @click="browserOpen = true"
       >
         <FolderGit2 :size="13" class="shrink-0" />
-        Duyệt…
+        {{ t("composer.browse") }}
       </Button>
 
       <!-- Thư mục đã duyệt tới; bỏ chọn để duyệt lại chỗ khác -->
       <span
         v-if="selectedFolder"
-        class="flex h-7 max-w-[280px] shrink-0 items-center gap-1.5 rounded-lg bg-muted/60 px-2 text-xs text-muted-foreground"
+        class="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-lg bg-muted/60 px-2 text-xs text-muted-foreground sm:max-w-[280px]"
         :title="selectedFolder.path"
       >
         <FolderOpen :size="13" class="shrink-0" />
         <span class="truncate font-mono">{{ selectedFolder.path }}</span>
         <button
           type="button"
-          class="shrink-0 cursor-pointer rounded p-0.5 hover:bg-background hover:text-foreground"
-          aria-label="Bỏ thư mục đã chọn"
-          title="Bỏ thư mục đã chọn"
+          class="shrink-0 cursor-pointer rounded p-1.5 hover:bg-background hover:text-foreground sm:p-0.5"
+          :aria-label="t('composer.clearFolderAria')"
+          :title="t('composer.clearFolderTitle')"
           @click="selectedFolder = null"
         >
           <X :size="11" />
@@ -699,7 +702,7 @@ async function stop(): Promise<void> {
       <Select v-if="selectedFolder" v-model="selectedSession" :disabled="!workspaceSessions">
         <SelectTrigger
           size="sm"
-          aria-label="Chọn session"
+          :aria-label="t('composer.selectSession')"
           class="h-7! max-w-[190px] shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
           :title="selectedSessionLabel"
         >
@@ -707,7 +710,7 @@ async function stop(): Promise<void> {
           <span class="truncate font-mono text-xs">{{ selectedSessionLabel }}</span>
         </SelectTrigger>
         <SelectContent position="popper">
-          <SelectItem value="new" class="font-mono text-xs">Phiên mới</SelectItem>
+          <SelectItem value="new" class="font-mono text-xs">{{ t("composer.newSession") }}</SelectItem>
           <SelectItem
             v-for="session in workspaceSessions"
             :key="session.sessionId"
@@ -730,7 +733,7 @@ async function stop(): Promise<void> {
       <span
         v-if="selectedFolder?.currentBranch"
         class="flex h-7 shrink-0 items-center gap-1.5 px-2 text-xs text-muted-foreground"
-        :title="`Branch hiện tại: ${selectedFolder.currentBranch}`"
+        :title="t('composer.currentBranch', { branch: selectedFolder.currentBranch })"
       >
         <GitBranch :size="13" class="shrink-0" />
         <span class="max-w-[140px] truncate font-mono">{{ selectedFolder.currentBranch }}</span>
@@ -781,8 +784,8 @@ async function stop(): Promise<void> {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  class="absolute -top-1.5 -right-1.5 z-10 size-5 rounded-full border border-border bg-background text-muted-foreground shadow-xs opacity-0 transition-opacity duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 group-hover:opacity-100 max-sm:opacity-100"
-                  :aria-label="`Xoá tệp ${att.name}`"
+                  class="absolute -top-2 -right-2 z-10 size-7 rounded-full border border-border bg-background text-muted-foreground shadow-xs opacity-0 transition-opacity duration-150 hover:bg-destructive hover:text-destructive-foreground focus-visible:opacity-100 group-hover:opacity-100 sm:-top-1.5 sm:-right-1.5 sm:size-5 max-sm:opacity-100"
+                  :aria-label="t('composer.removeFile', { name: att.name })"
                   @click.stop="dropFile(i)"
                 >
                   <X :size="11" />
@@ -799,9 +802,9 @@ async function stop(): Promise<void> {
 
       <InputGroupTextarea
         v-model="prompt"
-        class="max-h-52 min-h-12 w-full px-3.5 py-2.5 text-left text-[13px] leading-relaxed"
-        placeholder="Gửi prompt cho runner…"
-        aria-label="Ô soạn prompt"
+        class="max-h-32 min-h-12 w-full px-3.5 py-2.5 text-left text-[13px] leading-relaxed sm:max-h-52 max-sm:text-base"
+        :placeholder="t('composer.promptPlaceholder')"
+        :aria-label="t('composer.promptInputAria')"
         @input="onPromptInput"
         @keydown="handleTextareaKeyDown"
         @paste="onPaste"
@@ -820,18 +823,21 @@ async function stop(): Promise<void> {
         v-if="dragOver"
         class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/80 backdrop-blur-sm"
       >
-        <span class="text-sm font-medium text-foreground">Thả tệp vào đây để đính kèm</span>
+        <span class="text-sm font-medium text-foreground">{{ t("composer.dropHint") }}</span>
       </div>
     </div>
 
-    <InputGroupAddon align="block-end" class="justify-between px-3.5 pt-2 pb-2">
-      <div class="flex items-center gap-1.5">
+    <InputGroupAddon
+      align="block-end"
+      class="flex-wrap items-center justify-between gap-2 px-3.5 pt-2 pb-2"
+    >
+      <div class="flex min-w-0 flex-wrap items-center gap-1.5">
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Đính kèm tệp"
-          title="Đính kèm tệp"
-          class="size-7! text-muted-foreground"
+          :aria-label="t('composer.attachFile')"
+          :title="t('composer.attachFile')"
+          class="size-9! text-muted-foreground sm:size-7!"
           @click="pickFiles"
         >
           <Paperclip :size="15" />
@@ -840,8 +846,8 @@ async function stop(): Promise<void> {
         <Select v-model="permission">
           <SelectTrigger
             size="sm"
-            aria-label="Chọn quyền của run"
-            class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+            :aria-label="t('composer.permissionAria')"
+            class="h-7! max-w-[9.5rem] max-sm:h-9! gap-1.5 truncate rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
             <Shield :size="13" :class="permissionTone" />
             <SelectValue />
@@ -857,7 +863,7 @@ async function stop(): Promise<void> {
           </SelectContent>
         </Select>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <ModelPickerPopover
           v-model:model="model"
           v-model:effort="effort"
@@ -872,17 +878,17 @@ async function stop(): Promise<void> {
           v-if="activeRunId"
           variant="destructive"
           size="sm"
-          class="stop"
+          class="stop max-sm:min-h-9"
           @click="stop"
         >
           <Square data-icon="inline-start" />
-          Dừng
+          {{ t("composer.stop") }}
         </Button>
         <Button
           size="icon-sm"
-          aria-label="Gửi prompt"
-          title="Gửi prompt (Enter)"
-          class="size-7! rounded-full"
+          :aria-label="t('composer.send')"
+          :title="t('composer.sendTitle')"
+          class="size-9! rounded-full sm:size-7!"
           :disabled="!canSend"
           @click="send"
         >

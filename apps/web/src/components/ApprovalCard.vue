@@ -5,6 +5,7 @@ import { computed, reactive, ref } from "vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n";
 import { approvalUi, submitDecision } from "../features/approvals/store";
 import { approvalNeedsDecision, isDisplayExpired } from "../features/approvals/terminal.ts";
 
@@ -25,6 +26,8 @@ const props = defineProps<{
   event: BrowserReplayEvent;
   terminal?: { decision?: "allow" | "deny"; reason?: string } | undefined;
 }>();
+
+const { t } = useI18n();
 
 type Question = {
   question: string;
@@ -112,17 +115,24 @@ const interactive = computed(
     ui?.decision === undefined,
 );
 
-const stateLabel = computed(() => {
+type ApprovalState = "allowed" | "denied" | "expired" | "cancelled" | "closed";
+
+const stateKind = computed<ApprovalState | undefined>(() => {
   if (props.terminal !== undefined) {
-    if (props.terminal.decision === "allow") return "Đã cho phép";
-    if (props.terminal.decision === "deny") return "Đã từ chối";
-    return props.terminal.reason === "timeout" ? "Đã hết hạn" : "Đã hủy";
+    if (props.terminal.decision === "allow") return "allowed";
+    if (props.terminal.decision === "deny") return "denied";
+    return props.terminal.reason === "timeout" ? "expired" : "cancelled";
   }
-  if (displayExpired.value) return "Đã hết hạn";
-  if (ui?.decision === "allow") return "Đã cho phép";
-  if (ui?.decision === "deny") return "Đã từ chối";
-  if (ui?.closed) return "Đã đóng";
+  if (displayExpired.value) return "expired";
+  if (ui?.decision === "allow") return "allowed";
+  if (ui?.decision === "deny") return "denied";
+  if (ui?.closed) return "closed";
   return undefined;
+});
+
+const stateLabel = computed(() => {
+  const kind = stateKind.value;
+  return kind === undefined ? undefined : t(`approval.${kind}`);
 });
 
 function pick(index: number, label: string): void {
@@ -157,18 +167,18 @@ function submitAnswers(): void {
   <div
     class="mt-1 mb-1.5 max-w-[560px] rounded-lg border border-border bg-card px-3.5 py-3 shadow-sm"
   >
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <Badge variant="outline" class="font-mono text-[11px]">
-        {{ kind === "user_question" ? "Câu hỏi" : "Xin quyền" }}
+        {{ kind === "user_question" ? t("approval.kindQuestion") : t("approval.kindPermission") }}
       </Badge>
       <span v-if="toolName" class="font-mono text-xs text-muted-foreground">{{ toolName }}</span>
       <span
         v-if="stateLabel"
         class="ml-auto text-xs font-medium"
         :class="
-          stateLabel === 'Đã cho phép'
+          stateKind === 'allowed'
             ? 'text-emerald-600 dark:text-emerald-500'
-            : stateLabel === 'Đã từ chối'
+            : stateKind === 'denied'
               ? 'text-destructive'
               : 'text-muted-foreground'
         "
@@ -194,7 +204,7 @@ function submitAnswers(): void {
             :key="option.label"
             variant="outline"
             size="sm"
-            class="h-auto w-full justify-start py-1.5 text-left text-[13px]"
+            class="h-auto min-h-11 w-full justify-start py-2 text-left text-[13px] sm:min-h-0 sm:py-1.5"
             :class="answers[index] === option.label ? 'border-primary bg-primary/10' : ''"
             :disabled="!interactive"
             @click="pick(index, option.label)"
@@ -212,9 +222,9 @@ function submitAnswers(): void {
         <div class="mt-1.5 flex items-center gap-1.5">
           <Input
             v-model="others[index]"
-            class="h-7 text-[13px]"
-            placeholder="Khác — nhập câu trả lời…"
-            :aria-label="`Câu trả lời khác cho: ${q.question}`"
+            class="h-10 text-[13px] sm:h-7"
+            :placeholder="t('approval.otherPlaceholder')"
+            :aria-label="t('approval.otherAnswerAria', { question: q.question })"
             :disabled="!interactive"
             @update:model-value="answerWithOther(index)"
           />
@@ -223,17 +233,17 @@ function submitAnswers(): void {
     </div>
 
     <div v-if="ui?.deciding" class="mt-2.5 text-xs text-muted-foreground">
-      Đang chuyển quyết định…
+      {{ t("approval.submitting") }}
     </div>
 
-    <div v-if="interactive" class="mt-2.5 flex items-center gap-2">
+    <div v-if="interactive" class="mt-2.5 flex flex-wrap items-center gap-2">
       <template v-if="kind === 'tool_permission'">
-        <Button size="sm" @click="decide('allow')">Cho phép</Button>
-        <Button size="sm" variant="outline" @click="decide('deny')">Từ chối</Button>
+        <Button size="sm" class="max-sm:h-10" @click="decide('allow')">{{ t("approval.allow") }}</Button>
+        <Button size="sm" variant="outline" class="max-sm:h-10" @click="decide('deny')">{{ t("approval.deny") }}</Button>
       </template>
       <template v-else>
-        <Button size="sm" :disabled="!allAnswered" @click="submitAnswers">Gửi câu trả lời</Button>
-        <Button size="sm" variant="outline" @click="decide('deny')">Bỏ qua</Button>
+        <Button size="sm" class="max-sm:h-10" :disabled="!allAnswered" @click="submitAnswers">{{ t("approval.submitAnswers") }}</Button>
+        <Button size="sm" variant="outline" class="max-sm:h-10" @click="decide('deny')">{{ t("approval.skip") }}</Button>
       </template>
     </div>
   </div>

@@ -27,6 +27,7 @@ import {
   formatFileCounter,
   nextPathAfterToggleReview,
 } from "@/features/review/review-navigation";
+import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const props = defineProps<{
@@ -40,7 +41,7 @@ const props = defineProps<{
   isReviewed?: boolean;
   dirty?: boolean;
   isPathReviewed?: (path: string) => boolean;
-  /** The file's change type in the visible Changes list ("sửa", "thêm", …). */
+  /** The file's change type label from the visible Changes list. */
   statusLabel?: string;
   /** Save/revert failure surfaced by the parent; rendered in the footer. */
   error?: string | null;
@@ -61,6 +62,8 @@ const emit = defineEmits<{
   adoptConflict: [];
   overwriteConflict: [];
 }>();
+
+const { t } = useI18n();
 
 const isFullscreen = ref(false);
 const confirmingRevert = ref(false);
@@ -163,7 +166,7 @@ const handleToggleReviewed = () => {
   // Unmarking a reviewed file stays on it; marking the last unreviewed file
   // closes the dialog.
   if (!wasReviewed) {
-    toast.success("Đã duyệt toàn bộ thay đổi.");
+    toast.success(t("review.reviewedAll"));
     emit("update:open", false);
   }
 };
@@ -225,14 +228,14 @@ watch(
         'flex flex-col p-0 gap-0 overflow-hidden border border-border bg-background',
         isFullscreen
           ? 'fixed inset-0 z-50 w-screen h-screen max-w-none rounded-none translate-x-0 translate-y-0 sm:max-w-none'
-          : 'w-[92vw] h-[88vh] max-w-7xl sm:max-w-7xl rounded-xl'
+          : 'w-[92vw] h-[88dvh] max-w-7xl sm:max-w-7xl rounded-xl'
       )"
       :show-close-button="false"
     >
       <!-- Header -->
       <div
         ref="headerRef"
-        class="flex items-center justify-between border-b border-border px-4 py-3 bg-muted/20"
+        class="flex flex-wrap items-center justify-between gap-y-2 border-b border-border px-4 py-3 bg-muted/20"
       >
         <div class="flex flex-col gap-0.5 min-w-0 flex-1">
           <div class="flex items-center gap-2">
@@ -263,16 +266,16 @@ watch(
         <div v-if="allPaths.length > 1" class="flex items-center gap-1 mx-4">
           <button
             type="button"
-            class="p-1.5 hover:bg-muted rounded-md transition-colors"
-            title="File trước"
+            class="p-2 hover:bg-muted rounded-md transition-colors sm:p-1.5"
+            :title="t('review.previousFile')"
             @click="handlePrevious"
           >
             <ChevronLeft class="h-4 w-4" />
           </button>
           <button
             type="button"
-            class="p-1.5 hover:bg-muted rounded-md transition-colors"
-            title="File tiếp theo"
+            class="p-2 hover:bg-muted rounded-md transition-colors sm:p-1.5"
+            :title="t('review.nextFile')"
             @click="handleNext"
           >
             <ChevronRight class="h-4 w-4" />
@@ -290,7 +293,7 @@ watch(
                 renderSideBySide ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
               )"
               :aria-pressed="renderSideBySide"
-              title="Hiển thị chia đôi"
+              :title="t('review.sideBySide')"
               @click="sideBySideOverride = true"
             >
               <Columns2 class="h-3.5 w-3.5" />
@@ -302,7 +305,7 @@ watch(
                 !renderSideBySide ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
               )"
               :aria-pressed="!renderSideBySide"
-              title="Hiển thị nội tuyến"
+              :title="t('review.inline')"
               @click="sideBySideOverride = false"
             >
               <Rows2 class="h-3.5 w-3.5" />
@@ -312,10 +315,10 @@ watch(
           <button
             v-if="mode === 'diff' && showMinimapToggle"
             type="button"
-            class="p-1.5 hover:bg-muted rounded-md transition-colors"
+            class="p-2 hover:bg-muted rounded-md transition-colors sm:p-1.5"
             :class="minimapEnabled ? 'text-foreground' : 'text-muted-foreground'"
             :aria-pressed="minimapEnabled"
-            :title="minimapEnabled ? 'Ẩn bản đồ thu nhỏ' : 'Hiện bản đồ thu nhỏ'"
+            :title="minimapEnabled ? t('review.hideMinimap') : t('review.showMinimap')"
             @click="minimapOn = !minimapOn"
           >
             <MapIcon class="h-4 w-4" />
@@ -323,8 +326,8 @@ watch(
 
           <button
             type="button"
-            class="p-1.5 hover:bg-muted rounded-md transition-colors"
-            :title="isFullscreen ? 'Thu nhỏ' : 'Toàn màn hình'"
+            class="p-2 hover:bg-muted rounded-md transition-colors sm:p-1.5"
+            :title="isFullscreen ? t('review.exitFullscreen') : t('review.fullscreen')"
             @click="toggleFullscreen"
           >
             <Minimize2 v-if="isFullscreen" class="h-4 w-4" />
@@ -332,8 +335,8 @@ watch(
           </button>
           <button
             type="button"
-            class="p-1.5 hover:bg-muted rounded-md transition-colors"
-            title="Đóng"
+            class="p-2 hover:bg-muted rounded-md transition-colors sm:p-1.5"
+            :title="t('review.close')"
             @click="handleClose"
           >
             <X class="h-4 w-4" />
@@ -364,12 +367,12 @@ watch(
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-between gap-3 border-t border-border px-4 py-3 bg-muted/20">
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border px-4 py-3 bg-muted/20">
         <!-- Left: error / conflict / dirty status -->
         <div class="flex min-w-0 items-center gap-2">
           <template v-if="conflict">
             <span class="truncate text-xs text-foreground">
-              Tệp đã bị thay đổi trên Runner kể từ khi mở.
+              {{ t("review.conflict") }}
             </span>
             <button
               type="button"
@@ -377,7 +380,7 @@ watch(
               :disabled="saving"
               @click="emit('adoptConflict')"
             >
-              Tải bản mới (bỏ bản nháp)
+              {{ t("review.loadFresh") }}
             </button>
             <button
               type="button"
@@ -385,76 +388,76 @@ watch(
               :disabled="saving"
               @click="emit('overwriteConflict')"
             >
-              Ghi đè
+              {{ t("review.overwrite") }}
             </button>
           </template>
           <span v-else-if="error" class="truncate text-xs text-destructive" :title="error">
             {{ error }}
           </span>
           <span v-else-if="dirty" class="text-xs text-muted-foreground">
-            Chưa lưu thay đổi
+            {{ t("review.unsaved") }}
           </span>
         </div>
 
         <!-- Right: Actions -->
-        <div v-if="confirmingRevert" class="flex shrink-0 items-center gap-2">
-          <span class="text-xs text-muted-foreground">Khôi phục tệp về bản chụp?</span>
+        <div v-if="confirmingRevert" class="flex shrink-0 flex-wrap items-center gap-2">
+          <span class="text-xs text-muted-foreground">{{ t("review.revertConfirm") }}</span>
           <button
             type="button"
-            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors"
+            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors max-sm:min-h-10"
             @click="handleRevertCancel"
           >
-            Huỷ
+            {{ t("review.cancel") }}
           </button>
           <button
             type="button"
-            class="rounded-md bg-destructive px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-destructive/90 disabled:opacity-50"
+            class="rounded-md bg-destructive px-3 py-1.5 text-sm text-primary-foreground transition-colors hover:bg-destructive/90 disabled:opacity-50 max-sm:min-h-10"
             :disabled="reverting"
             @click="handleRevertConfirm"
           >
-            Xác nhận
+            {{ t("review.confirm") }}
           </button>
         </div>
-        <div v-else class="flex shrink-0 items-center gap-2">
+        <div v-else class="flex shrink-0 flex-wrap items-center gap-2">
           <button
             type="button"
-            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            title="Khôi phục thay đổi"
+            class="px-3 py-1.5 text-sm hover:bg-muted rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 max-sm:min-h-10"
+            :title="t('review.revertChanges')"
             :disabled="reverting"
             @click="handleRevertRequest"
           >
             <RotateCcw class="h-3.5 w-3.5" />
-            Khôi phục
+            {{ t("review.revert") }}
           </button>
           <button
             type="button"
             :disabled="!dirty || saving"
             :class="cn(
-              'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5',
+              'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5 max-sm:min-h-10',
               dirty
                 ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                 : 'bg-muted text-muted-foreground cursor-not-allowed'
             )"
-            title="Lưu thay đổi"
+            :title="t('review.saveChanges')"
             @click="handleSave"
           >
             <Save class="h-3.5 w-3.5" />
-            Lưu
+            {{ t("review.save") }}
           </button>
           <button
             v-if="mode === 'diff'"
             type="button"
             :class="cn(
-              'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5',
+              'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5 max-sm:min-h-10',
               isReviewed
                 ? 'bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30'
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
             )"
-            :title="isReviewed ? 'Đã duyệt' : 'Đánh dấu đã duyệt'"
+            :title="isReviewed ? t('review.reviewed') : t('review.markReviewed')"
             @click="handleToggleReviewed"
           >
             <Check class="h-3.5 w-3.5" />
-            {{ isReviewed ? '✓ Đã duyệt' : 'Đã duyệt' }}
+            {{ isReviewed ? t('review.reviewedCheck') : t('review.reviewed') }}
           </button>
         </div>
       </div>

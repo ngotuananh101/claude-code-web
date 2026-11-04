@@ -60,6 +60,13 @@ function labelFor(task: BackgroundTask): string {
   return task.description || task.subagentType || task.workflowName || task.taskType || task.taskId;
 }
 
+// Nesting is unbounded in the journal but the screen is not: past the third
+// level the indent stops growing so a deep tree cannot push its labels off a
+// phone's edge.
+function indentFor(level: number): string {
+  return `${Math.min(level, 3) * 12}px`;
+}
+
 function dotClass(status: BackgroundTask["status"]): string {
   switch (status) {
     case "running":
@@ -79,13 +86,13 @@ function dotClass(status: BackgroundTask["status"]): string {
     <li
       v-for="node in visible"
       :key="node.task.taskId"
-      class="flex items-center gap-2 text-[13px]"
-      :style="{ paddingLeft: `${node.level * 16}px` }"
+      class="flex min-h-9 items-center gap-2 text-[13px] sm:min-h-0"
+      :style="{ paddingLeft: indentFor(node.level) }"
     >
       <button
         v-if="node.children.length > 0"
         type="button"
-        class="shrink-0 text-muted-foreground"
+        class="-m-2 shrink-0 p-2 text-muted-foreground sm:m-0 sm:p-0"
         @click.stop="toggle(node.task.taskId)"
       >
         <ChevronDown v-if="!collapsed.has(node.task.taskId)" :size="12" />
@@ -95,20 +102,20 @@ function dotClass(status: BackgroundTask["status"]): string {
 
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-2 text-left hover:bg-muted/40 rounded px-1"
+        class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left hover:bg-muted/40 rounded px-1 sm:min-h-0"
         @click="emit('select-task', node.task)"
       >
         <i class="size-[7px] shrink-0 rounded-full" :class="dotClass(node.task.status)" aria-hidden="true" />
         <span class="min-w-0 flex-1 truncate" :title="labelFor(node.task)">{{ labelFor(node.task) }}</span>
         <span
           v-if="node.task.lastToolName"
-          class="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground"
+          class="max-w-24 shrink-0 truncate rounded border border-border px-1 font-mono text-[10px] text-muted-foreground"
         >
           {{ node.task.lastToolName }}
         </span>
         <span
           v-if="node.task.usage"
-          class="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground"
+          class="shrink-0 rounded border border-border px-1 font-mono text-[10px] text-muted-foreground max-sm:hidden"
         >
           {{ node.task.usage.totalTokens }} tok
         </span>

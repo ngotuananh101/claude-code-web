@@ -21,6 +21,9 @@ import {
   shouldAutoLoadEarlier,
   shouldFollowAppend,
 } from "@/features/journal/scroll.ts";
+import { useI18n } from "@/lib/i18n";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   events: BrowserReplayEvent[];
@@ -73,7 +76,7 @@ function taskFor(toolCallId: string): BackgroundTask | undefined {
 }
 
 const emptyCopy = computed(() =>
-  props.sessionLive ? "Đang chờ sự kiện đầu tiên." : "Phiên này chưa có gì trong journal.",
+  props.sessionLive ? t("journal.emptyLive") : t("journal.emptyIdle"),
 );
 
 /**
@@ -312,7 +315,7 @@ watch(
     class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-opacity duration-150"
     :class="isMountedAndScrolled ? 'opacity-100' : 'opacity-0'"
   >
-    <ScrollArea ref="scrollAreaRef" class="min-h-0 min-w-0 flex-1">
+    <ScrollArea ref="scrollAreaRef" class="min-h-0 min-w-0 flex-1 overscroll-contain">
       <div ref="contentRef" class="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-6 px-4 py-6 md:px-6">
         <BackgroundTaskBand
           v-if="(backgroundTasks?.length ?? 0) > 0"
@@ -323,8 +326,7 @@ watch(
           v-if="needsResync"
           class="border-l-2 border-destructive bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
         >
-          Journal đang được sửa chữa. Retention đã xoá phần lịch sử mà view này
-          đang giữ, bản ghi sẽ bắt đầu lại từ sự kiện còn sót sớm nhất.
+          {{ t("journal.repairing") }}
         </p>
 
         <p v-else-if="turns.length === 0" class="text-sm text-muted-foreground">
@@ -336,10 +338,10 @@ watch(
             <Button
               variant="ghost"
               size="sm"
-              class="text-xs text-muted-foreground hover:text-foreground"
+              class="text-xs text-muted-foreground hover:text-foreground max-sm:min-h-10 max-sm:text-sm"
               @click="loadEarlierTurns"
             >
-              Tải thêm tin nhắn cũ (còn {{ remainingEarlier }})
+              {{ t("journal.loadEarlier", { count: remainingEarlier }) }}
             </Button>
           </div>
 
@@ -370,9 +372,9 @@ watch(
         v-if="userScrolledUp"
         variant="outline"
         size="icon-sm"
-        class="absolute right-4 bottom-4 z-20 size-8 rounded-full border-border/80 bg-background/90 shadow-md backdrop-blur-xs transition hover:bg-muted md:right-8"
-        aria-label="Cuộn xuống dưới"
-        title="Cuộn xuống dưới"
+        class="absolute right-4 bottom-4 z-20 size-10 rounded-full border-border/80 bg-background/90 shadow-md backdrop-blur-xs transition hover:bg-muted sm:size-8 md:right-8"
+        :aria-label="t('journal.scrollDown')"
+        :title="t('journal.scrollDown')"
         @click="scrollToBottom('smooth')"
       >
         <ArrowDown :size="15" />

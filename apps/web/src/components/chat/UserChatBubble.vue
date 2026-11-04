@@ -5,7 +5,10 @@ import { computed, ref } from "vue";
 import { toast } from "vue-sonner";
 import type { UserTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
+import { useI18n } from "@/lib/i18n";
 import { attachmentUrl } from "../../services/attachments-api";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   /** The user turn to render. */
@@ -47,14 +50,14 @@ const imageAttachments = computed(() => {
 async function copyText(): Promise<void> {
   if (!props.turn.text) return;
   await navigator.clipboard.writeText(props.turn.text);
-  toast.success("Đã sao chép nội dung.");
+  toast.success(t("chat.copiedContent"));
 }
 
 /** Copy the raw payload JSON to the clipboard. */
 async function copyRawPayload(): Promise<void> {
   const text = JSON.stringify(props.turn.rawPayload, null, 2);
   await navigator.clipboard.writeText(text);
-  toast.success("Đã sao chép JSON.");
+  toast.success(t("chat.copiedJson"));
 }
 
 const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
@@ -101,7 +104,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
       <Clock :size="14" class="mt-0.5 shrink-0 text-muted-foreground" />
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          <span>Tác vụ theo lịch</span>
+          <span>{{ t("chat.scheduledTask") }}</span>
           <code
             v-if="turn.scheduleCron"
             class="rounded bg-muted px-1 py-0.5 font-mono text-[10px]"
@@ -129,9 +132,9 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         v-if="turn.text"
         type="button"
         @click="copyText"
-        title="Sao chép nội dung"
-        aria-label="Sao chép nội dung"
-        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+        :title="t('chat.copyContent')"
+        :aria-label="t('chat.copyContent')"
+        class="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors sm:size-6"
       >
         <Copy :size="13" />
       </button>
@@ -139,10 +142,10 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         v-if="turn.rawPayload !== undefined"
         type="button"
         :aria-expanded="showRaw"
-        :aria-label="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
+        :aria-label="showRaw ? t('chat.hideRaw') : t('chat.showRaw')"
         @click="showRaw = !showRaw"
-        :title="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
-        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+        :title="showRaw ? t('chat.hideRaw') : t('chat.showRaw')"
+        class="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors sm:size-6"
         :class="{ 'text-foreground bg-muted/60': showRaw }"
       >
         <Braces :size="13" />
@@ -168,10 +171,10 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         <button
           type="button"
           @click.stop="copyRawPayload"
-          class="mt-1 flex items-center gap-1 rounded border border-border/40 px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          class="mt-1 flex min-h-9 items-center gap-1 rounded border border-border/40 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors sm:min-h-0 sm:px-1.5 sm:py-0.5"
         >
           <Copy :size="11" />
-          <span>Sao chép JSON</span>
+          <span>{{ t("chat.copyJson") }}</span>
         </button>
       </div>
     </transition>
@@ -194,8 +197,8 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         >
           <button
             type="button"
-            class="absolute top-4 right-4 rounded-full p-1 text-white/70 hover:text-white"
-            aria-label="Đóng"
+            class="absolute top-4 right-4 rounded-full p-2 text-white/70 hover:text-white max-sm:p-3"
+            :aria-label="t('chat.close')"
             @click.stop="lightboxSrc = null"
           >
             <X :size="20" />
@@ -203,7 +206,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
           <img
             :src="lightboxSrc"
             alt=""
-            class="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
+            class="max-h-[90dvh] max-w-[90vw] rounded-lg object-contain"
             @click.stop
           />
         </div>

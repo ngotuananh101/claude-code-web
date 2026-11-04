@@ -8,6 +8,7 @@
  */
 
 import type { ScheduledTask } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 import { authFetch } from "./auth-api.ts";
 
 export type ListSchedulesResult =
@@ -19,24 +20,28 @@ export async function listSchedules(sessionId: string): Promise<ListSchedulesRes
   try {
     response = await authFetch(`/api/sessions/${encodeURIComponent(sessionId)}/schedules`);
   } catch {
-    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+    return { ok: false, code: "error", message: t("api.unreachableTo") };
   }
 
   if (response.status === 401) {
-    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+    return { ok: false, code: "unauthorized", message: t("api.sessionExpired") };
   }
   if (!response.ok) {
-    return { ok: false, code: "error", message: `Không tải được lịch (HTTP ${response.status}).` };
+    return {
+      ok: false,
+      code: "error",
+      message: t("api.schedulesHttpError", { status: response.status }),
+    };
   }
 
   try {
     const body = (await response.json()) as { schedules?: unknown };
     if (!Array.isArray(body.schedules)) {
-      return { ok: false, code: "error", message: "Phản hồi lịch không hợp lệ." };
+      return { ok: false, code: "error", message: t("api.invalidScheduleResponse") };
     }
     return { ok: true, schedules: body.schedules as ScheduledTask[] };
   } catch {
-    return { ok: false, code: "error", message: "Phản hồi lịch không hợp lệ." };
+    return { ok: false, code: "error", message: t("api.invalidScheduleResponse") };
   }
 }
 

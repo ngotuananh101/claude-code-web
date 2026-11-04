@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { resolveModelLabel } from "@/features/composer/composer-logic.ts";
 import {
-  EFFORT_LABELS,
   effortAt,
   effortLabel,
   effortLevelsFor,
@@ -20,6 +19,7 @@ import {
   triggerLabelWithProfile,
 } from "@/features/composer/model-picker.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * The model & effort picker (§5.2).
@@ -60,6 +60,7 @@ const emit = defineEmits<{
 }>();
 
 const open = ref(props.defaultOpen ?? false);
+const { t } = useI18n();
 watch(open, (value) => emit("update:open", value));
 /** Compact rows by default (name only); the chevron unfolds descriptions. */
 const showDescriptions = ref(false);
@@ -118,6 +119,15 @@ const activeIndex = computed(() =>
   props.effort === null ? -1 : levels.value.indexOf(props.effort),
 );
 const effortText = computed(() => effortLabel(props.effort));
+
+/** The trigger's tooltip: model, profile, effort, and the standing mode. */
+const triggerTitle = computed(() => {
+  let title = t("modelPicker.titleModel", { model: triggerLabel.value });
+  if (activeProfile.value) title += ` · ${activeProfile.value.name}`;
+  if (props.effort) title += t("modelPicker.titleEffort", { effort: effortText.value });
+  if (props.ultracode) title += " · ultracode";
+  return title;
+});
 
 /** A level has been chosen beyond model choice — worth a marker on the trigger. */
 const tuned = computed(() => props.effort !== null || props.ultracode);
@@ -183,9 +193,9 @@ function percent(index: number): string {
         variant="ghost"
         size="sm"
         :disabled="disabled"
-        class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted"
-        aria-label="Chọn model, mức nỗ lực và profile"
-        :title="`Model: ${triggerLabel}${activeProfile ? ` · ${activeProfile.name}` : ''}${effort ? ` · nỗ lực ${effortText}` : ''}${ultracode ? ' · ultracode' : ''}`"
+        class="h-7! gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs font-medium text-muted-foreground hover:bg-muted max-sm:h-9!"
+        :aria-label="t('modelPicker.triggerAria')"
+        :title="triggerTitle"
       >
         <Cpu :size="13" class="shrink-0" />
         <span class="max-w-[170px] truncate">{{ chipLabel }}</span>
@@ -201,7 +211,7 @@ function percent(index: number): string {
       side="top"
       align="end"
       :side-offset="8"
-      class="w-[336px] max-w-[calc(100vw-2rem)] gap-0 rounded-xl p-2.5"
+      class="max-h-[min(70dvh,32rem)] w-[336px] max-w-[calc(100vw-2rem)] gap-0 overflow-y-auto overscroll-contain rounded-xl p-2.5"
     >
       <!-- Provider header: whose lineup this is, with the API badge the image
            shows and a chevron that unfolds the rows' descriptions. -->
@@ -212,7 +222,7 @@ function percent(index: number): string {
         <span class="min-w-0 flex-1">
           <span class="block text-[13px] font-semibold leading-tight">Claude Code</span>
           <span class="block truncate font-mono text-[10px] text-muted-foreground">
-            {{ runnerId === "" ? "chưa chọn runner" : shortRunnerId(runnerId) }}
+            {{ runnerId === "" ? t("modelPicker.noRunner") : shortRunnerId(runnerId) }}
           </span>
         </span>
         <span
@@ -222,8 +232,8 @@ function percent(index: number): string {
         </span>
         <button
           type="button"
-          class="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          :aria-label="showDescriptions ? 'Ẩn mô tả model' : 'Hiện mô tả model'"
+          class="shrink-0 cursor-pointer rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:p-1"
+          :aria-label="showDescriptions ? t('modelPicker.hideDescriptions') : t('modelPicker.showDescriptions')"
           :aria-expanded="showDescriptions"
           @click="showDescriptions = !showDescriptions"
         >
@@ -246,22 +256,22 @@ function percent(index: number): string {
           <button
             v-if="profileId"
             type="button"
-            class="cursor-pointer rounded px-1 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-            title="Bỏ chọn profile — dùng cấu hình mặc định của runner"
+            class="min-h-8 cursor-pointer rounded px-2 font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground sm:min-h-0 sm:px-1"
+            :title="t('modelPicker.clearProfile')"
             @click="selectProfile(null)"
           >
-            Bỏ
+            {{ t("modelPicker.clear") }}
           </button>
         </div>
         <button
           type="button"
           role="radio"
           :aria-checked="profileId == null"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
           :class="profileId == null && 'bg-accent/60'"
           @click="selectProfile(null)"
         >
-          <span class="min-w-0 flex-1 truncate text-[13px]">Mặc định (Runner Host)</span>
+          <span class="min-w-0 flex-1 truncate text-[13px]">{{ t("modelPicker.defaultRunnerHost") }}</span>
           <Check v-if="profileId == null" :size="14" class="shrink-0 text-primary" />
         </button>
         <button
@@ -270,7 +280,7 @@ function percent(index: number): string {
           type="button"
           role="radio"
           :aria-checked="profile.profileId === profileId"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
           :class="profile.profileId === profileId && 'bg-accent/60'"
           @click="selectProfile(profile.profileId)"
         >
@@ -299,7 +309,7 @@ function percent(index: number): string {
           type="button"
           role="radio"
           :aria-checked="entry.value === model"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
           :class="entry.value === model && 'bg-accent/60'"
           @click="chooseModel(entry.value)"
         >
@@ -332,12 +342,12 @@ function percent(index: number): string {
       <div v-if="levels.length > 0" class="mt-1 border-t border-border pt-2.5">
         <div class="flex items-center justify-between px-1">
           <span class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Mức nỗ lực
+            {{ t("modelPicker.effort") }}
           </span>
           <button
             type="button"
-            class="cursor-pointer rounded px-1 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-            title="Bấm để trả về mặc định của Claude Code"
+            class="min-h-8 cursor-pointer rounded px-2 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground sm:min-h-0 sm:px-1"
+            :title="t('modelPicker.effortReset')"
             @click="emit('update:effort', null)"
           >
             {{ effortText }}
@@ -345,10 +355,10 @@ function percent(index: number): string {
         </div>
 
         <div
-          class="relative mt-3 h-7 cursor-pointer touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          class="relative mt-3 h-7 cursor-pointer touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring/50 max-sm:h-10"
           role="slider"
           tabindex="0"
-          aria-label="Mức nỗ lực"
+          :aria-label="t('modelPicker.effortAria')"
           aria-orientation="horizontal"
           :aria-valuemin="0"
           :aria-valuemax="levels.length - 1"
@@ -384,7 +394,7 @@ function percent(index: number): string {
         </div>
 
         <div class="mt-0.5 flex justify-between px-0.5 font-mono text-[10px] text-muted-foreground/80">
-          <span v-for="level in levels" :key="`label-${level}`">{{ EFFORT_LABELS[level] ?? level }}</span>
+          <span v-for="level in levels" :key="`label-${level}`">{{ effortLabel(level) }}</span>
         </div>
       </div>
 
@@ -394,14 +404,14 @@ function percent(index: number): string {
           type="button"
           role="switch"
           :aria-checked="ultracode"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-accent"
+          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
           @click="emit('update:ultracode', !ultracode)"
         >
           <Zap :size="13" class="shrink-0" :class="ultracode ? 'text-amber-400' : 'text-muted-foreground'" />
           <span class="flex-1 text-left">
             <span class="block text-[13px] leading-tight">Ultracode</span>
             <span class="block text-[11px] text-muted-foreground">
-              Điều phối workflow động suốt phiên, ở mọi mức effort
+              {{ t("modelPicker.ultracodeDesc") }}
             </span>
           </span>
           <span

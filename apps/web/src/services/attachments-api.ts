@@ -8,18 +8,13 @@
  */
 
 import type { AttachmentInfo } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 import { authFetch } from "./auth-api.ts";
 
 /** A successful upload: the server echoes the metadata it stored per file. */
 export type UploadAttachmentsOutcome =
   | { ok: true; attachments: AttachmentInfo[] }
   | { ok: false; message: string };
-
-/** The Vietnamese copy for a 413 payload-too-large refusal. */
-const SIZE_LIMIT_MESSAGE = "Kích thước tệp quá giới hạn cho phép (tối đa 20MB/tệp, 50MB tổng cộng)";
-
-/** Generic fallback for a non-JSON or network failure — never throws. */
-const UNREACHABLE_MESSAGE = "Không thể tải tệp lên.";
 
 /**
  * Upload files to a session's attachments endpoint.
@@ -46,7 +41,7 @@ export async function uploadSessionAttachments(
       body: form,
     });
   } catch {
-    return { ok: false, message: UNREACHABLE_MESSAGE };
+    return { ok: false, message: t("api.uploadFailed") };
   }
 
   if (response.status === 201) {
@@ -55,11 +50,11 @@ export async function uploadSessionAttachments(
   }
 
   if (response.status === 413) {
-    return { ok: false, message: SIZE_LIMIT_MESSAGE };
+    return { ok: false, message: t("api.attachmentSizeLimit") };
   }
 
   if (!response.ok) {
-    let message = UNREACHABLE_MESSAGE;
+    let message = t("api.uploadFailed");
     try {
       const data = (await response.json()) as { message?: string };
       if (typeof data.message === "string" && data.message !== "") {
@@ -71,7 +66,7 @@ export async function uploadSessionAttachments(
     return { ok: false, message };
   }
 
-  return { ok: false, message: UNREACHABLE_MESSAGE };
+  return { ok: false, message: t("api.uploadFailed") };
 }
 
 /**

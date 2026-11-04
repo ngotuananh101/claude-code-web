@@ -8,6 +8,9 @@ import {
   type BackgroundTaskStatus,
   formatTaskElapsed,
 } from "@/features/journal/background-tasks.ts";
+import { useI18n } from "@/lib/i18n";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   /** Live, non-ambient tasks; empty hides the band. */
@@ -69,11 +72,11 @@ function statusLabel(status: BackgroundTaskStatus): string | undefined {
     case "running":
       return undefined;
     case "completed":
-      return "đã xong";
+      return t("chat.taskCompleted");
     case "failed":
-      return "lỗi";
+      return t("chat.taskFailed");
     case "stopped":
-      return "đã dừng";
+      return t("chat.taskStopped");
   }
 }
 
@@ -90,12 +93,12 @@ const oldestElapsed = computed(() => {
   <div class="border-l-2 border-primary/50 bg-primary/5 px-3.5 py-2.5 text-[13px]">
     <button
       type="button"
-      class="flex w-full cursor-pointer items-center gap-2 text-left"
+      class="flex min-h-9 w-full cursor-pointer items-center gap-2 py-1 text-left sm:min-h-0 sm:py-0"
       :aria-expanded="expanded"
       @click="expanded = !expanded"
     >
       <i class="size-[7px] shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-      <span class="font-medium text-foreground">{{ tasks.length }} task nền đang chạy</span>
+      <span class="font-medium text-foreground">{{ t("chat.runningTasks", { count: tasks.length }) }}</span>
       <span v-if="oldestElapsed" class="font-mono text-xs text-muted-foreground">
         · {{ oldestElapsed }}
       </span>

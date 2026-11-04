@@ -8,20 +8,20 @@
  *   create that account; the server is locked to the moment the users table is
  *   empty, so a 403 means the account already exists.
  *
- * Neither throws: a transport/parse failure becomes a generic Vietnamese
+ * Neither throws: a transport/parse failure becomes a generic localized
  * outcome so a caller never needs a try/catch. The server returns plain-text
  * refusals (403 "forbidden", 400 "bad request") rather than a JSON error
  * object, so the status code alone drives the message here.
  */
 
-/** Vietnamese copy for the plain-text status codes the server returns. */
-const STATUS_MESSAGES: Record<number, string> = {
-  400: "Tài khoản hoặc mật khẩu không hợp lệ.",
-  403: "Tài khoản đã được tạo rồi.",
-};
+import { t } from "@/lib/i18n";
 
-/** The copy for a transport or parse failure — there is no code to translate. */
-const UNREACHABLE = "Không kết nối được máy chủ.";
+/** The copy for the plain-text status codes the server returns. */
+function statusMessage(status: number): string {
+  if (status === 400) return t("api.invalidSetupCredentials");
+  if (status === 403) return t("api.accountAlreadyCreated");
+  return t("api.unreachable");
+}
 
 /**
  * Whether the owner account still needs seeding (§19.1). Answers `setupRequired`
@@ -46,7 +46,7 @@ export function fetchSetupStatus(): Promise<{ setupRequired: boolean }> {
  * Create the single owner account (§19.1): posts `{ username, password }` to
  * `POST /auth/setup`. A 201 sets the session cookie (HttpOnly, SameSite=Lax)
  * which the browser carries along automatically — the caller needs no token
- * handling. A 400/403 carries a Vietnamese reason, as does any transport
+ * handling. A 400/403 carries a localized reason, as does any transport
  * failure, all without throwing.
  */
 export function submitSetup(payload: {
@@ -60,10 +60,10 @@ export function submitSetup(payload: {
   })
     .then((response) => {
       if (response.ok) return { ok: true as const };
-      const message = STATUS_MESSAGES[response.status] ?? UNREACHABLE;
+      const message = statusMessage(response.status);
       return { ok: false as const, message };
     })
-    .catch(() => ({ ok: false as const, message: UNREACHABLE }));
+    .catch(() => ({ ok: false as const, message: t("api.unreachable") }));
 }
 
 let refreshPromise: Promise<boolean> | null = null;

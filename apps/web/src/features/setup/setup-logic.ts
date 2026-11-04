@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 /**
  * First-time setup validation rules (§19.1, Task 3).
  *
@@ -7,7 +9,7 @@
  * - Password must be at least 6 characters.
  * - Confirm password must match password.
  *
- * Error copy is Vietnamese, matching the rest of the UI. The server enforces
+ * Error copy is localized, matching the rest of the UI. The server enforces
  * the same shape (it trims the username and rejects empty values with 400), but
  * surfacing the rules here gives instant, localized feedback before a request
  * is ever sent.
@@ -24,9 +26,9 @@ export interface SetupFormData {
 }
 
 /** Vietnamese copy for each rule, in the order the checks run. */
-const ERROR_USERNAME_EMPTY = "Tên đăng nhập không được để trống.";
-const ERROR_PASSWORD_SHORT = "Mật khẩu phải có ít nhất 6 ký tự.";
-const ERROR_PASSWORD_MISMATCH = "Mật khẩu xác nhận không khớp.";
+const errorUsernameEmpty = (): string => t("auth.setupUsernameEmpty");
+const errorPasswordShort = (): string => t("auth.setupPasswordShort");
+const errorPasswordMismatch = (): string => t("auth.setupPasswordMismatch");
 
 /**
  * Validate the setup form fields in priority order: username, then password
@@ -37,15 +39,15 @@ const ERROR_PASSWORD_MISMATCH = "Mật khẩu xác nhận không khớp.";
  */
 export function validateSetupForm(form: SetupFormData): SetupFormResult {
   if (form.username.trim() === "") {
-    return { valid: false, error: ERROR_USERNAME_EMPTY };
+    return { valid: false, error: errorUsernameEmpty() };
   }
 
   if (form.password.length < 6) {
-    return { valid: false, error: ERROR_PASSWORD_SHORT };
+    return { valid: false, error: errorPasswordShort() };
   }
 
   if (form.confirmPassword !== form.password) {
-    return { valid: false, error: ERROR_PASSWORD_MISMATCH };
+    return { valid: false, error: errorPasswordMismatch() };
   }
 
   return { valid: true };

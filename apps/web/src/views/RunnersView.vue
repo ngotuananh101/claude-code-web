@@ -64,10 +64,10 @@ const mintedSeq = computed(() => {
 const setupCommands = computed(() => {
   if (minted.value === null) return "";
   return [
-    `CC_WEB_RUNNER_TOKEN=<token phía trên> cc-web-runner setup \\`,
+    `CC_WEB_RUNNER_TOKEN=${t("runners.tokenFromAbove")} cc-web-runner setup \\`,
     `  --server ${origin} --runner-id ${minted.value.runnerId}`,
     ``,
-    `cc-web-runner connect   # hoặc: cc-web-runner service install`,
+    `cc-web-runner connect   ${t("runners.orServiceInstall")}`,
   ].join("\n");
 });
 
@@ -213,7 +213,7 @@ onMounted(() => void load());
 
 <template>
   <ScrollArea class="min-h-0 flex-1">
-    <div class="mx-auto w-full max-w-[720px] px-7 py-7">
+    <div class="mx-auto w-full max-w-[720px] px-4 py-5 sm:px-7 sm:py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
         cc-web / {{ t("rail.runners").toLowerCase() }}
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
@@ -228,8 +228,8 @@ onMounted(() => void load());
       </div>
 
       <!-- The journal's newest event: sequence gutter, one-time payload. -->
-      <section v-if="minted" class="grid grid-cols-[76px_1fr] gap-x-3.5 border-t border-border py-4">
-        <span class="select-all pr-4.5 text-right font-mono text-xs leading-6 text-muted-foreground" aria-hidden="true">
+      <section v-if="minted" class="grid grid-cols-[2rem_1fr] gap-x-2 border-t border-border py-4 sm:grid-cols-[76px_1fr] sm:gap-x-3.5">
+        <span class="pr-1 text-right font-mono text-xs leading-6 text-muted-foreground select-all sm:pr-4.5" aria-hidden="true">
           {{ mintedSeq }}
         </span>
         <div class="grid gap-3.5">
@@ -269,41 +269,41 @@ onMounted(() => void load());
       <div
         v-for="(runner, i) in runners"
         :key="runner.runnerId"
-        class="grid grid-cols-[76px_1fr] gap-x-3.5 border-t border-border py-3 transition-colors hover:bg-muted/50"
+        class="grid grid-cols-[2rem_1fr] gap-x-2 border-t border-border py-3 transition-colors hover:bg-muted/50 sm:grid-cols-[76px_1fr] sm:gap-x-3.5"
       >
         <span
-          class="select-all pr-4.5 text-right font-mono text-xs leading-6 text-muted-foreground"
+          class="pr-1 text-right font-mono text-xs leading-6 text-muted-foreground select-all sm:pr-4.5"
           :title="new Date(runner.createdAt).toISOString()"
         >
           {{ pad(i + 1) }}
         </span>
-        <div class="flex min-w-0 items-center gap-3">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 sm:flex-nowrap">
           <div class="grid min-w-0 flex-1 gap-0.5">
             <div class="flex items-center gap-2">
               <span
-                class="truncate text-sm"
+                class="min-w-0 truncate text-sm"
                 :class="runner.name ? 'font-medium text-foreground' : 'font-mono text-[13px]'"
               >
                 {{ runner.name || runner.runnerId }}
               </span>
               <span
                 v-if="runner.name"
-                class="truncate font-mono text-xs text-muted-foreground"
+                class="min-w-0 truncate font-mono text-xs text-muted-foreground"
               >
                 ({{ runner.runnerId }})
               </span>
             </div>
-            <span class="font-mono text-xs text-muted-foreground">
+            <span class="truncate font-mono text-xs text-muted-foreground">
               {{ t("runners.connectedAt", { time: fmt(runner.createdAt) }) }}
               <template v-if="runner.revokedAt !== null"> · {{ t("runners.revokedAt", { time: fmt(runner.revokedAt) }) }}</template>
             </span>
           </div>
-          <div class="flex items-center gap-1.5 shrink-0">
+          <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
             <Button
               variant="ghost"
               size="icon-xs"
               :title="t('runners.renameRunner')"
-              class="text-muted-foreground hover:text-foreground"
+              class="text-muted-foreground hover:text-foreground max-sm:h-9 max-sm:w-9"
               @click="triggerRename(runner)"
             >
               <Pencil :size="14" />
@@ -312,7 +312,7 @@ onMounted(() => void load());
               v-if="runner.revokedAt === null"
               variant="outline"
               size="xs"
-              class="shrink-0"
+              class="shrink-0 max-sm:h-9"
               :disabled="revokeBusy"
               @click="revoke(runner.runnerId)"
             >
@@ -323,7 +323,7 @@ onMounted(() => void load());
               variant="ghost"
               size="icon-xs"
               :title="t('runners.inspectCapabilities')"
-              class="text-muted-foreground hover:text-foreground"
+              class="text-muted-foreground hover:text-foreground max-sm:h-9 max-sm:w-9"
               @click="inspectCapabilities(runner)"
             >
               <SlidersHorizontal :size="14" />
@@ -332,7 +332,7 @@ onMounted(() => void load());
               variant="ghost"
               size="icon-xs"
               :title="t('runners.deleteRunner')"
-              class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive max-sm:h-9 max-sm:w-9"
               @click="triggerDelete(runner)"
             >
               <Trash2 :size="14" />

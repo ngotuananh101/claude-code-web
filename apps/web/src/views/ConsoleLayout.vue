@@ -151,7 +151,7 @@ onUnmounted(() => {
 
     <SessionRail
       v-if="railOpen"
-      :class="!isWide && 'fixed inset-y-0 left-0 z-40 shadow-xl'"
+      :class="!isWide && 'fixed inset-y-0 left-0 z-40 h-dvh max-w-[85vw] shadow-xl'"
       @close="toggleRail"
     />
 
@@ -163,7 +163,7 @@ onUnmounted(() => {
         v-if="!railOpen"
         ref="openButton"
         type="button"
-        class="absolute top-1/2 left-0 z-30 -translate-y-1/2 cursor-pointer rounded-r-md border border-l-0 border-border bg-card py-2 pr-1 pl-0.5 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+        class="absolute top-1/2 left-0 z-30 min-h-11 min-w-9 -translate-y-1/2 touch-manipulation cursor-pointer rounded-r-md border border-l-0 border-border bg-card p-2 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
         :aria-label="t('rail.openSidebar')"
         :title="t('rail.openSidebar')"
         @click="openRail"

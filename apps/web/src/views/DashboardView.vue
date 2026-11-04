@@ -176,7 +176,7 @@ const recent = computed(() =>
 
 <template>
   <ScrollArea class="min-h-0 flex-1">
-    <div class="mx-auto grid w-full max-w-[900px] gap-5 px-7 py-7">
+    <div class="mx-auto grid w-full max-w-[900px] gap-5 px-4 py-5 sm:px-7 sm:py-7">
       <header>
         <p class="font-mono text-[13px] text-primary">cc-web / {{ t("rail.dashboard").toLowerCase() }}</p>
         <h1 class="mt-3 mb-1 text-[26px] font-medium tracking-tight">{{ t("dashboard.overviewTitle") }}</h1>
@@ -205,7 +205,7 @@ const recent = computed(() =>
       <section class="rounded-xl border border-border bg-card p-4.5">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 class="text-sm font-medium">{{ t("dashboard.usageLast14Days") }}</h2>
-          <div class="flex items-center gap-3.5">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <span
               v-for="item in legend"
               :key="item.label"
@@ -294,7 +294,7 @@ const recent = computed(() =>
             <li v-for="s in recent" :key="s.sessionId">
               <RouterLink
                 :to="`/sessions/${s.sessionId}`"
-                class="flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-muted/60"
+                class="flex min-h-11 items-center justify-between gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-muted/60 sm:min-h-0 sm:py-1.5"
               >
                 <span class="flex min-w-0 flex-1 items-center gap-1.5 truncate text-xs">
                   <span
@@ -311,7 +311,9 @@ const recent = computed(() =>
                     {{ s.title || s.sessionId }}
                   </span>
                 </span>
-                <span class="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+                <span
+                  class="flex max-w-[45%] shrink-0 items-center gap-2 text-[11px] text-muted-foreground max-sm:hidden"
+                >
                   {{ t("dashboard.eventsCountLabel", { count: s.eventCount, time: relativeTime(s.lastIngestedAt) }) }}
                   <i
                     v-if="s.live"

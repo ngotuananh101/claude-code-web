@@ -5,3 +5,27 @@ body,
 #app {
   height: 100%;
 }
+
+/* The browser's visible viewport, not the layout viewport: on a phone the
+ * two differ while Safari's bars expand and collapse, and 100% leaves the
+ * composer under the toolbar. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
+}
+
+/* iOS zooms the page into any focused control that renders text below 16px.
+ * The floor applies on small screens only, so dense desktop typography keeps
+ * its size while every input on a phone stays at the native zoom threshold.
+ * No `!important` needed: this file is unlayered, so it outranks Tailwind's
+ * `@layer utilities` classes like `text-[13px]` regardless of specificity. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

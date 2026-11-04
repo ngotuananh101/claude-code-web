@@ -11,6 +11,7 @@ import {
   processSummaryLabel,
   summarizeProcessState,
 } from "@/features/journal/chat-turns";
+import { useI18n } from "@/lib/i18n";
 import ApprovalCard from "../ApprovalCard.vue";
 import AgentThinkingStep from "./AgentThinkingStep.vue";
 import AgentToolStep from "./AgentToolStep.vue";
@@ -35,6 +36,8 @@ const props = defineProps<{
   /** Optional background-task lookup for the spawning tool step (P2b). */
   taskFor?: ((toolCallId: string) => BackgroundTask | undefined) | undefined;
 }>();
+
+const { t } = useI18n();
 
 const summary = computed(() => summarizeProcessState(props.steps, props.status));
 const executionSteps = computed(() => props.steps.filter((step) => step.kind !== "approval"));
@@ -79,8 +82,8 @@ watch(
 
 const summaryLabel = computed(() => {
   if (props.status === "running") {
-    if (pendingApprovals.value.length > 0) return "Đang chờ phê duyệt…";
-    return `Đã thực hiện ${executionSteps.value.length} bước`;
+    if (pendingApprovals.value.length > 0) return t("chat.awaitingApproval");
+    return t("chat.stepsDone", { count: executionSteps.value.length });
   }
   return processSummaryLabel(props.status, summary.value, pendingApprovals.value.length);
 });
@@ -93,7 +96,7 @@ const summaryLabel = computed(() => {
       type="button"
       :aria-expanded="isOpen"
       @click="isOpen = !isOpen"
-      class="flex min-w-0 max-w-full items-center gap-1.5 text-xs transition-colors"
+      class="flex min-h-9 min-w-0 max-w-full items-center gap-1.5 py-1 text-xs transition-colors sm:min-h-0 sm:py-0"
       :class="
         status === 'running'
           ? 'text-foreground'

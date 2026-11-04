@@ -8,6 +8,7 @@
  * a folder to place it in.
  */
 
+import { t } from "@/lib/i18n";
 import type { OwnerWorkspace } from "@/services/workspaces-api.ts";
 import type { SessionSummary } from "@/stores/sessions.ts";
 import { compositeIdFor, folderBasename, shortRunnerId } from "./folder-tree.ts";
@@ -102,8 +103,13 @@ export function groupSessions(
       key,
       label: grouping === "project" ? (rows[0]?.folder ?? fallbackLabel) : shortRunnerId(runnerId),
       title:
-        grouping === "project" ? (workspace?.path ?? key) : `${runnerId} (${rows.length} phiên)`,
-      detail: grouping === "project" ? shortRunnerId(runnerId) : `${rows.length} phiên`,
+        grouping === "project"
+          ? (workspace?.path ?? key)
+          : `${runnerId} (${t("sessionGroups.sessionCount", { count: rows.length })})`,
+      detail:
+        grouping === "project"
+          ? shortRunnerId(runnerId)
+          : t("sessionGroups.sessionCount", { count: rows.length }),
       sessions: rows,
     });
   }

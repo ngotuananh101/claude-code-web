@@ -48,7 +48,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
 
 <template>
   <Dialog :open="props.open" @update:open="(v: boolean) => emit('update:open', v)">
-    <DialogContent class="sm:max-w-lg">
+    <DialogContent class="max-h-[85dvh] overflow-y-auto overscroll-contain sm:max-w-lg">
       <DialogHeader>
         <DialogTitle class="text-base">
           {{ props.task?.description || props.task?.taskId || t("subagentTree.title") }}
@@ -59,7 +59,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
       </DialogHeader>
 
       <div v-if="props.task" class="space-y-3 text-sm">
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs text-muted-foreground">{{ t("subagentTree.status") }}</span>
           <span
             class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
@@ -81,7 +81,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
           </span>
         </div>
 
-        <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs [&_dd]:min-w-0">
           <dt class="text-muted-foreground">{{ t("subagentTree.taskId") }}</dt>
           <dd class="font-mono truncate">{{ props.task.taskId }}</dd>
           <dt v-if="props.task.parentTaskId" class="text-muted-foreground">{{ t("subagentTree.parentTask") }}</dt>
@@ -98,7 +98,7 @@ function statusBadgeClass(status: BackgroundTask["status"]): string {
 
         <div v-if="props.task.usage" class="rounded-md border border-border/60 bg-muted/40 p-2.5">
           <div class="mb-1 text-xs font-semibold text-foreground/70">{{ t("subagentTree.usage") }}</div>
-          <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs [&_dd]:min-w-0">
             <dt class="text-muted-foreground">{{ t("subagentTree.tokens") }}</dt>
             <dd class="font-mono">{{ props.task.usage.totalTokens }}</dd>
             <dt class="text-muted-foreground">{{ t("subagentTree.toolUses") }}</dt>

@@ -346,7 +346,7 @@ async function confirmDelete(): Promise<void> {
 
 <template>
   <ScrollArea class="min-h-0 flex-1">
-    <div class="w-full px-7 py-7">
+    <div class="w-full px-4 py-5 sm:px-7 sm:py-7">
       <p class="mb-6 flex items-center gap-3.5 font-mono text-[13px] text-primary">
         cc-web / {{ t("rail.profiles").toLowerCase() }}
         <span class="h-px flex-1 bg-border" aria-hidden="true" />
@@ -356,14 +356,14 @@ async function confirmDelete(): Promise<void> {
         {{ t("profiles.profilesDataSourceDesc") }}
       </p>
 
-      <div class="mb-6 flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2.5">
+      <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex w-full min-w-0 flex-wrap items-center gap-2.5 sm:w-auto">
           <span class="text-xs font-medium text-muted-foreground">{{ t("profiles.selectProfileLabel") }}</span>
           <Select
             :model-value="selectedId ?? ''"
             @update:model-value="selectProfile"
           >
-            <SelectTrigger class="w-64 sm:w-72">
+            <SelectTrigger class="w-full min-w-0 sm:w-72">
               <SelectValue :placeholder="t('profiles.selectOrNewPlaceholder')">
                 <span v-if="selected" class="truncate font-medium text-foreground">
                   {{ selected.name }}
@@ -377,7 +377,7 @@ async function confirmDelete(): Promise<void> {
             <SelectContent
               position="popper"
               :side-offset="4"
-              class="w-[var(--reka-select-trigger-width)] min-w-72"
+              class="w-[var(--reka-select-trigger-width)] min-w-72 max-w-[calc(100vw-2rem)]"
             >
               <SelectItem value="" :text-value="t('profiles.newProfileOption')">
                 <span class="font-medium text-primary">{{ t("profiles.newProfileOption") }}</span>
@@ -507,7 +507,7 @@ async function confirmDelete(): Promise<void> {
               </p>
               <div class="overflow-hidden rounded-md border border-border">
                 <div
-                  class="flex items-center gap-3 border-b border-border bg-muted/40 px-2 py-1.5 text-[11px] uppercase text-muted-foreground"
+                  class="hidden items-center gap-3 border-b border-border bg-muted/40 px-2 py-1.5 text-[11px] uppercase text-muted-foreground sm:flex"
                 >
                   <span class="min-w-0 flex-1">{{ t("profiles.roleEnvVarHeader") }}</span>
                   <span class="w-[52%] shrink-0">{{ t("profiles.upstreamModelHeader") }}</span>
@@ -515,7 +515,7 @@ async function confirmDelete(): Promise<void> {
                 <div
                   v-for="m in MODEL_ROLES"
                   :key="m.role"
-                  class="flex items-center gap-3 border-t border-border px-2 py-1.5 first:border-t-0"
+                  class="flex flex-col gap-1.5 border-t border-border px-2 py-2 first:border-t-0 sm:flex-row sm:items-center sm:gap-3 sm:py-1.5"
                 >
                   <div class="min-w-0 flex-1">
                     <div class="font-medium capitalize">{{ m.role }}</div>
@@ -526,7 +526,7 @@ async function confirmDelete(): Promise<void> {
                       {{ m.envVar }}
                     </code>
                   </div>
-                  <div class="w-[52%] shrink-0">
+                  <div class="w-full shrink-0 sm:w-[52%]">
                     <ModelCombobox
                       :model-value="form.modelMapping[m.role] ?? ''"
                       :models="availableModels"
@@ -571,7 +571,7 @@ async function confirmDelete(): Promise<void> {
             </div>
 
             <div
-              class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#09090b] min-h-[420px]"
+              class="relative flex-1 overflow-hidden rounded-xl border border-border bg-[#09090b] min-h-[260px] sm:min-h-[420px]"
             >
               <MonacoCodeEditor
                 :content="json"
@@ -580,6 +580,7 @@ async function confirmDelete(): Promise<void> {
                 :options="{
                   fontSize: 12,
                   lineNumbers: 'on',
+                  wordWrap: 'on',
                   scrollBeyondLastLine: false,
                   tabSize: 2,
                   renderLineHighlight: 'all',
@@ -596,7 +597,7 @@ async function confirmDelete(): Promise<void> {
               </div>
             </div>
 
-            <div class="flex justify-end gap-3">
+            <div class="flex flex-wrap justify-end gap-3">
               <Button
                 v-if="editingDetail"
                 variant="outline"

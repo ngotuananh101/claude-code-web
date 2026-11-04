@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { setLocale, t } from "./index.ts";
 
 describe("i18n module", () => {
   beforeEach(() => {
+    setLocale("vi");
+  });
+
+  // Other suites assert the Vietnamese copy; the module state is shared.
+  afterEach(() => {
     setLocale("vi");
   });
 
@@ -28,6 +33,19 @@ describe("i18n module", () => {
 
   test("returns raw key string when missing in all locales", () => {
     expect(t("nonexistent.key")).toBe("nonexistent.key");
+  });
+
+  test("translates the inspect, review, and service-copy keys", () => {
+    expect(t("inspect.tabFiles")).toBe("Tệp tin");
+    expect(t("review.save")).toBe("Lưu");
+    expect(t("rpc.fileConflict")).toBe("Tệp đã bị thay đổi — hãy tải lên và thử lại.");
+    expect(t("time.minutesAgo", { count: 5 })).toBe("5 phút trước");
+
+    setLocale("en");
+    expect(t("inspect.tabFiles")).toBe("Files");
+    expect(t("review.save")).toBe("Save");
+    expect(t("rpc.fileConflict")).toBe("The file changed — reload it and try again.");
+    expect(t("time.minutesAgo", { count: 5 })).toBe("5 minutes ago");
   });
 
   test("translates user profile dialog keys in vi and en", () => {

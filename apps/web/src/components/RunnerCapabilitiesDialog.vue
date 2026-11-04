@@ -62,7 +62,7 @@ function setOpen(value: boolean): void {
 
 <template>
   <Dialog :open="props.open" @update:open="setOpen">
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="flex max-h-[85dvh] flex-col gap-3 overflow-hidden sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{{ t("runners.capabilitiesDialogTitle") }}</DialogTitle>
         <DialogDescription>
@@ -70,10 +70,10 @@ function setOpen(value: boolean): void {
         </DialogDescription>
       </DialogHeader>
 
-      <div class="flex gap-2 border-b border-border pb-2">
+      <div class="flex shrink-0 gap-2 overflow-x-auto border-b border-border pb-2">
         <button
           type="button"
-          class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+          class="min-h-9 shrink-0 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors sm:min-h-0 sm:py-1.5"
           :class="
             activeTab === 'plugins'
               ? 'bg-primary text-primary-foreground'
@@ -85,7 +85,7 @@ function setOpen(value: boolean): void {
         </button>
         <button
           type="button"
-          class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+          class="min-h-9 shrink-0 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors sm:min-h-0 sm:py-1.5"
           :class="
             activeTab === 'mcp'
               ? 'bg-primary text-primary-foreground'
@@ -97,7 +97,7 @@ function setOpen(value: boolean): void {
         </button>
         <button
           type="button"
-          class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+          class="min-h-9 shrink-0 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors sm:min-h-0 sm:py-1.5"
           :class="
             activeTab === 'agents'
               ? 'bg-primary text-primary-foreground'
@@ -109,7 +109,7 @@ function setOpen(value: boolean): void {
         </button>
       </div>
 
-      <div class="max-h-[60vh] overflow-y-auto py-2">
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
         <div v-if="activeTab === 'plugins'">
           <div v-if="!hasPluginsOrCommands" class="py-6 text-center text-sm text-muted-foreground">
             {{ t("runners.noPlugins") }}

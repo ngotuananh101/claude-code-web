@@ -17,6 +17,7 @@
  */
 import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
 import { parseAttachmentInfo } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 
 export type ChatTurn = UserTurn | AgentTurn;
 
@@ -226,14 +227,18 @@ export function toolStepLabel(step: ToolStep): string {
   switch (step.toolName) {
     case "Edit":
     case "Write":
-      return truncateLabel(`Sửa file: ${detail ?? step.toolName}`);
+      return truncateLabel(t("chat.toolEditWithDetail", { detail: detail ?? step.toolName }));
     case "Read":
-      return truncateLabel(`Đọc file: ${detail ?? step.toolName}`);
+      return truncateLabel(t("chat.toolReadWithDetail", { detail: detail ?? step.toolName }));
     case "Bash":
-      return truncateLabel(`Chạy: ${step.command ?? detail ?? "lệnh"}`);
+      return truncateLabel(
+        t("chat.toolRunWithDetail", {
+          detail: step.command ?? detail ?? t("chat.commandFallback"),
+        }),
+      );
     case "Grep":
     case "Glob":
-      return truncateLabel(`Tìm: ${detail ?? step.toolName}`);
+      return truncateLabel(t("chat.toolSearchWithDetail", { detail: detail ?? step.toolName }));
     default:
       return truncateLabel(detail !== undefined ? `${step.toolName}: ${detail}` : step.toolName);
   }
@@ -264,7 +269,7 @@ export function summarizeProcessState(
     if (lastRunningTool !== undefined && lastRunningTool.kind === "tool") {
       activeStepLabel = toolStepLabel(lastRunningTool);
     } else if (last?.kind === "thinking") {
-      activeStepLabel = "Đang suy nghĩ…";
+      activeStepLabel = t("chat.liveThinking");
     }
   }
 
@@ -282,14 +287,14 @@ export function processSummaryLabel(
   pendingApprovalCount = 0,
 ): string {
   if (status === "running") {
-    if (pendingApprovalCount > 0) return "Đang chờ phê duyệt…";
+    if (pendingApprovalCount > 0) return t("chat.awaitingApproval");
     return summary.activeStepLabel !== undefined
-      ? `Đang chạy: ${summary.activeStepLabel}`
-      : "Đang chạy…";
+      ? t("chat.liveRunningTool", { tool: summary.activeStepLabel })
+      : t("chat.liveRunning");
   }
-  if (status === "error") return `Lỗi sau ${summary.count} bước thực hiện`;
-  if (status === "interrupted") return `Đã dừng sau ${summary.count} bước thực hiện`;
-  return `Đã hoàn thành ${summary.count} bước thực hiện`;
+  if (status === "error") return t("chat.errorAfterSteps", { count: summary.count });
+  if (status === "interrupted") return t("chat.stoppedAfterSteps", { count: summary.count });
+  return t("chat.completedAllSteps", { count: summary.count });
 }
 
 /**
@@ -334,7 +339,7 @@ export function resolveActiveStatus(
   pendingApprovalCount = 0,
 ): ActiveStatusInfo {
   if (pendingApprovalCount > 0) {
-    return { label: "Đang chờ phê duyệt…" };
+    return { label: t("chat.awaitingApproval") };
   }
 
   const executionSteps = steps.filter((step) => step.kind !== "approval");
@@ -347,19 +352,19 @@ export function resolveActiveStatus(
       runningTool.filePath ?? runningTool.command ?? runningTool.inputSummary ?? undefined;
     switch (runningTool.toolName) {
       case "Edit":
-        return { label: "Đang sửa file…", ...(detail ? { subDetail: detail } : {}) };
+        return { label: t("chat.liveEditing"), ...(detail ? { subDetail: detail } : {}) };
       case "Write":
-        return { label: "Đang ghi file…", ...(detail ? { subDetail: detail } : {}) };
+        return { label: t("chat.liveWriting"), ...(detail ? { subDetail: detail } : {}) };
       case "Read":
-        return { label: "Đang đọc file…", ...(detail ? { subDetail: detail } : {}) };
+        return { label: t("chat.liveReading"), ...(detail ? { subDetail: detail } : {}) };
       case "Bash":
-        return { label: "Đang chạy lệnh…", ...(detail ? { subDetail: detail } : {}) };
+        return { label: t("chat.liveCommand"), ...(detail ? { subDetail: detail } : {}) };
       case "Grep":
       case "Glob":
-        return { label: "Đang tìm kiếm…", ...(detail ? { subDetail: detail } : {}) };
+        return { label: t("chat.liveSearching"), ...(detail ? { subDetail: detail } : {}) };
       default:
         return {
-          label: `Đang chạy: ${runningTool.toolName}…`,
+          label: t("chat.liveRunningToolActive", { tool: runningTool.toolName }),
           ...(detail ? { subDetail: detail } : {}),
         };
     }
@@ -367,14 +372,14 @@ export function resolveActiveStatus(
 
   const lastStep = executionSteps[executionSteps.length - 1];
   if (lastStep?.kind === "thinking") {
-    return { label: "Đang suy nghĩ…" };
+    return { label: t("chat.liveThinking") };
   }
 
   if (hasText) {
-    return { label: "Đang trả lời…" };
+    return { label: t("chat.liveReplying") };
   }
 
-  return { label: "Đang xử lý…" };
+  return { label: t("chat.liveProcessing") };
 }
 
 const RUN_TERMINALS: ReadonlySet<string> = new Set([

@@ -265,8 +265,8 @@ async function handleDeleteConfirm(): Promise<void> {
 </script>
 
 <template>
-  <aside class="flex h-full w-[300px] shrink-0 flex-col bg-sidebar">
-    <div class="flex items-center gap-2.5 px-4 pt-4.5">
+  <aside class="flex h-dvh w-[min(300px,85vw)] shrink-0 flex-col bg-sidebar sm:w-[300px]">
+    <div class="flex min-w-0 items-center gap-2.5 px-4 pt-4.5">
       <RouterLink
         to="/"
         class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-mono text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-85"
@@ -275,10 +275,11 @@ async function handleDeleteConfirm(): Promise<void> {
         cc
       </RouterLink>
       <ConnectionChip />
-      <span class="ml-auto flex items-center gap-0.5">
+      <span class="ml-auto flex shrink-0 items-center gap-0.5">
         <Button
           variant="ghost"
           size="icon-xs"
+          class="size-9 sm:size-6"
           :aria-label="t('common.back')"
           :disabled="!canGoBack"
           @click="router.back()"
@@ -288,6 +289,7 @@ async function handleDeleteConfirm(): Promise<void> {
         <Button
           variant="ghost"
           size="icon-xs"
+          class="size-9 sm:size-6"
           :aria-label="t('common.forward')"
           :disabled="!canGoForward"
           @click="router.forward()"
@@ -297,6 +299,7 @@ async function handleDeleteConfirm(): Promise<void> {
         <Button
           variant="ghost"
           size="icon-xs"
+          class="size-9 sm:size-6"
           :aria-label="t('rail.collapseSidebar')"
           :title="t('rail.collapseSidebar')"
           @click="emit('close')"
@@ -306,7 +309,10 @@ async function handleDeleteConfirm(): Promise<void> {
       </span>
     </div>
 
-    <nav class="grid gap-0.5 px-3 pt-4">
+    <!-- Nav rows sit on the desktop pitch here too: the drawer is the same
+         sidebar, and a phone does not need extra air between four fixed
+         destinations. -->
+    <nav class="grid gap-0 px-3 pt-2.5">
       <RouterLink
         to="/"
         class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
@@ -367,6 +373,7 @@ async function handleDeleteConfirm(): Promise<void> {
             <Button
               variant="ghost"
               size="icon-xs"
+              class="size-9 sm:size-6"
               :aria-label="t('rail.groupByRunner')"
               :title="groupingTitle"
               @click="toggleGrouping"
@@ -376,6 +383,7 @@ async function handleDeleteConfirm(): Promise<void> {
             <Button
               variant="ghost"
               size="icon-xs"
+              class="size-9 sm:size-6"
               :aria-label="t('rail.sort')"
               :title="sortTitle"
               @click="cycleSort"
@@ -385,6 +393,7 @@ async function handleDeleteConfirm(): Promise<void> {
             <Button
               variant="ghost"
               size="icon-xs"
+              class="size-9 sm:size-6"
               :aria-label="t('rail.searchPlaceholder')"
               :title="t('rail.searchTitle')"
               @click="searchOpen = true"
@@ -419,7 +428,7 @@ async function handleDeleteConfirm(): Promise<void> {
               >
                 <Button
                   variant="ghost"
-                  class="h-auto w-full justify-between gap-2 rounded-lg px-2.5 py-1.5 font-normal"
+                  class="h-auto min-h-11 w-full justify-between gap-2 rounded-lg px-2.5 py-2.5 font-normal sm:min-h-0 sm:py-1.5"
                   :class="
                     row.session.sessionId === sessions.activeId &&
                     'bg-sidebar-accent shadow-[inset_2px_0_0_var(--primary)]'
@@ -442,7 +451,7 @@ async function handleDeleteConfirm(): Promise<void> {
                     </span>
                   </span>
                   <span
-                    class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground transition-opacity"
+                    class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground transition-opacity max-lg:hidden"
                     :class="
                       activeMenuSessionId === row.session.sessionId
                         ? 'opacity-0'
@@ -467,11 +476,11 @@ async function handleDeleteConfirm(): Promise<void> {
                   <PopoverTrigger as-child>
                     <button
                       type="button"
-                      class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100"
+                      class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-2 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 sm:p-1"
                       :class="
                         activeMenuSessionId === row.session.sessionId
                           ? 'opacity-100 bg-muted text-foreground pointer-events-auto'
-                          : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                          : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto max-lg:pointer-events-auto max-lg:opacity-100'
                       "
                       :aria-label="t('rail.sessionOptions')"
                       :title="t('rail.actions')"
@@ -483,7 +492,7 @@ async function handleDeleteConfirm(): Promise<void> {
                   <PopoverContent class="w-36 p-1 gap-0.5 rounded-lg" align="end" :side-offset="4">
                     <button
                       type="button"
-                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+                      class="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm text-foreground transition-colors hover:bg-muted text-left sm:min-h-0 sm:py-1.5 sm:text-xs"
                       @click.stop="triggerRename(row.session)"
                     >
                       <Pencil :size="13" class="shrink-0" />
@@ -491,7 +500,7 @@ async function handleDeleteConfirm(): Promise<void> {
                     </button>
                     <button
                       type="button"
-                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+                      class="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm text-destructive transition-colors hover:bg-destructive/10 text-left sm:min-h-0 sm:py-1.5 sm:text-xs"
                       @click.stop="triggerDelete(row.session)"
                     >
                       <Trash2 :size="13" class="shrink-0" />
@@ -513,12 +522,12 @@ async function handleDeleteConfirm(): Promise<void> {
       </div>
     </ScrollArea>
 
-    <footer class="px-3 py-2.5">
+    <footer class="px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
       <Popover :open="userMenuOpen" @update:open="(val: boolean) => (userMenuOpen = val)">
         <PopoverTrigger as-child>
           <button
             type="button"
-            class="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus:outline-none focus:ring-2 focus:ring-sidebar-accent focus:ring-offset-2"
+            class="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
             :aria-label="t('user.title')"
           >
             <span v-if="sessions.avatar" class="shrink-0 rounded-full object-cover">
@@ -541,15 +550,15 @@ async function handleDeleteConfirm(): Promise<void> {
           </button>
         </PopoverTrigger>
         <PopoverContent
-          class="w-56 p-1 rounded-lg"
+          class="w-56 gap-0.5 p-1 rounded-lg"
           align="end"
           :side-offset="4"
           @open-auto-focus="(e: Event) => e.preventDefault()"
         >
-          <div class="px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+          <div class="px-2 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground">
             {{ t("user.language") }}
           </div>
-          <div class="grid grid-cols-2 gap-0.5 px-2 pb-2">
+          <div class="grid grid-cols-2 gap-1 px-2 pb-1.5">
             <Button
               :variant="locale === 'vi' ? 'secondary' : 'ghost'"
               size="xs"
@@ -572,7 +581,7 @@ async function handleDeleteConfirm(): Promise<void> {
           <div class="my-1 h-px bg-border" />
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-muted text-left"
+            class="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm text-foreground transition-colors hover:bg-muted text-left sm:min-h-0 sm:py-1.5 sm:text-xs"
             @click="() => { profileDialogOpen = true; userMenuOpen = false }"
           >
             <Pencil :size="13" class="shrink-0" />
@@ -580,7 +589,7 @@ async function handleDeleteConfirm(): Promise<void> {
           </button>
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive/10 text-left"
+            class="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-sm text-destructive transition-colors hover:bg-destructive/10 text-left sm:min-h-0 sm:py-1.5 sm:text-xs"
             @click="() => { signOut(); userMenuOpen = false }"
           >
             <LogOut :size="13" class="shrink-0" />

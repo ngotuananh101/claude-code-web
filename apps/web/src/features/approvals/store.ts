@@ -1,5 +1,6 @@
 import { reactive } from "vue";
 import { toast } from "vue-sonner";
+import { t } from "@/lib/i18n";
 import { type ApprovalDecision, submitApprovalDecision } from "../../services/approvals-api";
 
 /**
@@ -51,25 +52,25 @@ export async function submitDecision(
 
   if (outcome === "decided") {
     state.decision = decision;
-    toast.success(decision === "allow" ? "Đã cho phép." : "Đã từ chối.");
+    toast.success(decision === "allow" ? t("approval.allowedToast") : t("approval.deniedToast"));
     return;
   }
   if (outcome === "conflict") {
-    toast.info("Quyết định này đã được ghi nhận trước đó.");
+    toast.info(t("approval.alreadyRecorded"));
     return;
   }
   if (outcome === "expired") {
     state.closed = true;
-    toast.info("Phê duyệt đã đóng — không còn nhận quyết định.");
+    toast.info(t("approval.closedNoLonger"));
     return;
   }
   if (outcome === "not_found") {
-    toast.error("Phê duyệt không còn tồn tại — có thể đã hết hạn.");
+    toast.error(t("approval.notFound"));
     return;
   }
   if (outcome === "unauthorized") {
-    toast.error("Đăng nhập đã hết hạn — hãy đăng nhập lại.");
+    toast.error(t("approval.loginExpired"));
     return;
   }
-  toast.error("Không chuyển được quyết định — thử lại.");
+  toast.error(t("approval.failed"));
 }

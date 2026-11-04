@@ -6,10 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { validateSetupForm } from "@/features/setup/setup-logic.ts";
+import { useI18n } from "@/lib/i18n";
 import { submitSetup } from "@/services/auth-api.ts";
 import { connectSocket } from "@/stores/sessions.ts";
 
 const router = useRouter();
+const { t } = useI18n();
 const username = ref("");
 const password = ref("");
 const confirmPassword = ref("");
@@ -36,7 +38,7 @@ async function submit(): Promise<void> {
       return;
     }
     connectSocket();
-    toast.success("Khởi tạo tài khoản thành công.");
+    toast.success(t("auth.accountCreated"));
     await router.push("/");
   } finally {
     busy.value = false;
@@ -45,7 +47,7 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <main class="relative grid min-h-full place-items-center p-4">
+  <main class="relative grid min-h-full place-items-center overflow-y-auto p-4 py-16">
     <p class="absolute top-4 left-4.5 font-mono text-sm text-foreground">
       cc-web
     </p>
@@ -53,41 +55,57 @@ async function submit(): Promise<void> {
       <h1
         class="mb-1.5 text-center text-[28px] font-medium leading-tight tracking-tight"
       >
-        Thiết lập hệ thống
+        {{ t("auth.setupTitle") }}
       </h1>
       <p class="mb-5 text-center text-sm leading-normal text-muted-foreground">
-        Khởi tạo tài khoản quản trị đầu tiên cho hệ thống cc-web.
+        {{ t("auth.setupSubtitle") }}
       </p>
       <form class="grid gap-2" @submit.prevent="submit">
-        <Label class="sr-only" for="username">Tên đăng nhập</Label>
+        <Label class="sr-only" for="username">{{ t("auth.username") }}</Label>
         <Input
           id="username"
           v-model="username"
           autocomplete="username"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="next"
           autofocus
-          placeholder="Tên đăng nhập"
+          class="max-sm:h-11"
+          :placeholder="t('auth.username')"
         />
-        <Label class="sr-only" for="password">Mật khẩu</Label>
+        <Label class="sr-only" for="password">{{ t("auth.password") }}</Label>
         <Input
           id="password"
           v-model="password"
           type="password"
           autocomplete="new-password"
-          placeholder="Mật khẩu (ít nhất 6 ký tự)"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="next"
+          class="max-sm:h-11"
+          :placeholder="t('auth.passwordMinLength')"
         />
-        <Label class="sr-only" for="confirm-password">Xác nhận mật khẩu</Label>
+        <Label class="sr-only" for="confirm-password">{{ t("auth.confirmPassword") }}</Label>
         <Input
           id="confirm-password"
           v-model="confirmPassword"
           type="password"
           autocomplete="new-password"
-          placeholder="Xác nhận mật khẩu"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="go"
+          class="max-sm:h-11"
+          :placeholder="t('auth.confirmPassword')"
         />
         <Button
           type="submit"
+          class="max-sm:h-11"
           :disabled="busy || username === '' || password === '' || confirmPassword === ''"
         >
-          Khởi tạo tài khoản
+          {{ t("auth.createAccount") }}
         </Button>
       </form>
     </section>

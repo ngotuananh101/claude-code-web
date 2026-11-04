@@ -1,4 +1,5 @@
 import type { FileReadResult, FileWriteResult } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 
 /**
  * Pure editor logic for the Files tab (§7.11).
@@ -26,9 +27,9 @@ export function isEditableRead(read: FileReadResult): boolean {
  */
 export function editableReadNotice(read: FileReadResult): string | null {
   if (isEditableRead(read)) return null;
-  if (read.binary) return "Tệp nhị phân — không mở được trình soạn thảo.";
-  if (read.truncated) return "Nội dung đã được rút gọn — không mở được trình soạn thảo.";
-  return "Không có nội dung để hiển thị.";
+  if (read.binary) return t("inspect.editorBinary");
+  if (read.truncated) return t("inspect.editorTruncated");
+  return t("inspect.editorNoContent");
 }
 
 export function viewerAfterSave(

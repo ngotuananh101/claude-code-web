@@ -107,6 +107,12 @@ onUnmounted(() => {
 .monaco-code-editor {
 	width: 100%;
 	height: 100%;
-	min-height: 400px;
+	min-height: 240px;
+}
+
+@media (min-width: 640px) {
+	.monaco-code-editor {
+		min-height: 400px;
+	}
 }
 </style>

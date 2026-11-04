@@ -3,6 +3,9 @@ import { Braces, ChevronDown, ChevronRight } from "@lucide/vue";
 import { ref } from "vue";
 import type { ThinkingStep } from "@/features/journal/chat-turns";
 import { formatDuration } from "@/features/journal/chat-turns";
+import { useI18n } from "@/lib/i18n";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   /** The thinking step to render. */
@@ -23,10 +26,10 @@ const durationText =
       type="button"
       :aria-expanded="isOpen"
       @click="isOpen = !isOpen"
-      class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground min-w-0"
+      class="flex min-h-9 min-w-0 items-center gap-1.5 py-1 font-mono text-xs text-muted-foreground hover:text-foreground sm:min-h-0 sm:py-0"
     >
       <Braces :size="13" />
-      <span>Suy nghĩ</span>
+      <span>{{ t("chat.thinking") }}</span>
       <span v-if="durationText" class="text-muted-foreground/70">{{ durationText }}</span>
       <ChevronRight v-if="!isOpen" :size="12" />
       <ChevronDown v-else :size="12" />

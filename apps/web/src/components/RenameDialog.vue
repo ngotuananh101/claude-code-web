@@ -10,6 +10,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n";
+
+const { t } = useI18n();
 
 /**
  * Reusable rename modal dialog for sessions, runners, etc.
@@ -25,7 +28,6 @@ const props = withDefaults(
   {
     description: "",
     initialValue: "",
-    placeholder: "Nhập tên mới...",
   },
 );
 
@@ -56,7 +58,7 @@ function onCancel(): void {
 
 <template>
   <Dialog :open="props.open" @update:open="(val: boolean) => emit('update:open', val)">
-    <DialogContent class="sm:max-w-md">
+    <DialogContent class="max-h-[85dvh] overflow-y-auto overscroll-contain sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{{ props.title }}</DialogTitle>
         <DialogDescription v-if="props.description">
@@ -67,18 +69,22 @@ function onCancel(): void {
       <div class="py-4">
         <Input
           v-model="value"
-          :placeholder="props.placeholder"
+          :placeholder="props.placeholder ?? t('dialogs.enterNewName')"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          class="max-sm:h-11"
           autofocus
           @keydown.enter.prevent="onConfirm"
         />
       </div>
 
       <DialogFooter class="gap-2 sm:gap-0">
-        <Button variant="outline" type="button" @click="onCancel">
-          Huỷ
+        <Button variant="outline" type="button" class="max-sm:h-11" @click="onCancel">
+          {{ t("dialogs.cancel") }}
         </Button>
-        <Button type="button" @click="onConfirm">
-          Lưu thay đổi
+        <Button type="button" class="max-sm:h-11" @click="onConfirm">
+          {{ t("dialogs.saveChanges") }}
         </Button>
       </DialogFooter>
     </DialogContent>

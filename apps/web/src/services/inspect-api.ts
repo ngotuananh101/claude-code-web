@@ -24,6 +24,7 @@ import type {
   WorkspaceRevertResult,
 } from "@cc-web/protocol";
 import { authFetch } from "./auth-api.ts";
+import { rpcErrorMessage, unreachableOutcome } from "./rpc-messages.ts";
 
 export type InspectOutcome<T> =
   | { ok: true; value: T }
@@ -38,34 +39,6 @@ export type InspectOutcome<T> =
 export function compositeId(runnerId: string, workspaceId: string): string {
   return encodeURIComponent(`${runnerId}/${workspaceId}`);
 }
-
-/** Operator-facing Vietnamese copy for the codes the runner and server define. */
-const MESSAGES: Record<string, string> = {
-  RUNNER_UNAVAILABLE: "Runner không sẵn sàng.",
-  WORKSPACE_NOT_FOUND: "Không tìm thấy workspace.",
-  WORKSPACE_AMBIGUOUS: "Mã workspace không hợp lệ.",
-  PATH_OUTSIDE_WORKSPACE: "Đường dẫn nằm ngoài workspace.",
-  FILE_NOT_FOUND: "Không tìm thấy tệp.",
-  FILE_UNREADABLE: "Không thể đọc tệp.",
-  CREDENTIAL_FILE_REFUSED: "Không được phép đọc tệp chứa thông tin đăng nhập.",
-  NOT_A_DIRECTORY: "Đường dẫn không phải thư mục.",
-  NOT_A_FILE: "Đường dẫn không phải tệp.",
-  UNSUPPORTED_COMMAND: "Runner không hỗ trợ yêu cầu này.",
-  DIAGNOSTICS_UNAVAILABLE: "Không lấy được chẩn đoán cấu hình.",
-  FILE_CONFLICT: "Tệp đã bị thay đổi — hãy tải lên và thử lại.",
-  WORKSPACE_BUSY: "Workspace đang bận — hãy thử lại sau.",
-  SYMLINK_REFUSED: "Không được phép thao tác liên kết mềm.",
-  FILE_UNSUPPORTED: "Loại tệp này không được hỗ trợ.",
-  NO_SNAPSHOT: "Chưa có baseline cho workspace này.",
-  SNAPSHOT_PARTIAL: "Baseline chưa đầy đủ — không thể khôi phục toàn bộ.",
-  REVERT_STALE: "Kế hoạch khôi phục đã cũ — hãy xem lại.",
-  PLAN_TOO_LARGE: "Kế hoạch khôi phục quá lớn — không thể áp dụng.",
-  SNAPSHOT_INCOMPARABLE: "Baseline không so sánh được với trạng thái hiện tại.",
-  FILE_UNWRITABLE: "Không thể ghi tệp.",
-};
-
-/** The copy for a transport or parse failure — there is no code to translate. */
-const UNREACHABLE = { code: "error", message: "Không kết nối được máy chủ." } as const;
 
 /** §17.3's body, read defensively: a shape we cannot read is not a crash. */
 function readErrorBody(body: unknown): { code?: string; message?: string } {
@@ -86,14 +59,16 @@ async function failure(response: Response): Promise<InspectOutcome<never>> {
   } catch {
     // A plain-text refusal (401/403 keep that convention on the server) or a
     // proxy's HTML error page: nothing to translate, so answer generically.
-    return { ok: false, ...UNREACHABLE };
+    return { ok: false, ...unreachableOutcome() };
   }
 
   const parsed = readErrorBody(body);
-  const code = parsed.code ?? UNREACHABLE.code;
+  const code = parsed.code ?? "error";
   const message =
-    MESSAGES[code] ??
-    (parsed.message !== undefined && parsed.message !== "" ? parsed.message : UNREACHABLE.message);
+    rpcErrorMessage(code) ??
+    (parsed.message !== undefined && parsed.message !== ""
+      ? parsed.message
+      : unreachableOutcome().message);
 
   return { ok: false, code, message };
 }
@@ -103,7 +78,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<InspectOutco
   try {
     response = await authFetch(url, init);
   } catch {
-    return { ok: false, ...UNREACHABLE };
+    return { ok: false, ...unreachableOutcome() };
   }
 
   if (!response.ok) return failure(response);
@@ -112,7 +87,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<InspectOutco
     return { ok: true, value: (await response.json()) as T };
   } catch {
     // A 200 whose body is not JSON is a broken server, not a panel bug.
-    return { ok: false, ...UNREACHABLE };
+    return { ok: false, ...unreachableOutcome() };
   }
 }
 

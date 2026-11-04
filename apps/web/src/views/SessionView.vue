@@ -7,6 +7,7 @@ import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { useI18n } from "@/lib/i18n";
 import Composer from "../components/Composer.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
@@ -35,6 +36,7 @@ import {
 
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
 
 // Tailwind's lg breakpoint: the inspection panel sits beside the journal on
 // wide screens and stacks under it on narrow ones. Both are the same splitter,
@@ -263,13 +265,13 @@ function onStarted(
 }
 
 // The greeting is the one line of the console that talks to the operator, not
-// about the system — time-of-day Vietnamese, like the login page.
+// about the system — a time-of-day greeting, like the login page.
 const greeting = computed(() => {
   const hour = new Date().getHours();
-  if (hour < 5) return "Khuya rồi đấy — nhớ giữ sức khỏe.";
-  if (hour < 12) return "Chào buổi sáng.";
-  if (hour < 18) return "Chào buổi chiều.";
-  return "Chào buổi tối.";
+  if (hour < 5) return t("sessionView.greetingNight");
+  if (hour < 12) return t("sessionView.greetingMorning");
+  if (hour < 18) return t("sessionView.greetingAfternoon");
+  return t("sessionView.greetingEvening");
 });
 
 /** Follows the URL in one direction: route → held session. */
@@ -289,7 +291,7 @@ watch(routeSession, followRoute);
 
 async function refreshNow(): Promise<void> {
   await loadSessions();
-  toast.success("Đã làm mới danh sách phiên.");
+  toast.success(t("sessionView.refreshed"));
 }
 </script>
 
@@ -326,7 +328,7 @@ async function refreshNow(): Promise<void> {
                 <span>{{ active.watermark }}</span>
                 <span v-if="activeLive" class="inline-flex items-center gap-1.5 text-primary">
                   <i class="size-[7px] animate-pulse rounded-full bg-primary" />
-                  đang chạy
+                  {{ t("sessionView.running") }}
                 </span>
               </span>
             </header>
@@ -345,7 +347,7 @@ async function refreshNow(): Promise<void> {
             />
             <div v-else class="z-10 flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 class="size-4 animate-spin text-muted-foreground" />
-              <span>Đang tải nhật ký phiên…</span>
+              <span>{{ t("sessionView.loadingJournal") }}</span>
             </div>
 
             <div class="z-10 px-4 pt-2 pb-4.5 md:px-6">
@@ -389,9 +391,9 @@ async function refreshNow(): Promise<void> {
         v-if="!inspectOpen"
         ref="inspectOpenButton"
         type="button"
-        class="absolute top-1/2 right-0 z-30 -translate-y-1/2 cursor-pointer rounded-l-md border border-r-0 border-border bg-card py-2 pr-0.5 pl-1 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
-        aria-label="Mở thanh kiểm tra"
-        title="Mở thanh kiểm tra"
+        class="absolute top-1/2 right-0 z-30 min-h-11 min-w-9 -translate-y-1/2 touch-manipulation cursor-pointer rounded-l-md border border-r-0 border-border bg-card p-2 text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground active:bg-muted"
+        :aria-label="t('sessionView.openInspector')"
+        :title="t('sessionView.openInspector')"
         @click="openInspect"
       >
         <PanelRightOpen :size="14" />
@@ -403,7 +405,7 @@ async function refreshNow(): Promise<void> {
         <div class="grid justify-items-center gap-1.5 text-center">
           <h1 class="text-[26px] font-medium tracking-tight">{{ greeting }}</h1>
           <p class="text-sm text-muted-foreground">
-            Chọn runner, bấm Duyệt… để mở thư mục, rồi chọn phiên trong đó hoặc tạo phiên mới.
+            {{ t("sessionView.emptyHint") }}
           </p>
         </div>
 
@@ -429,7 +431,7 @@ async function refreshNow(): Promise<void> {
             class="rounded-full bg-card px-3.5 hover:border-primary/40 hover:text-foreground"
             @click="refreshNow"
           >
-            làm mới
+            {{ t("sessionView.refresh") }}
           </Button>
         </div>
       </div>

@@ -9,6 +9,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useI18n } from "@/lib/i18n";
+
+const { t } = useI18n();
 
 /**
  * Reusable delete confirmation modal dialog.
@@ -25,8 +28,6 @@ const props = withDefaults(
   }>(),
   {
     warning: "",
-    confirmLabel: "Xoá",
-    cancelLabel: "Huỷ",
     busy: false,
   },
 );
@@ -51,7 +52,7 @@ function onConfirm(): void {
 
 <template>
   <Dialog :open="props.open" @update:open="(val: boolean) => !props.busy && emit('update:open', val)">
-    <DialogContent class="sm:max-w-md">
+    <DialogContent class="max-h-[85dvh] overflow-y-auto overscroll-contain sm:max-w-md">
       <DialogHeader>
         <DialogTitle class="flex items-center gap-2 text-destructive">
           <AlertTriangle class="h-5 w-5 shrink-0 text-destructive" />
@@ -74,19 +75,21 @@ function onConfirm(): void {
         <Button
           variant="outline"
           type="button"
+          class="max-sm:h-11"
           :disabled="props.busy"
           @click="onCancel"
         >
-          {{ props.cancelLabel }}
+          {{ props.cancelLabel ?? t("dialogs.cancel") }}
         </Button>
         <Button
           variant="destructive"
           type="button"
+          class="max-sm:h-11"
           :disabled="props.busy"
           @click="onConfirm"
         >
           <Loader2 v-if="props.busy" class="mr-2 h-4 w-4 animate-spin" />
-          {{ props.confirmLabel }}
+          {{ props.confirmLabel ?? t("dialogs.delete") }}
         </Button>
       </DialogFooter>
     </DialogContent>

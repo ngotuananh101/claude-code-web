@@ -12,6 +12,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { filterModelChoices } from "@/features/profiles/profiles-logic.ts";
+import { useI18n } from "@/lib/i18n";
 
 const props = withDefaults(
   defineProps<{
@@ -26,6 +27,8 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<(e: "update:modelValue", value: string) => void>();
+
+const { t } = useI18n();
 
 /** Whether the suggestion popover is open. */
 const open = ref(false);
@@ -139,16 +142,16 @@ function onBlur(): void {
         v-if="loading && models.length === 0"
         class="px-2 py-1.5 text-xs text-muted-foreground"
       >
-        Đang tải danh sách model…
+        {{ t("profiles.modelListLoading") }}
       </div>
       <div
         v-else-if="models.length === 0"
         class="px-2 py-1.5 text-xs text-muted-foreground"
       >
-        Chưa có danh sách model — bấm nút "Lấy model" để tải.
+        {{ t("profiles.modelListEmpty") }}
       </div>
       <div v-else-if="filtered.length === 0" class="px-2 py-1.5 text-xs text-muted-foreground">
-        Không có model nào khớp — vẫn có thể gõ tay tên model.
+        {{ t("profiles.modelListNoMatch") }}
       </div>
       <div v-else ref="listRef" class="max-h-56 overflow-y-auto">
         <button

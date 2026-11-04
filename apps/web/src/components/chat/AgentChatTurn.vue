@@ -8,8 +8,11 @@ import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
 import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
 import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
+import { useI18n } from "@/lib/i18n";
 import AgentLiveStatus from "./AgentLiveStatus.vue";
 import AgentProcessAccordion from "./AgentProcessAccordion.vue";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   /** The agent turn to render. */
@@ -137,14 +140,14 @@ const shouldShowLiveStatus = computed(() => {
 async function copyResponse(): Promise<void> {
   if (!props.turn.text) return;
   await navigator.clipboard.writeText(props.turn.text);
-  toast.success("Đã sao chép câu trả lời.");
+  toast.success(t("chat.copiedAnswer"));
 }
 
 /** Copy the raw payload JSON to the clipboard with a toast. */
 async function copyRawPayload(): Promise<void> {
   const text = JSON.stringify(props.turn.rawPayload, null, 2);
   await navigator.clipboard.writeText(text);
-  toast.success("Đã sao chép JSON.");
+  toast.success(t("chat.copiedJson"));
 }
 
 /** The formatted JSON string for display. */
@@ -160,18 +163,18 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         class="flex items-center gap-1.5 text-destructive shrink-0"
       >
         <AlertCircle :size="14" />
-        <span>Lỗi</span>
+        <span>{{ t("chat.error") }}</span>
         <span v-if="headerDuration" class="text-muted-foreground">{{ headerDuration }}</span>
       </div>
 
       <div v-else-if="turn.status === 'interrupted'" class="flex items-center gap-1.5 shrink-0">
-        <span>Bị dừng</span>
+        <span>{{ t("chat.stopped") }}</span>
         <span v-if="headerDuration" class="text-muted-foreground">{{ headerDuration }}</span>
       </div>
 
       <div v-else class="flex items-center gap-1.5 shrink-0 text-muted-foreground">
         <Clock :size="14" />
-        <span>{{ turn.status === 'done' && headerDuration ? `Đã xử lý trong ${headerDuration}` : "Agent" }}</span>
+        <span>{{ turn.status === 'done' && headerDuration ? t('chat.processedIn', { duration: headerDuration }) : t('chat.agent') }}</span>
       </div>
 
       <!-- Horizontal divider line filling remaining width -->
@@ -229,14 +232,14 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
     <!-- Actions row (Copy response, Raw JSON toggle) - icon only, visible on hover -->
     <div
       class="mt-1 flex items-center gap-1 transition-opacity"
-      :class="showRaw ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+      :class="showRaw ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 max-sm:opacity-100'"
     >
       <button
         v-if="turn.text"
         type="button"
         @click="copyResponse"
-        title="Sao chép câu trả lời"
-        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+        :title="t('chat.copyAnswer')"
+        class="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors sm:size-6"
       >
         <Copy :size="13" />
       </button>
@@ -245,8 +248,8 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         type="button"
         :aria-expanded="showRaw"
         @click="showRaw = !showRaw"
-        :title="showRaw ? 'Ẩn JSON gốc' : 'Xem JSON gốc'"
-        class="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+        :title="showRaw ? t('chat.hideRaw') : t('chat.showRaw')"
+        class="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors sm:size-6"
         :class="{ 'text-foreground bg-muted/60': showRaw }"
       >
         <Braces :size="13" />
@@ -269,10 +272,10 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         <button
           type="button"
           @click.stop="copyRawPayload"
-          class="mt-1.5 flex items-center gap-1 rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          class="mt-1.5 flex min-h-9 items-center gap-1 rounded border border-border/40 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors sm:min-h-0 sm:px-2 sm:py-1"
         >
           <Copy :size="11" />
-          <span>Sao chép JSON</span>
+          <span>{{ t("chat.copyJson") }}</span>
         </button>
       </div>
     </transition>

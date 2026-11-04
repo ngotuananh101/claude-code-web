@@ -10,6 +10,7 @@
  */
 
 import type { EffortLevel, ModelMapping, ProfileSummary, SessionSummary } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { type RegisterWorkspaceOutcome, registerWorkspace } from "@/services/browse-api.ts";
 import type { StartRunRequest } from "@/services/runs-api.ts";
@@ -276,7 +277,7 @@ export function resolveModelLabel(input: {
 
 /** Resolve a profile's display name from a summary. */
 export function profileName(profile: ProfileSummary | null | undefined): string {
-  if (!profile) return "Mặc định (Runner Host)";
+  if (!profile) return t("modelPicker.defaultRunnerHost");
   return profile.name || profile.profileId;
 }
 

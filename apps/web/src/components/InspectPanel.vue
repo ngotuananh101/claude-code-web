@@ -11,6 +11,7 @@ import type {
 } from "@cc-web/protocol";
 import { PanelRightClose } from "@lucide/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "@/lib/i18n";
 import {
   editableReadNotice,
   isDirty,
@@ -68,13 +69,15 @@ const props = defineProps<{ sessionId: string }>();
 // The shell owns whether this panel is shown; the panel only asks to be hidden.
 const emit = defineEmits<{ close: [] }>();
 
+const { t } = useI18n();
+
 type Tab = "files" | "changes" | "diagnostics" | "schedules";
-const TAB_LABELS: Record<Tab, string> = {
-  files: "Tệp tin",
-  changes: "Thay đổi",
-  diagnostics: "Chẩn đoán",
-  schedules: "Lịch",
-};
+const TAB_LABELS = computed<Record<Tab, string>>(() => ({
+  files: t("inspect.tabFiles"),
+  changes: t("inspect.tabChanges"),
+  diagnostics: t("inspect.tabDiagnostics"),
+  schedules: t("inspect.tabSchedules"),
+}));
 
 const tab = ref<Tab>("files");
 
@@ -236,23 +239,23 @@ const changedPaths = computed(() =>
   }),
 );
 
-const STATUS_LABELS: Record<string, string> = {
-  added: "thêm",
-  modified: "sửa",
-  deleted: "xoá",
-  renamed: "đổi tên",
-  copied: "sao chép",
-  untracked: "chưa theo dõi",
-  conflicted: "xung đột",
-  typechange: "đổi loại",
-};
+const STATUS_LABELS = computed<Record<string, string>>(() => ({
+  added: t("inspect.statusAdded"),
+  modified: t("inspect.statusModified"),
+  deleted: t("inspect.statusDeleted"),
+  renamed: t("inspect.statusRenamed"),
+  copied: t("inspect.statusCopied"),
+  untracked: t("inspect.statusUntracked"),
+  conflicted: t("inspect.statusConflicted"),
+  typechange: t("inspect.statusTypechange"),
+}));
 
-const SNAPSHOT_STATUS_LABELS: Record<string, string> = {
-  modified: "sửa",
-  created: "thêm",
-  deleted: "xoá",
-  excluded: "loại trừ",
-};
+const SNAPSHOT_STATUS_LABELS = computed<Record<string, string>>(() => ({
+  modified: t("inspect.snapshotModified"),
+  created: t("inspect.snapshotCreated"),
+  deleted: t("inspect.snapshotDeleted"),
+  excluded: t("inspect.snapshotExcluded"),
+}));
 
 // The diff dialog's header badge: the status of the file being viewed, using
 // the labels of the Changes list the operator has in front of them.
@@ -261,10 +264,12 @@ const diffStatusLabel = computed<string | undefined>(() => {
   if (path === null) return undefined;
   if (source.value === "git") {
     const entry = changeEntries.value.find((candidate) => candidate.path === path);
-    return entry === undefined ? undefined : (STATUS_LABELS[entry.status] ?? entry.status);
+    return entry === undefined ? undefined : (STATUS_LABELS.value[entry.status] ?? entry.status);
   }
   const entry = snapshotStatus.value?.entries.find((candidate) => candidate.path === path);
-  return entry === undefined ? undefined : (SNAPSHOT_STATUS_LABELS[entry.status] ?? entry.status);
+  return entry === undefined
+    ? undefined
+    : (SNAPSHOT_STATUS_LABELS.value[entry.status] ?? entry.status);
 });
 
 async function loadFiles(dir: string, options: { keepViewer?: boolean } = {}): Promise<void> {
@@ -359,8 +364,8 @@ async function cancelOneSchedule(scheduleId: string): Promise<void> {
   }
   schedulesError.value =
     outcome === "unauthorized"
-      ? "Phiên đăng nhập đã hết hạn."
-      : "Không huỷ được lịch — thử lại sau.";
+      ? t("inspect.errorSessionExpired")
+      : t("inspect.errorCancelSchedule");
 }
 
 async function openEntry(name: string, kind: "file" | "directory" | "other"): Promise<void> {
@@ -475,7 +480,7 @@ async function openDiff(path: string, intent: DiffOpenIntent = "navigate"): Prom
   // A truncated diff never becomes a merge view. Track the reason so the
   // sidebar can explain why no dialog opened.
   let unavailable: string | null = diffOutcome.value.truncated
-    ? "Diff đã được rút gọn — không mở được trình so sánh."
+    ? t("inspect.errorDiffTruncated")
     : null;
   let parsed = diffOutcome.value.truncated ? null : parseUnifiedDiff(diffOutcome.value.diff);
 
@@ -499,7 +504,7 @@ async function openDiff(path: string, intent: DiffOpenIntent = "navigate"): Prom
       const spliced = spliceOriginal(parsed, read.content);
       if (spliced === null) {
         parsed = null;
-        unavailable = "Không dựng được chế độ so sánh cho tệp này.";
+        unavailable = t("inspect.errorMergeUnavailable");
       } else {
         original = spliced;
         // Restore any preserved draft instead of the freshly read content.
@@ -514,7 +519,7 @@ async function openDiff(path: string, intent: DiffOpenIntent = "navigate"): Prom
       // Binary or truncated read: there is no authoritative full document to
       // edit or diff against.
       parsed = null;
-      unavailable = "Tệp nhị phân hoặc rút gọn — không mở được trình so sánh.";
+      unavailable = t("inspect.errorBinaryOrTruncated");
     }
   }
 
@@ -528,7 +533,7 @@ async function openDiff(path: string, intent: DiffOpenIntent = "navigate"): Prom
   if (parsed !== null) {
     reviewDialogMode.value = "diff";
   } else {
-    diffError.value = unavailable ?? "Không dựng được chế độ so sánh cho tệp này.";
+    diffError.value = unavailable ?? t("inspect.errorMergeUnavailable");
   }
   if (visibility !== null) reviewDialogOpen.value = visibility;
 
@@ -644,11 +649,11 @@ async function confirmRevert(path: string): Promise<void> {
   if (snapshotStatus.value === null) await loadSnapshot();
   const entry = snapshotStatus.value?.entries.find((e) => e.path === path) ?? null;
   if (entry === null) {
-    saveError.value = "Không tìm thấy bản chụp cho tệp này.";
+    saveError.value = t("inspect.errorSnapshotNotFound");
     return;
   }
   if (!entry.revertable) {
-    saveError.value = "Tệp này không thể khôi phục từ bản chụp.";
+    saveError.value = t("inspect.errorNotRevertable");
     return;
   }
 
@@ -975,7 +980,7 @@ watch(source, (next) => {
           v-for="(label, key) in TAB_LABELS"
           :key="key"
           type="button"
-          class="shrink-0 rounded-md px-2.5 py-1 font-mono text-xs transition-colors"
+          class="min-h-9 shrink-0 rounded-md px-2.5 py-1 font-mono text-xs transition-colors sm:min-h-0"
           :class="
             tab === key
               ? 'bg-primary/10 text-primary'
@@ -988,9 +993,9 @@ watch(source, (next) => {
       </span>
       <button
         type="button"
-        class="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        aria-label="Ẩn thanh kiểm tra"
-        title="Ẩn thanh kiểm tra"
+        class="shrink-0 rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:p-1"
+        :aria-label="t('inspect.hidePanel')"
+        :title="t('inspect.hidePanel')"
         @click="emit('close')"
       >
         <PanelRightClose :size="15" />
@@ -1001,10 +1006,10 @@ watch(source, (next) => {
       v-if="workspace === null"
       class="flex flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground"
     >
-      Chưa xác định được workspace của phiên này.
+      {{ t("inspect.workspaceUnknown") }}
     </div>
 
-    <div v-else class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2.5 font-mono text-xs">
+    <div v-else class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-2.5 font-mono text-xs">
       <!-- Files -->
       <template v-if="tab === 'files'">
         <div class="mb-2 flex flex-wrap items-center gap-1 text-muted-foreground">
@@ -1019,7 +1024,7 @@ watch(source, (next) => {
           </template>
         </div>
 
-        <p v-if="filesLoading" class="text-muted-foreground">Đang tải…</p>
+        <p v-if="filesLoading" class="text-muted-foreground">{{ t("inspect.loading") }}</p>
         <p v-else-if="filesError !== null" class="text-destructive">{{ filesError }}</p>
 
         <template v-else-if="listing !== null">
@@ -1030,27 +1035,27 @@ watch(source, (next) => {
             {{ fileNotice }}
           </p>
           <div class="mb-1.5 flex items-center justify-between gap-2 text-muted-foreground">
-            <span>{{ entries.length }} mục</span>
+            <span>{{ t("inspect.itemCount", { count: entries.length }) }}</span>
             <button
               v-if="directory !== ''"
               type="button"
               class="text-primary hover:underline"
               @click="goUp"
             >
-              lên trên
+              {{ t("inspect.goUp") }}
             </button>
           </div>
           <p
             v-if="listing.truncated"
             class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
           >
-            Danh sách đã được rút gọn — hiển thị 2000 mục đầu tiên.
+            {{ t("inspect.listTruncatedFiles") }}
           </p>
           <ul class="grid gap-0.5">
             <li v-for="entry in entries" :key="entry.name">
               <button
                 type="button"
-                class="flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-left hover:bg-background/60"
+                class="flex min-h-9 w-full items-baseline justify-between gap-2 rounded px-1.5 py-1 text-left hover:bg-background/60 sm:min-h-0 sm:py-0.5"
                 @click="openEntry(entry.name, entry.kind)"
               >
                 <span
@@ -1067,7 +1072,7 @@ watch(source, (next) => {
             </li>
           </ul>
           <p v-if="entries.length === 0" class="text-muted-foreground">
-            Thư mục trống.
+            {{ t("inspect.emptyDirectory") }}
           </p>
         </template>
       </template>
@@ -1076,7 +1081,7 @@ watch(source, (next) => {
       <template v-else-if="tab === 'changes'">
         <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
           <div class="flex min-w-0 flex-wrap items-center gap-1 text-muted-foreground">
-            <span>So sánh:</span>
+            <span>{{ t("inspect.compare") }}</span>
             <button
               type="button"
               class="shrink-0 rounded-md px-2 py-0.5 text-xs transition-colors"
@@ -1099,7 +1104,7 @@ watch(source, (next) => {
               "
               @click="source = 'snapshot'"
             >
-              Lúc bắt đầu
+              {{ t("inspect.atStart") }}
             </button>
           </div>
           <template v-if="source === 'git'">
@@ -1108,7 +1113,7 @@ watch(source, (next) => {
               class="shrink-0 whitespace-nowrap text-primary hover:underline"
               @click="loadChanges"
             >
-              làm mới
+              {{ t("inspect.refresh") }}
             </button>
           </template>
           <template v-else>
@@ -1117,26 +1122,26 @@ watch(source, (next) => {
               class="shrink-0 whitespace-nowrap text-primary hover:underline"
               @click="loadSnapshot"
             >
-              làm mới
+              {{ t("inspect.refresh") }}
             </button>
           </template>
         </div>
 
         <!-- Git source (existing view) -->
         <template v-if="source === 'git'">
-          <p v-if="changesLoading" class="text-muted-foreground">Đang tải…</p>
+          <p v-if="changesLoading" class="text-muted-foreground">{{ t("inspect.loading") }}</p>
           <p v-else-if="changesError !== null" class="text-destructive">{{ changesError }}</p>
 
           <template v-else-if="changes !== null">
             <!-- A failed diff keeps the list: only the diff failed, and the
                  operator can pick another file without losing their place. -->
-            <p v-if="diffLoading" class="mb-1.5 text-muted-foreground">Đang tải diff…</p>
+            <p v-if="diffLoading" class="mb-1.5 text-muted-foreground">{{ t("inspect.loadingDiff") }}</p>
             <p v-else-if="diffError !== null" class="mb-1.5 text-destructive">{{ diffError }}</p>
             <p
               v-if="changes.truncated"
               class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-muted-foreground"
             >
-              Danh sách đã được rút gọn — hiển thị 2000 thay đổi đầu tiên.
+              {{ t("inspect.listTruncatedChanges") }}
             </p>
             <ul class="grid gap-0.5">
               <li v-for="entry in changeEntries" :key="entry.path">
@@ -1159,31 +1164,31 @@ watch(source, (next) => {
               </li>
             </ul>
             <p v-if="changeEntries.length === 0" class="text-muted-foreground">
-              Working tree sạch — không có thay đổi nào.
+              {{ t("inspect.workingTreeClean") }}
             </p>
           </template>
         </template>
 
         <!-- Snapshot source (P3-B baseline) -->
         <template v-else>
-          <p v-if="snapshotLoading" class="text-muted-foreground">Đang tải…</p>
+          <p v-if="snapshotLoading" class="text-muted-foreground">{{ t("inspect.loading") }}</p>
           <p v-else-if="snapshotError !== null" class="text-destructive">{{ snapshotError }}</p>
 
           <template v-else-if="snapshotStatus !== null">
             <div v-if="snapshotStatus.baseline === null" class="text-muted-foreground">
-              Chưa có bản chụp ban đầu.
+              {{ t("inspect.noSnapshot") }}
             </div>
 
             <template v-else>
               <div class="mb-2 rounded-md border border-border/60 bg-background/60 px-2 py-1.5 text-[11px] leading-relaxed">
                 <div class="text-muted-foreground break-words">
-                  Bản chụp: lượt
+                  {{ t("inspect.snapshotTurn") }}
                   <span
                     class="font-mono text-foreground"
                     :title="snapshotStatus.baseline.attemptId"
                   >{{ snapshotStatus.baseline.attemptId.slice(0, 8) }}</span>
                   <template v-if="snapshotStatus.baseline.sessionId !== null">
-                    — phiên
+                    {{ t("inspect.snapshotSession") }}
                     <span
                       class="font-mono text-foreground"
                       :title="snapshotStatus.baseline.sessionId"
@@ -1192,16 +1197,16 @@ watch(source, (next) => {
                   , {{ new Date(snapshotStatus.baseline.capturedAt).toLocaleString() }}
                 </div>
                 <div v-if="snapshotStatus.baseline.partial" class="text-destructive">
-                  Bản chụp không đầy đủ.
+                  {{ t("inspect.snapshotIncomplete") }}
                 </div>
                 <div v-if="snapshotStatus.truncated" class="text-destructive">
-                  Danh sách thay đổi đã bị rút gọn.
+                  {{ t("inspect.snapshotChangesTruncated") }}
                 </div>
               </div>
 
               <div class="mb-2 flex min-w-0 items-center justify-between gap-2">
                 <span class="shrink-0 text-muted-foreground">
-                  {{ snapshotStatus.entries.length }} mục
+                  {{ t("inspect.itemCount", { count: snapshotStatus.entries.length }) }}
                 </span>
                 <button
                   v-if="summarisePlan(snapshotStatus).restores +
@@ -1210,7 +1215,7 @@ watch(source, (next) => {
                   class="shrink-0 text-primary hover:underline"
                   @click="workspaceRevertConfirm = true"
                 >
-                  Khôi phục tất cả
+                  {{ t("inspect.revertAll") }}
                 </button>
               </div>
 
@@ -1233,16 +1238,16 @@ watch(source, (next) => {
                   </button>
                   <span class="flex shrink-0 items-center gap-1.5">
                     <span v-if="entry.status === 'modified'" class="text-muted-foreground">
-                      sửa
+                      {{ t("inspect.snapshotModified") }}
                     </span>
                     <span v-else-if="entry.status === 'created'" class="text-muted-foreground">
-                      thêm
+                      {{ t("inspect.snapshotCreated") }}
                     </span>
                     <span v-else-if="entry.status === 'deleted'" class="text-muted-foreground">
-                      xoá
+                      {{ t("inspect.snapshotDeleted") }}
                     </span>
                     <span v-else-if="entry.status === 'excluded'" class="text-muted-foreground">
-                      loại trừ
+                      {{ t("inspect.snapshotExcluded") }}
                     </span>
 
                     <!-- Per-file revert with inline confirm. `confirmingPath` is
@@ -1258,7 +1263,7 @@ watch(source, (next) => {
                           class="text-destructive hover:underline"
                           @click="revertOneFile({ path: entry.path, currentHash: entry.currentHash })"
                         >
-                          xác nhận
+                          {{ t("inspect.confirm") }}
                         </button>
                       </template>
                       <template v-else>
@@ -1267,7 +1272,7 @@ watch(source, (next) => {
                           class="text-primary hover:underline"
                           @click="confirmingPath = entry.path"
                         >
-                          khôi phục
+                          {{ t("inspect.revert") }}
                         </button>
                       </template>
                     </template>
@@ -1282,14 +1287,14 @@ watch(source, (next) => {
             v-if="workspaceRevertConfirm && snapshotStatus !== null && snapshotStatus.baseline !== null"
             class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
           >
-            <div class="w-full max-w-lg rounded-md border border-border/60 bg-card p-4 font-mono text-xs">
-              <h3 class="mb-3 text-sm font-medium">Xác nhận khôi phục toàn bộ workspace</h3>
+            <div class="max-h-[90dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-md border border-border/60 bg-card p-4 font-mono text-xs">
+              <h3 class="mb-3 text-sm font-medium">{{ t("inspect.restoreTitle") }}</h3>
               <div v-if="snapshotStatus" class="mb-3 space-y-1 text-muted-foreground">
                 <div>
-                  Khôi phục: {{ summarisePlan(snapshotStatus).restores }} tệp
+                  {{ t("inspect.restoreCount", { count: summarisePlan(snapshotStatus).restores }) }}
                 </div>
-                <div>Xóa: {{ summarisePlan(snapshotStatus).deletions }} tệp</div>
-                <div>Xung đột: {{ summarisePlan(snapshotStatus).conflicts }} mục</div>
+                <div>{{ t("inspect.deleteCount", { count: summarisePlan(snapshotStatus).deletions }) }}</div>
+                <div>{{ t("inspect.conflictCount", { count: summarisePlan(snapshotStatus).conflicts }) }}</div>
               </div>
 
               <div v-if="canApplyPlan(snapshotStatus).ok === false" class="mb-3 text-destructive">
@@ -1298,7 +1303,7 @@ watch(source, (next) => {
 
               <div class="mb-3 max-h-60 overflow-y-auto">
                 <div v-if="snapshotStatus.entries.filter((e) => e.status === 'modified' || e.status === 'deleted').length > 0" class="mb-2">
-                  <div class="font-medium text-muted-foreground">Khôi phục:</div>
+                  <div class="font-medium text-muted-foreground">{{ t("inspect.restoreLabel") }}</div>
                   <div
                     v-for="e in snapshotStatus.entries.filter((e) => e.status === 'modified' || e.status === 'deleted').slice(0, 50)"
                     :key="e.path"
@@ -1308,7 +1313,7 @@ watch(source, (next) => {
                   </div>
                 </div>
                 <div v-if="snapshotStatus.entries.filter((e) => e.status === 'created').length > 0" class="mb-2">
-                  <div class="font-medium text-muted-foreground">Xóa:</div>
+                  <div class="font-medium text-muted-foreground">{{ t("inspect.deleteLabel") }}</div>
                   <div
                     v-for="e in snapshotStatus.entries.filter((e) => e.status === 'created').slice(0, 50)"
                     :key="e.path"
@@ -1318,7 +1323,7 @@ watch(source, (next) => {
                   </div>
                 </div>
                 <div v-if="snapshotStatus.entries.filter((e) => e.status === 'excluded').length > 0" class="mb-2">
-                  <div class="font-medium text-muted-foreground">Xung đột (không thao tác):</div>
+                  <div class="font-medium text-muted-foreground">{{ t("inspect.conflictLabel") }}</div>
                   <div
                     v-for="e in snapshotStatus.entries.filter((e) => e.status === 'excluded').slice(0, 50)"
                     :key="e.path"
@@ -1335,7 +1340,7 @@ watch(source, (next) => {
                   class="px-3 py-1 text-muted-foreground hover:text-foreground"
                   @click="workspaceRevertConfirm = false"
                 >
-                  hủy
+                  {{ t("inspect.cancel") }}
                 </button>
                 <button
                   type="button"
@@ -1343,7 +1348,7 @@ watch(source, (next) => {
                   :disabled="!canApplyPlan(snapshotStatus).ok"
                   @click="doRevertWorkspace"
                 >
-                  Xác nhận khôi phục
+                  {{ t("inspect.confirmRestore") }}
                 </button>
               </div>
             </div>
@@ -1354,13 +1359,13 @@ watch(source, (next) => {
       <!-- Diagnostics -->
       <template v-else-if="tab === 'diagnostics'">
         <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
-          <span>Cấu hình runner</span>
+          <span>{{ t("inspect.runnerConfig") }}</span>
           <button type="button" class="text-primary hover:underline" @click="loadDiagnostics">
-            làm mới
+            {{ t("inspect.refresh") }}
           </button>
         </div>
 
-        <p v-if="diagnosticsLoading" class="text-muted-foreground">Đang tải…</p>
+        <p v-if="diagnosticsLoading" class="text-muted-foreground">{{ t("inspect.loading") }}</p>
         <p v-else-if="diagnosticsError !== null" class="text-destructive">
           {{ diagnosticsError }}
         </p>
@@ -1370,24 +1375,24 @@ watch(source, (next) => {
             <div class="flex items-baseline justify-between gap-3">
               <dt class="shrink-0 text-muted-foreground">{{ source.source }}</dt>
               <dd class="min-w-0 flex-1 truncate text-right" :title="source.path">
-                {{ source.exists ? (source.readable ? "đọc được" : "không đọc được") : "không có" }}
+                {{ source.exists ? (source.readable ? t("inspect.readable") : t("inspect.unreadable")) : t("inspect.missing") }}
               </dd>
             </div>
           </template>
           <div class="flex items-baseline justify-between gap-3">
             <dt class="text-muted-foreground">Git</dt>
-            <dd>{{ diagnostics.report.gitAvailable ? "có" : "không" }}</dd>
+            <dd>{{ diagnostics.report.gitAvailable ? t("inspect.yes") : t("inspect.no") }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">Xác thực provider</dt>
+            <dt class="text-muted-foreground">{{ t("inspect.providerAuth") }}</dt>
             <dd>{{ diagnostics.report.providerAuth }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="text-muted-foreground">Môi trường chạy</dt>
+            <dt class="text-muted-foreground">{{ t("inspect.runtime") }}</dt>
             <dd>{{ diagnostics.report.runtime }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-3">
-            <dt class="shrink-0 text-muted-foreground">Thư mục gốc</dt>
+            <dt class="shrink-0 text-muted-foreground">{{ t("inspect.workspaceRoot") }}</dt>
             <dd class="min-w-0 flex-1 truncate text-right" :title="diagnostics.report.workspaceRoot">
               {{ diagnostics.report.workspaceRoot }}
             </dd>
@@ -1409,13 +1414,13 @@ watch(source, (next) => {
            only lists what is still active and lets the operator cancel it. -->
       <template v-else>
         <div class="mb-2 flex items-center justify-between gap-2 text-muted-foreground">
-          <span>Lịch chạy</span>
+          <span>{{ t("inspect.schedules") }}</span>
           <button type="button" class="text-primary hover:underline" @click="loadSchedules">
-            làm mới
+            {{ t("inspect.refresh") }}
           </button>
         </div>
 
-        <p v-if="schedulesLoading" class="text-muted-foreground">Đang tải…</p>
+        <p v-if="schedulesLoading" class="text-muted-foreground">{{ t("inspect.loading") }}</p>
         <p v-else-if="schedulesError !== null" class="text-destructive">{{ schedulesError }}</p>
 
         <template v-else>
@@ -1439,12 +1444,12 @@ watch(source, (next) => {
                   :disabled="cancellingScheduleId !== null"
                   @click="cancelOneSchedule(row.scheduleId)"
                 >
-                  {{ cancellingScheduleId === row.scheduleId ? "đang huỷ…" : "Huỷ" }}
+                  {{ cancellingScheduleId === row.scheduleId ? t("inspect.cancelling") : t("inspect.cancelSchedule") }}
                 </button>
               </div>
             </li>
           </ul>
-          <p v-else class="text-muted-foreground">Chưa có lịch nào.</p>
+          <p v-else class="text-muted-foreground">{{ t("inspect.noSchedules") }}</p>
         </template>
       </template>
     </div>

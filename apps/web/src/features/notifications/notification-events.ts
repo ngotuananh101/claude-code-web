@@ -15,6 +15,8 @@
  * there, and a pop-up on top of it would be noise.
  */
 
+import { t } from "@/lib/i18n";
+
 export const NOTIFIABLE_EVENT_TYPES: ReadonlySet<string> = new Set([
   "approval.requested",
   "approval.expired",
@@ -60,20 +62,29 @@ export function formatBrowserNotification(
   switch (input.type) {
     case "approval.requested":
       return {
-        title: "Cần phê duyệt",
+        title: t("notifications.approvalRequested"),
         body:
-          `Phiên: ${session}` +
-          (tool !== "" ? `\nCông cụ: ${tool}` : "") +
+          t("notifications.session", { session }) +
+          (tool !== "" ? `\n${t("notifications.tool", { tool })}` : "") +
           (summary !== "" ? `\n${summary}` : ""),
       };
     case "approval.expired":
-      return { title: "Phê duyệt đã hết hạn", body: `Phiên: ${session}` };
+      return {
+        title: t("notifications.approvalExpired"),
+        body: t("notifications.session", { session }),
+      };
     case "run.finished":
-      return { title: "Run đã hoàn thành", body: `Phiên: ${session}` };
+      return {
+        title: t("notifications.runFinished"),
+        body: t("notifications.session", { session }),
+      };
     case "run.failed":
-      return { title: "Run thất bại", body: `Phiên: ${session}` };
+      return { title: t("notifications.runFailed"), body: t("notifications.session", { session }) };
     case "run.interrupted":
-      return { title: "Run đã bị gián đoạn", body: `Phiên: ${session}` };
+      return {
+        title: t("notifications.runInterrupted"),
+        body: t("notifications.session", { session }),
+      };
     default:
       return null;
   }

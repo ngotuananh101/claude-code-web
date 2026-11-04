@@ -1,5 +1,6 @@
 import type { SnapshotStatusResult } from "@cc-web/protocol";
 import { MAX_REVERT_FILES } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 
 /**
  * Pure revert-panel logic (§7.8).
@@ -44,24 +45,24 @@ export function canApplyPlan(
   status: SnapshotStatusResult,
 ): { ok: true } | { ok: false; reason: string } {
   if (status.baseline === null) {
-    return { ok: false, reason: "Chưa có bản chụp lúc bắt đầu chạy." };
+    return { ok: false, reason: t("inspect.revertNoSnapshot") };
   }
   if (status.baseline.partial) {
-    return { ok: false, reason: "Bản chụp không đầy đủ." };
+    return { ok: false, reason: t("inspect.snapshotIncomplete") };
   }
   if (status.truncated) {
-    return { ok: false, reason: "Danh sách thay đổi quá dài." };
+    return { ok: false, reason: t("inspect.revertTooMany") };
   }
   if (status.digest === null) {
-    return { ok: false, reason: "Không có kế hoạch để áp dụng." };
+    return { ok: false, reason: t("inspect.revertNoPlan") };
   }
   const plan = summarisePlan(status);
   const actionable = plan.restores + plan.deletions;
   if (actionable === 0) {
-    return { ok: false, reason: "Không có gì để khôi phục." };
+    return { ok: false, reason: t("inspect.revertNothing") };
   }
   if (actionable > MAX_REVERT_FILES) {
-    return { ok: false, reason: "Phạm vi quá lớn — hãy khôi phục từng phần." };
+    return { ok: false, reason: t("inspect.revertScopeTooLarge") };
   }
   return { ok: true };
 }

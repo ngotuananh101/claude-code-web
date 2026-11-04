@@ -14,6 +14,7 @@ import type {
   ProfileDetail,
   ProfileSummary,
 } from "@cc-web/protocol";
+import { t } from "@/lib/i18n";
 import { authFetch } from "./auth-api.ts";
 
 export type CreateProfileBody = {
@@ -66,11 +67,11 @@ export async function fetchProfileModels(body: ProfileModelsBody): Promise<Profi
       body: JSON.stringify(body),
     });
   } catch {
-    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+    return { ok: false, code: "error", message: t("api.unreachableTo") };
   }
 
   if (response.status === 401) {
-    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+    return { ok: false, code: "unauthorized", message: t("api.sessionExpired") };
   }
   if (!response.ok) {
     return { ok: false, code: "error", message: await errorMessage(response) };
@@ -79,14 +80,14 @@ export async function fetchProfileModels(body: ProfileModelsBody): Promise<Profi
   try {
     const parsed = (await response.json()) as { models?: unknown };
     if (!Array.isArray(parsed.models)) {
-      return { ok: false, code: "error", message: "Phản hồi danh sách model không hợp lệ." };
+      return { ok: false, code: "error", message: t("api.invalidModelListResponse") };
     }
     return {
       ok: true,
       models: parsed.models.filter((model): model is string => typeof model === "string"),
     };
   } catch {
-    return { ok: false, code: "error", message: "Phản hồi danh sách model không hợp lệ." };
+    return { ok: false, code: "error", message: t("api.invalidModelListResponse") };
   }
 }
 
@@ -100,11 +101,11 @@ export async function listProfiles(): Promise<ListProfilesResult> {
   try {
     response = await authFetch("/api/config/profiles");
   } catch {
-    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+    return { ok: false, code: "error", message: t("api.unreachableTo") };
   }
 
   if (response.status === 401) {
-    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+    return { ok: false, code: "unauthorized", message: t("api.sessionExpired") };
   }
   if (!response.ok) {
     return { ok: false, code: "error", message: await text(response) };
@@ -113,11 +114,11 @@ export async function listProfiles(): Promise<ListProfilesResult> {
   try {
     const body = (await response.json()) as { profiles?: unknown };
     if (!Array.isArray(body.profiles)) {
-      return { ok: false, code: "error", message: "Danh sách profile không hợp lệ." };
+      return { ok: false, code: "error", message: t("api.invalidProfileList") };
     }
     return { ok: true, profiles: body.profiles as ProfileSummary[] };
   } catch {
-    return { ok: false, code: "error", message: "Phản hồi profile không hợp lệ." };
+    return { ok: false, code: "error", message: t("api.invalidProfileResponse") };
   }
 }
 
@@ -127,14 +128,14 @@ export async function getProfile(profileId: string): Promise<ProfileResult> {
   try {
     response = await authFetch(`/api/config/profiles/${encodeURIComponent(profileId)}`);
   } catch {
-    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+    return { ok: false, code: "error", message: t("api.unreachableTo") };
   }
 
   if (response.status === 401) {
-    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+    return { ok: false, code: "unauthorized", message: t("api.sessionExpired") };
   }
   if (response.status === 404) {
-    return { ok: false, code: "not_found", message: "Profile không tồn tại." };
+    return { ok: false, code: "not_found", message: t("api.profileNotFound") };
   }
   if (!response.ok) {
     return { ok: false, code: "error", message: await text(response) };
@@ -144,11 +145,11 @@ export async function getProfile(profileId: string): Promise<ProfileResult> {
     const body = (await response.json()) as { profile?: unknown };
     const profile = parseProfileDetail(body.profile);
     if (profile === undefined) {
-      return { ok: false, code: "error", message: "Profile không hợp lệ." };
+      return { ok: false, code: "error", message: t("api.invalidProfile") };
     }
     return { ok: true, profile };
   } catch {
-    return { ok: false, code: "error", message: "Phản hồi profile không hợp lệ." };
+    return { ok: false, code: "error", message: t("api.invalidProfileResponse") };
   }
 }
 
@@ -195,11 +196,11 @@ async function saveProfile(
       body: JSON.stringify(body),
     });
   } catch {
-    return { ok: false, code: "error", message: "Không kết nối được tới server." };
+    return { ok: false, code: "error", message: t("api.unreachableTo") };
   }
 
   if (response.status === 401) {
-    return { ok: false, code: "unauthorized", message: "Phiên đăng nhập đã hết hạn." };
+    return { ok: false, code: "unauthorized", message: t("api.sessionExpired") };
   }
   if (!response.ok) {
     return { ok: false, code: "error", message: await text(response) };
@@ -209,11 +210,11 @@ async function saveProfile(
     const parsed = (await response.json()) as { profile?: unknown };
     const profile = parseProfileDetail(parsed.profile);
     if (profile === undefined) {
-      return { ok: false, code: "error", message: "Phản hồi profile không hợp lệ." };
+      return { ok: false, code: "error", message: t("api.invalidProfileResponse") };
     }
     return { ok: true, profile };
   } catch {
-    return { ok: false, code: "error", message: "Phản hồi profile không hợp lệ." };
+    return { ok: false, code: "error", message: t("api.invalidProfileResponse") };
   }
 }
 
@@ -222,7 +223,7 @@ async function text(response: Response): Promise<string> {
   try {
     return await response.text();
   } catch {
-    return `Lỗi máy chủ (HTTP ${response.status}).`;
+    return t("api.serverErrorHttp", { status: response.status });
   }
 }
 
@@ -238,7 +239,7 @@ async function errorMessage(response: Response): Promise<string> {
   } catch {
     // Fall through to the text body.
   }
-  return (await text(response)) || `Lỗi máy chủ (HTTP ${response.status}).`;
+  return (await text(response)) || t("api.serverErrorHttp", { status: response.status });
 }
 
 /**

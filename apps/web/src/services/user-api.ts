@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 import { sessions } from "../stores/sessions.ts";
 import { authFetch } from "./auth-api.ts";
 
@@ -63,7 +64,7 @@ export async function updateUserProfile(
     }
 
     // Non-200: try to parse the error body, fall back to generic message
-    let errorMessage = "Không kết nối được máy chủ.";
+    let errorMessage = t("api.unreachable");
     try {
       const errorBody = await response.json();
       if (errorBody && typeof errorBody === "object") {
@@ -85,6 +86,6 @@ export async function updateUserProfile(
     }
     return { ok: false, error: errorMessage };
   } catch {
-    return { ok: false, error: "Không kết nối được máy chủ." };
+    return { ok: false, error: t("api.unreachable") };
   }
 }

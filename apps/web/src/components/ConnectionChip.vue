@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Badge } from "@/components/ui/badge";
+import { useI18n } from "@/lib/i18n";
 import { sessions } from "../stores/sessions.ts";
+
+const { t } = useI18n();
 
 const repairing = computed(() => sessions.stream?.needsResync ?? false);
 
 const label = computed(() => {
-  if (repairing.value) return "đang sửa journal";
+  if (repairing.value) return t("connection.repairing");
   switch (sessions.connection) {
     case "live":
-      return "đã kết nối";
+      return t("connection.connected");
     case "connecting":
-      return "đang kết nối";
+      return t("connection.connecting");
     case "closed":
-      return "đang kết nối lại";
+      return t("connection.reconnecting");
   }
 });
 
@@ -24,8 +27,11 @@ const dot = computed(() => {
 </script>
 
 <template>
-  <Badge variant="outline" class="h-auto gap-1.5 py-1 font-mono text-[11px] font-normal text-muted-foreground">
-    <span class="size-[7px] rounded-full" :class="dot" />
-    {{ label }}
+  <Badge
+    variant="outline"
+    class="h-auto min-w-0 max-w-[9rem] gap-1.5 py-1 font-mono text-[11px] font-normal text-muted-foreground"
+  >
+    <span class="size-[7px] shrink-0 rounded-full" :class="dot" />
+    <span class="truncate">{{ label }}</span>
   </Badge>
 </template>
