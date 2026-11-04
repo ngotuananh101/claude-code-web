@@ -59,6 +59,15 @@ export function migrateRunnerDb(db: Database): void {
       ON event_outbox (attempt_id, local_sequence);
   `);
 
+  // Partial index over unacknowledged rows so pendingEvents, pendingEventAttempts,
+  // ackUpTo, and spoolDepth stay O(unacked) instead of scanning across tens of
+  // thousands of already-acknowledged rows on long-running attempts.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS event_outbox_unacked
+      ON event_outbox (attempt_id, local_sequence)
+      WHERE acknowledged = 0;
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS local_attempts (
       attempt_id    TEXT PRIMARY KEY,

@@ -107,6 +107,14 @@ export class EventPump {
   readonly #warned = new Set<string>();
   /** Attempts currently believed to be over the critical depth. */
   readonly #critical = new Set<string>();
+  /**
+   * Highest `localSequence` in the batch currently awaiting `events.ack` per
+   * attempt. At most one batch is in flight per attempt at a time (stop-and-wait):
+   * new events appended while a batch is on the wire stay in SQLite and ride
+   * the next ACK-driven flush instead of re-sending the in-flight prefix on
+   * every streaming delta.
+   */
+  readonly #inFlightThrough = new Map<string, number>();
 
   constructor(options: EventPumpOptions) {
     this.#db = options.db;
@@ -178,12 +186,29 @@ export class EventPump {
    */
   handleAck(ack: { attemptId: string; through: number }): void {
     if (this.#stopped) return;
-    ackUpTo(this.#db, { attemptId: ack.attemptId, sequence: ack.through });
+    const { ackedThrough } = ackUpTo(this.#db, {
+      attemptId: ack.attemptId,
+      sequence: ack.through,
+    });
     // The depth is read here, after the ack has been applied, so a spool the
     // ack drained re-arms its thresholds deterministically rather than
     // depending on a later flush that happens to sample a low depth.
     this.#reportSpoolDepth(ack.attemptId);
+    const inFlight = this.#inFlightThrough.get(ack.attemptId);
+    if (inFlight !== undefined) {
+      if (ackedThrough < inFlight && ack.through < inFlight) return;
+      this.#inFlightThrough.delete(ack.attemptId);
+    }
     this.#flushAttempt(ack.attemptId);
+  }
+
+  /**
+   * Clear per-attempt in-flight watermarks when the transport link drops or
+   * reconnects, so batches that were on the wire when the socket closed are
+   * resent on the next `ready` flush.
+   */
+  resetInFlight(): void {
+    this.#inFlightThrough.clear();
   }
 
   /**
@@ -194,6 +219,7 @@ export class EventPump {
   stop(): void {
     this.#stopped = true;
     this.#retryArmed = false;
+    this.#inFlightThrough.clear();
     // Marking stopped is not enough: a timer armed before the stop is still
     // live, and a live timer keeps the event loop alive past the point the
     // daemon closed its database. Cancel it explicitly.
@@ -222,14 +248,21 @@ export class EventPump {
   }
 
   #flushAttempt(attemptId: string): boolean {
+    if (this.#inFlightThrough.has(attemptId)) return true;
     const batch = this.#selectBatch(attemptId);
     if (batch.events.length === 0) return true;
+    const lastSequence = batch.events[batch.events.length - 1]!.localSequence;
     const carried = this.#send(
       { type: "events", events: batch.events },
       serializeEventBatch(batch.serialized),
     );
-    if (!carried) this.#armRetry();
-    return carried;
+    if (!carried) {
+      this.#inFlightThrough.clear();
+      this.#armRetry();
+      return false;
+    }
+    this.#inFlightThrough.set(attemptId, lastSequence);
+    return true;
   }
 
   /**

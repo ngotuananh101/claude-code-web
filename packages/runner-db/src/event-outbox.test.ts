@@ -155,6 +155,56 @@ describe("event outbox", () => {
     const result = ackUpTo(db, { attemptId: "never-existed", sequence: 5 });
     expect(result.ackedThrough).toBe(0);
   });
+
+  test("incremental ackUpTo updates only newly acknowledged rows instead of rewriting history", () => {
+    const db = freshDb();
+    for (let i = 1; i <= 200; i += 1) append(db, i);
+    ackUpTo(db, { attemptId: attempt, sequence: 200 });
+
+    append(db, 201);
+    append(db, 202);
+
+    const totalChanges = () => (db.query("SELECT total_changes() AS n").get() as { n: number }).n;
+
+    const beforeNextAck = totalChanges();
+    const next = ackUpTo(db, { attemptId: attempt, sequence: 202 });
+    const afterNextAck = totalChanges();
+
+    expect(next.ackedThrough).toBe(202);
+    // Only sequences 201 and 202 transitioned from 0 -> 1; rewriting 1..200 on
+    // every ACK turns WAL growth quadratic in attempt length.
+    expect(afterNextAck - beforeNextAck).toBe(2);
+
+    // A duplicate or lower ACK must touch zero rows.
+    const afterDupAck = (() => {
+      ackUpTo(db, { attemptId: attempt, sequence: 202 });
+      ackUpTo(db, { attemptId: attempt, sequence: 100 });
+      return totalChanges();
+    })();
+    expect(afterDupAck - afterNextAck).toBe(0);
+  });
+
+  test("unacknowledged queries use the partial unacked index so acknowledged history is skipped", () => {
+    const db = freshDb();
+    const plan = (sql: string) =>
+      (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+        .map((r) => r.detail)
+        .join(" | ");
+
+    expect(
+      plan(
+        `SELECT event_id FROM event_outbox WHERE attempt_id = 'a' AND acknowledged = 0 ORDER BY local_sequence ASC LIMIT 64`,
+      ),
+    ).toContain("event_outbox_unacked");
+    expect(
+      plan(
+        `SELECT DISTINCT attempt_id FROM event_outbox WHERE acknowledged = 0 ORDER BY attempt_id`,
+      ),
+    ).toContain("event_outbox_unacked");
+    expect(
+      plan(`SELECT COUNT(*) FROM event_outbox WHERE acknowledged = 0 AND attempt_id = 'a'`),
+    ).toContain("event_outbox_unacked");
+  });
 });
 
 describe("pending attempts", () => {

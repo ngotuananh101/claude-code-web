@@ -139,34 +139,40 @@ export function ackUpTo(
   db: Database,
   params: { attemptId: string; sequence: number },
 ): { ackedThrough: number } {
+  // Never report a watermark below what is already acknowledged. Starting the
+  // contiguous walk from `alreadyAcked` keeps each ACK O(newly-acked) rather
+  // than rescanning and rewriting 1..S on every batch of a long attempt.
+  const alreadyAcked = highestContiguousAcked(db, params.attemptId);
+  if (params.sequence <= alreadyAcked) {
+    return { ackedThrough: alreadyAcked };
+  }
+
   const sequences = db
     .prepare(
       `SELECT local_sequence FROM event_outbox
-       WHERE attempt_id = ? AND local_sequence <= ?
+       WHERE attempt_id = ? AND acknowledged = 0
+         AND local_sequence > ? AND local_sequence <= ?
        ORDER BY local_sequence ASC`,
     )
-    .all(params.attemptId, params.sequence) as Array<{ local_sequence: number }>;
+    .all(params.attemptId, alreadyAcked, params.sequence) as Array<{ local_sequence: number }>;
 
-  // Walk from 1 and stop at the first missing sequence. Starting from the
-  // requested number would treat a hole as delivered.
-  let contiguous = 0;
+  // Walk from `alreadyAcked` and stop at the first missing sequence. Starting
+  // from the requested number would treat a hole as delivered.
+  let contiguous = alreadyAcked;
   for (const row of sequences) {
     if (row.local_sequence !== contiguous + 1) break;
     contiguous = row.local_sequence;
   }
 
-  if (contiguous > 0) {
+  if (contiguous > alreadyAcked) {
     db.prepare(
       `UPDATE event_outbox SET acknowledged = 1
-       WHERE attempt_id = ? AND local_sequence <= ?`,
-    ).run(params.attemptId, contiguous);
+       WHERE attempt_id = ? AND acknowledged = 0
+         AND local_sequence > ? AND local_sequence <= ?`,
+    ).run(params.attemptId, alreadyAcked, contiguous);
   }
 
-  // Never report a watermark below what is already acknowledged. A late or
-  // duplicate ACK carrying a lower number describes the past; returning it as
-  // the current watermark would make a caller re-send events it already retired.
-  const alreadyAcked = highestContiguousAcked(db, params.attemptId);
-  return { ackedThrough: Math.max(alreadyAcked, contiguous) };
+  return { ackedThrough: contiguous };
 }
 
 /** Highest contiguous acknowledged sequence; 0 when nothing is acknowledged. */

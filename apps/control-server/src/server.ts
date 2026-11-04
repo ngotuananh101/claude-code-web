@@ -298,31 +298,43 @@ export function createServer(options: ServerOptions): ServerHandle {
     // of what already committed answers `duplicate` and allocates nothing, which
     // is what makes a lost ACK heal itself instead of doubling the journal.
     onEvents: (runnerId, events) => {
-      const stored: Array<{ event: (typeof events)[number]; sessionSequence: number }> = [];
-      for (const event of events) {
-        const result = ingestEvent(options.db, event);
-        if (result.status === "stored" && result.sessionSequence !== undefined) {
-          stored.push({ event, sessionSequence: result.sessionSequence });
+      // Wrap the entire batch in one outer transaction so a 64-event frame
+      // performs a single WAL commit instead of 64+ separate fsync/commit
+      // cycles (inner ingestEvent transactions run as SAVEPOINTs).
+      const { stored, acks } = options.db.transaction(() => {
+        const committed: Array<{ event: (typeof events)[number]; sessionSequence: number }> = [];
+        for (const event of events) {
+          const result = ingestEvent(options.db, event);
+          if (result.status === "stored" && result.sessionSequence !== undefined) {
+            committed.push({ event, sessionSequence: result.sessionSequence });
+          }
+          // §13.1: the approval projection and the registry transition are
+          // idempotent, so they run for duplicates too — a redelivered event
+          // heals a projection a crash skipped. A conflict projects nothing.
+          if (result.status !== "conflict") {
+            projectApprovalEvent(options.db, runs, event);
+            // §11.5: the schedule mirror follows the same rule — duplicate
+            // deliveries are safe (the projection is INSERT OR IGNORE keyed by
+            // attempt + tool call), so every non-conflict event is projected.
+            // The authenticated runner id is passed through because a schedule
+            // row becomes work on the pin's runner: only that runner may
+            // create one for the session (§11.5 trust boundary).
+            projectScheduleEvent(options.db, event, runnerId);
+          }
         }
-        // §13.1: the approval projection and the registry transition are
-        // idempotent, so they run for duplicates too — a redelivered event
-        // heals a projection a crash skipped. A conflict projects nothing.
-        if (result.status !== "conflict") {
-          projectApprovalEvent(options.db, runs, event);
-          // §11.5: the schedule mirror follows the same rule — duplicate
-          // deliveries are safe (the projection is INSERT OR IGNORE keyed by
-          // attempt + tool call), so every non-conflict event is projected.
-          // The authenticated runner id is passed through because a schedule
-          // row becomes work on the pin's runner: only that runner may
-          // create one for the session (§11.5 trust boundary).
-          projectScheduleEvent(options.db, event, runnerId);
-        }
-      }
+
+        const attempts = new Set(events.map((event) => event.attemptId));
+        const watermarks = [...attempts].map((attemptId) => ({
+          attemptId,
+          through: attemptWatermark(options.db, attemptId),
+        }));
+        return { stored: committed, acks: watermarks };
+      })();
 
       // Broadcast only what committed (§12.2): a duplicate's re-broadcast would
       // be deduplicated by every client anyway, and a conflict is never content.
-      // This runs after each ingest transaction, so a failed broadcast costs a
-      // live frame — never an event, which the journal still holds.
+      // This runs after the batch ingest transaction, so a failed broadcast
+      // costs a live frame — never an event, which the journal still holds.
       for (const { event, sessionSequence } of stored) {
         browserGateway.publish({
           sessionId: event.sessionId,
@@ -401,11 +413,7 @@ export function createServer(options: ServerOptions): ServerHandle {
         }
       }
 
-      const attempts = new Set(events.map((event) => event.attemptId));
-      return [...attempts].map((attemptId) => ({
-        attemptId,
-        through: attemptWatermark(options.db, attemptId),
-      }));
+      return acks;
     },
   });
 

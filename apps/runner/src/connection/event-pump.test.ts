@@ -209,6 +209,50 @@ describe("flushing", () => {
     expect(pendingEventAttempts(db)).toEqual([]);
   });
 
+  test("flushing on every appended event while a batch is in flight does not resend the in-flight batch", () => {
+    const { db, pump, frames } = setup();
+
+    // Mirrors the live executor: each appended event triggers pump.flush()
+    // before the server has acknowledged the first frame over the network.
+    append(db, 1);
+    pump.flush();
+    append(db, 2);
+    pump.flush();
+    append(db, 3);
+    pump.flush();
+
+    // Only the first batch is in flight; events 2 and 3 wait in the outbox
+    // instead of re-shipping event 1 on every append.
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.events.map((e) => e.localSequence)).toEqual([1]);
+
+    // Once the server acknowledges batch 1, the accumulated tail ships
+    // together in a single frame.
+    pump.handleAck({ attemptId: "attempt-1", through: 1 });
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events.map((e) => e.localSequence)).toEqual([2, 3]);
+  });
+
+  test("resetInFlight allows an unacknowledged batch to be resent after a reconnect", () => {
+    const { db, pump, frames } = setup();
+    append(db, 1);
+    append(db, 2);
+
+    pump.flush();
+    expect(frames).toHaveLength(1);
+
+    // While the link stays up and no ACK has arrived, a second flush is gated.
+    pump.flush();
+    expect(frames).toHaveLength(1);
+
+    // A socket drop loses whatever was in flight on the wire; resetting
+    // in-flight state lets the reconnect's ready flush resend the batch.
+    pump.resetInFlight();
+    pump.flush();
+    expect(frames).toHaveLength(2);
+    expect(frames[1]!.events.map((e) => e.localSequence)).toEqual([1, 2]);
+  });
+
   test("a refused send leaves everything pending and nothing throws", () => {
     const { db, pump, frames } = setup(() => false);
     append(db, 1);
@@ -361,6 +405,25 @@ describe("acknowledging", () => {
   test("an ack for an unknown attempt is a no-op", () => {
     const { pump } = setup();
     expect(() => pump.handleAck({ attemptId: "attempt-nobody", through: 3 })).not.toThrow();
+  });
+
+  test("duplicate or stale acks do not resend the currently in-flight batch", () => {
+    const { db, pump, frames } = setup();
+    for (let i = 1; i <= 100; i++) append(db, i);
+
+    pump.flush();
+    expect(frames).toHaveLength(1);
+
+    // First ACK retires 1..64 and sends 65..100.
+    pump.handleAck({ attemptId: "attempt-1", through: EventPump.BATCH_LIMIT });
+    expect(frames).toHaveLength(2);
+
+    // Duplicate or stale ACKs for 1..64 must not re-flush 65..100 and start a
+    // positive-feedback ACK storm.
+    pump.handleAck({ attemptId: "attempt-1", through: EventPump.BATCH_LIMIT });
+    pump.handleAck({ attemptId: "attempt-1", through: EventPump.BATCH_LIMIT });
+    pump.handleAck({ attemptId: "attempt-1", through: 10 });
+    expect(frames).toHaveLength(2);
   });
 });
 

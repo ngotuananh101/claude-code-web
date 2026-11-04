@@ -154,6 +154,15 @@ describe("the acknowledgement watermark", () => {
     const db = setup();
     expect(attemptWatermark(db, "attempt-nobody")).toBe(0);
   });
+
+  test("counts contiguously from 1 and ignores out-of-range non-positive sequences", () => {
+    const db = setup();
+    ingestEvent(db, event({ eventId: "evt-0", localSequence: 0 }));
+    ingestEvent(db, event({ eventId: "evt-1", localSequence: 1 }));
+    ingestEvent(db, event({ eventId: "evt-2", localSequence: 2 }));
+
+    expect(attemptWatermark(db, "attempt-1")).toBe(2);
+  });
 });
 
 describe("appending an event the server originates", () => {

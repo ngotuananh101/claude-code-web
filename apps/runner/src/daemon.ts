@@ -466,7 +466,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       // §12.2: on `ready` the backlog moves. Rows pending from before the
       // reconnect (or from a process that died mid-run) are exactly what the
       // resend exists for, and this is the first moment the link can carry them.
-      if (event.type === "ready") pump.flush();
+      if (event.type === "disconnected" || event.type === "error") {
+        pump.resetInFlight();
+      }
+      if (event.type === "ready") {
+        pump.resetInFlight();
+        pump.flush();
+      }
       options.onEvent?.(event);
     },
     // An ACK retires rows and self-drives the next bounded batch of its attempt.

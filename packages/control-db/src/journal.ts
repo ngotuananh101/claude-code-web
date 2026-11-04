@@ -175,18 +175,20 @@ export function appendServerEvent(
  * would tell the runner a gap was delivered when it was not.
  */
 export function attemptWatermark(db: Database, attemptId: string): number {
-  const rows = db
+  const row = db
     .prepare(
-      "SELECT local_sequence FROM run_events WHERE attempt_id = ? ORDER BY local_sequence ASC",
+      `SELECT COALESCE(MAX(local_sequence), 0) AS watermark
+       FROM (
+         SELECT local_sequence,
+                ROW_NUMBER() OVER (ORDER BY local_sequence ASC) AS rn
+         FROM run_events
+         WHERE attempt_id = ? AND local_sequence >= 1 AND local_sequence < ?
+       )
+       WHERE local_sequence = rn`,
     )
-    .all(attemptId) as Array<{ local_sequence: number }>;
+    .get(attemptId, SERVER_EVENT_SEQUENCE_BASE) as { watermark: number };
 
-  let contiguous = 0;
-  for (const row of rows) {
-    if (row.local_sequence !== contiguous + 1) break;
-    contiguous = row.local_sequence;
-  }
-  return contiguous;
+  return row.watermark;
 }
 
 type StoredRow = {
