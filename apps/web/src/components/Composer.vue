@@ -652,13 +652,13 @@ async function stop(): Promise<void> {
 
 <template>
   <div
-    class="rounded-xl border border-border/80 bg-muted/40 p-1 text-left shadow-xs"
+    class="flex flex-col text-left"
     v-bind="$attrs"
   >
-    <!-- Top Bar on New Session page: Runner, Browse Folder, Folder Chip, Session History, Branch -->
+    <!-- Top tab emerging from the main prompt card on New Session page -->
     <div
       v-if="sessionId === null"
-      class="flex flex-wrap items-center gap-1.5 px-2.5 pt-1 pb-1.5"
+      class="-mb-3.5 flex flex-wrap items-center gap-1.5 rounded-t-2xl border border-b-0 border-input/80 bg-muted/60 px-3 pt-1.5 pb-5"
     >
       <!-- Bước 1: Chọn runner -->
       <Select v-model="runnerId">
@@ -766,14 +766,14 @@ async function stop(): Promise<void> {
       </span>
     </div>
 
-    <!-- Top Bar inside an active Session: only shown when subagents exist -->
+    <!-- Top tab inside an active Session: only shown when subagents exist -->
     <div
       v-else-if="subagentCounts.total > 0"
-      class="flex flex-wrap items-center justify-between gap-2 px-2.5 pt-1 pb-1.5"
+      class="-mb-3.5 flex flex-wrap items-center justify-between gap-2 rounded-t-2xl border border-b-0 border-input/80 bg-muted/60 px-3 pt-1.5 pb-5"
     >
       <button
         type="button"
-        class="inline-flex h-7 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 text-xs font-medium text-foreground transition-colors hover:border-border hover:bg-background"
+        class="inline-flex h-7 cursor-pointer items-center gap-2 rounded-lg px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
         @click="emit('openSubagents')"
       >
         <i
@@ -793,8 +793,8 @@ async function stop(): Promise<void> {
       </button>
     </div>
 
-    <!-- Inner Prompt Card -->
-    <InputGroup class="gap-0 rounded-lg bg-card shadow-2xs items-stretch text-left">
+    <!-- Main Prompt Card -->
+    <InputGroup class="relative z-10 gap-0 rounded-2xl bg-card shadow-sm items-stretch text-left">
       <div
         class="relative w-full text-left"
         @dragover="onDragOver"
