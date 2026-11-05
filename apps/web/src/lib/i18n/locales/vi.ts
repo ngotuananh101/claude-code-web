@@ -570,6 +570,11 @@ export const vi: TranslationDictionary = {
     statusFailed: "Thất bại",
     statusStopped: "Đã dừng",
     selectPrompt: "Chọn một subagent ở cột trái để xem chi tiết sự kiện.",
+    activeTab: "Mặc định ({count})",
+    historyTab: "Lịch sử ({count})",
+    activeEmptyWithHistory: "Subagent đã hoàn tất tự động ẩn khỏi màn mặc định sau 5 phút.",
+    openHistoryBtn: "Xem lịch sử ({count})",
+    historyEmpty: "Chưa có subagent nào hoàn tất trong lịch sử.",
   },
   approval: {
     allowed: "Đã cho phép",
@@ -714,6 +719,8 @@ export const vi: TranslationDictionary = {
     subagentsCompletedCount: "{count} hoàn tất",
     subagentsFailedCount: "{count} lỗi",
     viewSubagents: "Xem chi tiết",
+    subagentHistory: "Lịch sử subagent ({count})",
+    subagentHistoryShort: "Lịch sử ({count})",
   },
   modelPicker: {
     default: "Mặc định",

@@ -3,7 +3,12 @@ import type { BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
 import { EMPTY_TASK_STATE, taskStateFromEvents } from "./background-tasks.ts";
 import {
   deriveSubagentItems,
+  filterHistorySubagents,
+  filterVisibleSubagents,
+  isSubagentVisibleByDefault,
   resolveSelectedSubagentId,
+  resolveSubagentDialogTab,
+  SUBAGENT_DEFAULT_VISIBILITY_MS,
   type SubagentItem,
   summarizeSubagentCounts,
 } from "./subagent-events.ts";
@@ -659,5 +664,189 @@ describe("summarizeSubagentCounts and resolveSelectedSubagentId", () => {
       resolveSelectedSubagentId([mkItem({ id: "only-done", status: "completed" })], null),
     ).toBe("only-done");
     expect(resolveSelectedSubagentId([], null)).toBeNull();
+  });
+});
+
+describe("5-minute default visibility window and subagent history", () => {
+  const mkItem = (partial: Partial<SubagentItem> & { id: string }): SubagentItem => ({
+    description: partial.id,
+    status: "running",
+    events: [],
+    turns: [],
+    ...partial,
+  });
+
+  test("marks subagents settled and stamps completedAt across task.completed, tasks.changed, and tool.completed", () => {
+    resetSeq();
+    const events: BrowserReplayEvent[] = [
+      // 1. Settled via task.completed
+      liveEvent(
+        "task.started",
+        { taskId: "sub-task-done", runId: "run-1", description: "Via task.completed" },
+        "run-1",
+        "2026-11-05T10:00:00.000Z",
+      ),
+      liveEvent(
+        "task.completed",
+        { taskId: "sub-task-done", runId: "run-1", status: "completed" },
+        "run-1",
+        "2026-11-05T10:00:05.000Z",
+      ),
+      // 2. Settled via tasks.changed level reset (missed task.completed)
+      liveEvent(
+        "task.started",
+        { taskId: "sub-level-reset", runId: "run-1", description: "Via tasks.changed" },
+        "run-1",
+        "2026-11-05T10:00:10.000Z",
+      ),
+      liveEvent("tasks.changed", { tasks: [] }, "run-1", "2026-11-05T10:00:15.000Z"),
+      // 3. Settled via spawning Agent tool.completed without task record
+      liveEvent(
+        "tool.started",
+        {
+          toolCallId: "toolu-fg-1",
+          toolName: "Agent",
+          input: { description: "Via tool.completed" },
+        },
+        "run-1",
+        "2026-11-05T10:00:20.000Z",
+      ),
+      liveEvent(
+        "tool.completed",
+        {
+          toolCallId: "toolu-fg-1",
+          isError: false,
+          outputSummary: "Done foreground task",
+        },
+        "run-1",
+        "2026-11-05T10:00:25.000Z",
+      ),
+    ];
+
+    const items = deriveSubagentItems([], events, taskStateFromEvents(events));
+    expect(items.map((i) => ({ id: i.id, status: i.status, completedAt: i.completedAt }))).toEqual([
+      {
+        id: "sub-task-done",
+        status: "completed",
+        completedAt: "2026-11-05T10:00:05.000Z",
+      },
+      {
+        id: "sub-level-reset",
+        status: "completed",
+        completedAt: "2026-11-05T10:00:15.000Z",
+      },
+      {
+        id: "toolu-fg-1",
+        status: "completed",
+        completedAt: "2026-11-05T10:00:25.000Z",
+      },
+    ]);
+  });
+
+  test("keeps running subagents visible and hides completed subagents 5 minutes after completion", () => {
+    expect(SUBAGENT_DEFAULT_VISIBILITY_MS).toBe(5 * 60 * 1000);
+
+    const completedIso = "2026-11-05T10:00:00.000Z";
+    const completedMs = Date.parse(completedIso);
+
+    const runningOld = mkItem({
+      id: "running-30m",
+      status: "running",
+      startedAt: "2026-11-05T09:30:00.000Z",
+      updatedAt: "2026-11-05T09:30:00.000Z",
+    });
+    const completedItem = mkItem({
+      id: "done-1",
+      status: "completed",
+      completedAt: completedIso,
+      updatedAt: completedIso,
+    });
+    const historicalNoTimestamp = mkItem({
+      id: "hist-disk",
+      status: "completed",
+    });
+
+    // Running subagent stays visible even after 30 minutes
+    expect(isSubagentVisibleByDefault(runningOld, completedMs + 30 * 60 * 1000)).toBe(true);
+
+    // Completed subagent stays visible right up to 4m 59.999s
+    expect(isSubagentVisibleByDefault(completedItem, completedMs)).toBe(true);
+    expect(
+      isSubagentVisibleByDefault(completedItem, completedMs + SUBAGENT_DEFAULT_VISIBILITY_MS - 1),
+    ).toBe(true);
+
+    // At exactly 5 minutes (and beyond), completed subagent is hidden from default view
+    expect(
+      isSubagentVisibleByDefault(completedItem, completedMs + SUBAGENT_DEFAULT_VISIBILITY_MS),
+    ).toBe(false);
+    expect(isSubagentVisibleByDefault(completedItem, completedMs + 10 * 60 * 1000)).toBe(false);
+
+    // Imported historical subagents without live completion timestamps are hidden by default
+    expect(isSubagentVisibleByDefault(historicalNoTimestamp, completedMs)).toBe(false);
+  });
+
+  test("records all settled subagents in history while filtering default view by the 5-minute window", () => {
+    const baseMs = Date.parse("2026-11-05T10:10:00.000Z");
+    const items: SubagentItem[] = [
+      mkItem({
+        id: "still-running",
+        status: "running",
+        startedAt: "2026-11-05T10:00:00.000Z",
+      }),
+      mkItem({
+        id: "done-2m-ago",
+        status: "completed",
+        completedAt: "2026-11-05T10:08:00.000Z",
+      }),
+      mkItem({
+        id: "failed-6m-ago",
+        status: "failed",
+        completedAt: "2026-11-05T10:04:00.000Z",
+      }),
+      mkItem({
+        id: "stopped-5m-ago",
+        status: "stopped",
+        completedAt: "2026-11-05T10:05:00.000Z",
+      }),
+      mkItem({
+        id: "from-disk-history",
+        status: "completed",
+      }),
+    ];
+
+    expect(filterVisibleSubagents(items, baseMs).map((i) => i.id)).toEqual([
+      "still-running",
+      "done-2m-ago",
+    ]);
+
+    expect(filterHistorySubagents(items).map((i) => i.id)).toEqual([
+      "done-2m-ago",
+      "failed-6m-ago",
+      "stopped-5m-ago",
+      "from-disk-history",
+    ]);
+  });
+
+  test("switches dialog tab to history when inspecting an older completed subagent", () => {
+    const nowMs = Date.parse("2026-11-05T10:10:00.000Z");
+    const items: SubagentItem[] = [
+      mkItem({
+        id: "recent-sub",
+        toolUseId: "toolu-recent",
+        status: "completed",
+        completedAt: "2026-11-05T10:08:00.000Z",
+      }),
+      mkItem({
+        id: "archived-sub",
+        toolUseId: "toolu-archived",
+        status: "completed",
+        completedAt: "2026-11-05T10:00:00.000Z",
+      }),
+    ];
+
+    expect(resolveSubagentDialogTab(items, "active", null, nowMs)).toBe("active");
+    expect(resolveSubagentDialogTab(items, "history", null, nowMs)).toBe("history");
+    expect(resolveSubagentDialogTab(items, "active", "toolu-recent", nowMs)).toBe("active");
+    expect(resolveSubagentDialogTab(items, "active", "toolu-archived", nowMs)).toBe("history");
   });
 });

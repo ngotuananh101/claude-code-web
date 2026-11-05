@@ -21,7 +21,7 @@ import {
   Square,
   X,
 } from "@lucide/vue";
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from "@/components/ui/input-group";
@@ -56,7 +56,14 @@ import {
   getAvailableCommands,
   type SlashCommandItem,
 } from "@/features/composer/slash-commands.ts";
-import { type SubagentItem, summarizeSubagentCounts } from "@/features/journal/subagent-events.ts";
+import {
+  filterHistorySubagents,
+  filterVisibleSubagents,
+  isSubagentVisibleByDefault,
+  type SubagentDialogTab,
+  type SubagentItem,
+  summarizeSubagentCounts,
+} from "@/features/journal/subagent-events.ts";
 import { shortRunnerId } from "@/features/sessions/folder-tree.ts";
 import { useI18n } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time.ts";
@@ -107,12 +114,54 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
-  openSubagents: [];
+  openSubagents: [tab?: SubagentDialogTab];
 }>();
 
 const { t } = useI18n();
 
-const subagentCounts = computed(() => summarizeSubagentCounts(props.subagents ?? []));
+const visibilityNow = ref(Date.now());
+let visibilityTicker: ReturnType<typeof setInterval> | null = null;
+
+function stopVisibilityTicker(): void {
+  if (visibilityTicker !== null) {
+    clearInterval(visibilityTicker);
+    visibilityTicker = null;
+  }
+}
+
+watch(
+  () => props.subagents,
+  () => {
+    visibilityNow.value = Date.now();
+  },
+);
+
+watch(
+  () =>
+    (props.subagents ?? []).some(
+      (item) => item.status !== "running" && isSubagentVisibleByDefault(item, visibilityNow.value),
+    ),
+  (hasExpiring) => {
+    if (hasExpiring) {
+      if (visibilityTicker === null) {
+        visibilityTicker = setInterval(() => {
+          visibilityNow.value = Date.now();
+        }, 1000);
+      }
+    } else {
+      stopVisibilityTicker();
+    }
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(stopVisibilityTicker);
+
+const visibleSubagents = computed(() =>
+  filterVisibleSubagents(props.subagents ?? [], visibilityNow.value),
+);
+const historySubagents = computed(() => filterHistorySubagents(props.subagents ?? []));
+const subagentCounts = computed(() => summarizeSubagentCounts(visibleSubagents.value));
 
 const subagentTotalLabel = computed(() => {
   const total = subagentCounts.value.total;
@@ -766,7 +815,7 @@ async function stop(): Promise<void> {
       </span>
     </div>
 
-    <!-- Top tab inside an active Session: only shown when subagents exist -->
+    <!-- Top tab inside an active Session: only shown while subagents are running or completed < 5m ago -->
     <div
       v-else-if="subagentCounts.total > 0"
       class="-mb-3.5 flex flex-wrap items-center justify-between gap-2 rounded-t-2xl border border-b-0 border-input/80 bg-muted/60 px-3 pt-1.5 pb-5"
@@ -774,7 +823,7 @@ async function stop(): Promise<void> {
       <button
         type="button"
         class="inline-flex h-7 cursor-pointer items-center gap-2 rounded-lg px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-        @click="emit('openSubagents')"
+        @click="emit('openSubagents', 'active')"
       >
         <i
           v-if="subagentCounts.running > 0"
@@ -790,6 +839,17 @@ async function stop(): Promise<void> {
           <span>{{ t("composer.viewSubagents") }}</span>
           <ArrowUpRight :size="11" />
         </span>
+      </button>
+
+      <button
+        v-if="historySubagents.length > 0"
+        type="button"
+        class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        :title="t('composer.subagentHistory', { count: historySubagents.length })"
+        @click="emit('openSubagents', 'history')"
+      >
+        <History :size="12" class="shrink-0" />
+        <span>{{ t("composer.subagentHistoryShort", { count: historySubagents.length }) }}</span>
       </button>
     </div>
 
@@ -917,6 +977,17 @@ async function stop(): Promise<void> {
             </SelectItem>
           </SelectContent>
         </Select>
+        <button
+          v-if="sessionId !== null && historySubagents.length > 0"
+          type="button"
+          class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground max-sm:h-9"
+          :aria-label="t('composer.subagentHistory', { count: historySubagents.length })"
+          :title="t('composer.subagentHistory', { count: historySubagents.length })"
+          @click="emit('openSubagents', 'history')"
+        >
+          <History :size="13" class="shrink-0" />
+          <span>{{ t("composer.subagentHistoryShort", { count: historySubagents.length }) }}</span>
+        </button>
       </div>
       <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <ModelPickerPopover

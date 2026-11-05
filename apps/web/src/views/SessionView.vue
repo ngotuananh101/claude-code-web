@@ -13,7 +13,11 @@ import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
 import { liveActivityTasks, taskStateFromEvents } from "../features/journal/background-tasks.ts";
-import { deriveSubagentItems } from "../features/journal/subagent-events.ts";
+import {
+  deriveSubagentItems,
+  resolveSubagentDialogTab,
+  type SubagentDialogTab,
+} from "../features/journal/subagent-events.ts";
 import {
   initialInspectOpen,
   loadInspectPreference,
@@ -176,11 +180,16 @@ const subagentItems = computed(() =>
 
 const subagentDialogOpen = ref(false);
 const selectedSubagentId = ref<string | null>(null);
+const subagentDialogTab = ref<SubagentDialogTab>("active");
 
-function openSubagentsDialog(subagentId?: string): void {
-  if (subagentId !== undefined) {
-    selectedSubagentId.value = subagentId;
-  }
+function openSubagentsDialog(subagentId?: string, tab: SubagentDialogTab = "active"): void {
+  selectedSubagentId.value = subagentId ?? null;
+  subagentDialogTab.value = resolveSubagentDialogTab(
+    subagentItems.value,
+    tab,
+    subagentId ?? null,
+    Date.now(),
+  );
   subagentDialogOpen.value = true;
 }
 
@@ -310,6 +319,7 @@ function followRoute(): void {
   fetchedResume.value = null;
   subagentDialogOpen.value = false;
   selectedSubagentId.value = null;
+  subagentDialogTab.value = "active";
   if (id === null) {
     if (sessions.activeId !== null) closeSession();
     return;
@@ -389,13 +399,14 @@ async function refreshNow(): Promise<void> {
                 :active-run-id="liveRunId"
                 :subagents="subagentItems"
                 @started="onStarted"
-                @open-subagents="openSubagentsDialog()"
+                @open-subagents="(tab) => openSubagentsDialog(undefined, tab ?? 'active')"
               />
             </div>
 
             <SubagentListDialog
               v-model:open="subagentDialogOpen"
               v-model:selected-id="selectedSubagentId"
+              v-model:tab="subagentDialogTab"
               :subagents="subagentItems"
               :events="sessions.stream?.events ?? []"
               :background-task-state="backgroundTaskState"

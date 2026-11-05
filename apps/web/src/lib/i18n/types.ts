@@ -556,6 +556,11 @@ export type TranslationDictionary = {
     statusFailed: string;
     statusStopped: string;
     selectPrompt: string;
+    activeTab: string;
+    historyTab: string;
+    activeEmptyWithHistory: string;
+    openHistoryBtn: string;
+    historyEmpty: string;
   };
   approval: {
     allowed: string;
@@ -699,6 +704,8 @@ export type TranslationDictionary = {
     subagentsCompletedCount: string;
     subagentsFailedCount: string;
     viewSubagents: string;
+    subagentHistory: string;
+    subagentHistoryShort: string;
   };
   modelPicker: {
     default: string;

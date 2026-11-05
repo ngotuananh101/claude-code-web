@@ -60,6 +60,7 @@ export type SubagentItem = {
   status: SubagentStatus;
   startedAt?: string;
   updatedAt?: string;
+  completedAt?: string;
   usage?: TaskUsage;
   summary?: string;
   prompt?: string;
@@ -253,6 +254,7 @@ type MutableSubagent = {
   status: SubagentStatus;
   startedAt?: string;
   updatedAt?: string;
+  completedAt?: string;
   usage?: TaskUsage;
   summary?: string;
   prompt?: string;
@@ -487,9 +489,15 @@ export function deriveSubagentItems(
     if (task.subagentType !== undefined) acc.subagentType = task.subagentType;
     if (task.workflowName !== undefined) acc.workflowName = task.workflowName;
     if (task.parentTaskId !== undefined) acc.parentTaskId = task.parentTaskId;
-    acc.status = task.status;
+    acc.status =
+      task.status === "running" && !taskState.liveTaskIds.has(task.taskId)
+        ? "completed"
+        : task.status;
     acc.startedAt = task.startedAt;
     acc.updatedAt = task.updatedAt;
+    if (task.status !== "running") {
+      acc.completedAt = task.updatedAt;
+    }
     if (task.usage !== undefined) acc.usage = task.usage;
     if (task.summary !== undefined) acc.summary = task.summary;
 
@@ -547,6 +555,13 @@ export function deriveSubagentItems(
       }
       if (byTask.updatedAt === undefined && byTool.updatedAt !== undefined) {
         byTask.updatedAt = byTool.updatedAt;
+      }
+      if (
+        byTask.completedAt === undefined &&
+        byTool.completedAt !== undefined &&
+        byTask.status !== "running"
+      ) {
+        byTask.completedAt = byTool.completedAt;
       }
       if (byTask.events.length === 0 && byTool.events.length > 0) {
         byTask.events = byTool.events;
@@ -808,6 +823,7 @@ export function deriveSubagentItems(
   }
 
   // 3. Scan liveEvents for spawning Agent/Task/Workflow inputs/completions and live subagent events.
+  const seenLiveTasks = new Set<string>();
   for (const event of liveEvents) {
     const payload = asRecord(event.payload) ?? {};
     const parentId = eventParentToolUseId(payload);
@@ -815,6 +831,65 @@ export function deriveSubagentItems(
 
     if (parentId === undefined && agentId === undefined) {
       // Main stream: pick up spawning Agent/Task/Workflow metadata and tool completion fallback.
+      if (event.type === "task.started") {
+        const taskId = asString(payload["taskId"]);
+        if (taskId !== undefined) seenLiveTasks.add(taskId);
+        continue;
+      }
+      if (event.type === "task.completed") {
+        const taskId = asString(payload["taskId"]);
+        if (taskId !== undefined) {
+          seenLiveTasks.delete(taskId);
+          const acc = byTaskId.get(taskId);
+          if (acc !== undefined && acc.status !== "running") {
+            acc.completedAt = event.occurredAt;
+            acc.updatedAt = event.occurredAt;
+          }
+        }
+        continue;
+      }
+      if (event.type === "tasks.changed") {
+        const rawTasks = payload["tasks"];
+        if (Array.isArray(rawTasks)) {
+          const nextLive = new Set<string>();
+          for (const entry of rawTasks) {
+            const id = asString(asRecord(entry)?.["taskId"]);
+            if (id !== undefined) nextLive.add(id);
+          }
+          for (const prevId of seenLiveTasks) {
+            if (!nextLive.has(prevId) && !taskState.liveTaskIds.has(prevId)) {
+              const acc = byTaskId.get(prevId);
+              if (acc !== undefined && acc.completedAt === undefined) {
+                acc.completedAt = event.occurredAt;
+                acc.updatedAt = event.occurredAt;
+              }
+            }
+          }
+          seenLiveTasks.clear();
+          for (const id of nextLive) seenLiveTasks.add(id);
+        }
+        continue;
+      }
+      if (
+        event.type === "run.finished" ||
+        event.type === "run.failed" ||
+        event.type === "run.interrupted"
+      ) {
+        const terminalStatus: SubagentStatus =
+          event.type === "run.failed"
+            ? "failed"
+            : event.type === "run.interrupted"
+              ? "stopped"
+              : "completed";
+        for (const acc of ordered) {
+          if (!acc.hasTaskRecord && acc.status === "running") {
+            acc.status = terminalStatus;
+            acc.completedAt = event.occurredAt;
+            acc.updatedAt = event.occurredAt;
+          }
+        }
+        continue;
+      }
       if (event.type === "message.completed") {
         const msg = asRecord(payload["message"]);
         const content = msg?.["content"];
@@ -861,6 +936,17 @@ export function deriveSubagentItems(
           if (wfEntries.length > 0) {
             if (toolCallId !== undefined) workflowToolUseIds.add(toolCallId);
             applyWorkflowAgentEntries(wfEntries);
+            for (const wfEntry of wfEntries) {
+              const wfAcc = byTaskId.get(wfEntry.agentId);
+              if (
+                wfAcc !== undefined &&
+                wfAcc.status !== "running" &&
+                wfAcc.completedAt === undefined
+              ) {
+                wfAcc.completedAt = event.occurredAt;
+                wfAcc.updatedAt = event.occurredAt;
+              }
+            }
             continue;
           }
         }
@@ -888,9 +974,17 @@ export function deriveSubagentItems(
             }
           }
           if (acc !== undefined) {
-            if (!acc.hasTaskRecord) {
-              acc.status = payload["isError"] === true ? "failed" : "completed";
-              acc.updatedAt = event.occurredAt;
+            if (
+              !acc.hasTaskRecord ||
+              (acc.taskId !== undefined && !taskState.liveTaskIds.has(acc.taskId))
+            ) {
+              if (!acc.hasTaskRecord || acc.status === "running") {
+                acc.status = payload["isError"] === true ? "failed" : "completed";
+              }
+              if (acc.completedAt === undefined) {
+                acc.completedAt = event.occurredAt;
+                acc.updatedAt = event.occurredAt;
+              }
             }
             if (acc.summary === undefined && outSummary !== undefined) {
               acc.summary = outSummary;
@@ -1095,6 +1189,7 @@ export function deriveSubagentItems(
       status: acc.status,
       ...(acc.startedAt === undefined ? {} : { startedAt: acc.startedAt }),
       ...(acc.updatedAt === undefined ? {} : { updatedAt: acc.updatedAt }),
+      ...(acc.completedAt === undefined ? {} : { completedAt: acc.completedAt }),
       ...(acc.usage === undefined ? {} : { usage: acc.usage }),
       ...(acc.summary === undefined ? {} : { summary: acc.summary }),
       ...(acc.prompt === undefined ? {} : { prompt: acc.prompt }),
@@ -1151,4 +1246,70 @@ export function resolveSelectedSubagentId(
   }
   const firstRunning = items.find((item) => item.status === "running");
   return firstRunning?.id ?? items[0]?.id ?? null;
+}
+
+/**
+ * Default visibility window after a subagent completes before it hides from
+ * the main Composer bar and the default Subagent dialog tab (5 minutes).
+ */
+export const SUBAGENT_DEFAULT_VISIBILITY_MS = 5 * 60 * 1000;
+
+export type SubagentDialogTab = "active" | "history";
+
+/**
+ * Whether a subagent should appear in the default display:
+ * - Running subagents stay visible indefinitely.
+ * - Completed/failed/stopped subagents stay visible for 5 minutes after completion,
+ *   then hide from the default display and remain accessible via History.
+ */
+export function isSubagentVisibleByDefault(
+  item: SubagentItem,
+  nowMs: number = Date.now(),
+  ttlMs: number = SUBAGENT_DEFAULT_VISIBILITY_MS,
+): boolean {
+  if (item.status === "running") return true;
+  const completedTimestamp = item.completedAt ?? item.updatedAt;
+  if (completedTimestamp === undefined) return false;
+  const completedMs = Date.parse(completedTimestamp);
+  if (Number.isNaN(completedMs)) return false;
+  return nowMs - completedMs < ttlMs;
+}
+
+/** Subagents currently shown in the default display (running + completed < 5m ago). */
+export function filterVisibleSubagents(
+  items: readonly SubagentItem[],
+  nowMs: number = Date.now(),
+  ttlMs: number = SUBAGENT_DEFAULT_VISIBILITY_MS,
+): SubagentItem[] {
+  return items.filter((item) => isSubagentVisibleByDefault(item, nowMs, ttlMs));
+}
+
+/** All settled subagents (`completed`, `failed`, `stopped`) recorded in History. */
+export function filterHistorySubagents(items: readonly SubagentItem[]): SubagentItem[] {
+  return items.filter((item) => item.status !== "running");
+}
+
+/**
+ * Resolve which dialog tab (`active` vs `history`) should be active when opening
+ * or selecting a subagent. Inspecting an archived subagent (completed >= 5m ago)
+ * automatically switches to `history`.
+ */
+export function resolveSubagentDialogTab(
+  items: readonly SubagentItem[],
+  requestedTab: SubagentDialogTab,
+  selectedId: string | null | undefined,
+  nowMs: number = Date.now(),
+  ttlMs: number = SUBAGENT_DEFAULT_VISIBILITY_MS,
+): SubagentDialogTab {
+  if (requestedTab === "history") return "history";
+  if (selectedId !== undefined && selectedId !== null && selectedId !== "") {
+    const matched = items.find(
+      (item) =>
+        item.id === selectedId || item.taskId === selectedId || item.toolUseId === selectedId,
+    );
+    if (matched !== undefined && !isSubagentVisibleByDefault(matched, nowMs, ttlMs)) {
+      return "history";
+    }
+  }
+  return "active";
 }

@@ -569,6 +569,12 @@ export const en: TranslationDictionary = {
     statusFailed: "Failed",
     statusStopped: "Stopped",
     selectPrompt: "Select a subagent on the left to inspect its events.",
+    activeTab: "Active ({count})",
+    historyTab: "History ({count})",
+    activeEmptyWithHistory:
+      "Completed subagents automatically hide from the default view after 5 minutes.",
+    openHistoryBtn: "View history ({count})",
+    historyEmpty: "No completed subagents in history yet.",
   },
   approval: {
     allowed: "Allowed",
@@ -714,6 +720,8 @@ export const en: TranslationDictionary = {
     subagentsCompletedCount: "{count} completed",
     subagentsFailedCount: "{count} failed",
     viewSubagents: "View details",
+    subagentHistory: "Subagent history ({count})",
+    subagentHistoryShort: "History ({count})",
   },
   modelPicker: {
     default: "Default",

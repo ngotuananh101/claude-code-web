@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { AlertCircle, Bot, Check, CircleStop, Loader2 } from "@lucide/vue";
+import { AlertCircle, Bot, Check, CircleStop, History, Loader2 } from "@lucide/vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +16,11 @@ import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
 import type { BackgroundTask, BackgroundTaskState } from "@/features/journal/background-tasks.ts";
 import { formatTaskElapsed } from "@/features/journal/background-tasks.ts";
 import {
+  filterHistorySubagents,
+  filterVisibleSubagents,
   resolveSelectedSubagentId,
+  resolveSubagentDialogTab,
+  type SubagentDialogTab,
   type SubagentItem,
   type SubagentStatus,
   summarizeSubagentCounts,
@@ -28,6 +33,7 @@ const props = defineProps<{
   open: boolean;
   subagents: SubagentItem[];
   selectedId?: string | null;
+  tab?: SubagentDialogTab;
   events?: BrowserReplayEvent[];
   backgroundTaskState?: BackgroundTaskState;
 }>();
@@ -35,11 +41,29 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:open": [value: boolean];
   "update:selectedId": [value: string | null];
+  "update:tab": [value: SubagentDialogTab];
 }>();
 
 const { t } = useI18n();
 
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+  ticker = setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  if (ticker !== null) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+});
+
 const internalSelectedId = ref<string | null>(props.selectedId ?? null);
+const internalTab = ref<SubagentDialogTab>(props.tab ?? "active");
 
 watch(
   () => props.selectedId,
@@ -50,22 +74,68 @@ watch(
   },
 );
 
+watch(
+  [() => props.open, () => props.tab, () => props.selectedId],
+  ([open, requestedTab, requestedSelectedId]) => {
+    if (!open && requestedTab !== undefined) {
+      internalTab.value = requestedTab;
+      return;
+    }
+    now.value = Date.now();
+    const nextTab = resolveSubagentDialogTab(
+      props.subagents,
+      requestedTab ?? internalTab.value,
+      requestedSelectedId ?? internalSelectedId.value,
+      now.value,
+    );
+    internalTab.value = nextTab;
+    emit("update:tab", nextTab);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.subagents,
+  () => {
+    now.value = Date.now();
+  },
+);
+
+function setTab(nextTab: SubagentDialogTab): void {
+  internalTab.value = nextTab;
+  emit("update:tab", nextTab);
+}
+
+const visibleSubagents = computed(() => filterVisibleSubagents(props.subagents, now.value));
+const historySubagents = computed(() => filterHistorySubagents(props.subagents));
+const displayedSubagents = computed(() =>
+  internalTab.value === "history" ? historySubagents.value : visibleSubagents.value,
+);
+
 const resolvedSelectedId = computed(() =>
-  resolveSelectedSubagentId(props.subagents, internalSelectedId.value),
+  resolveSelectedSubagentId(displayedSubagents.value, internalSelectedId.value),
 );
 
 const activeSubagent = computed<SubagentItem | null>(() => {
   const target = resolvedSelectedId.value;
   if (target === null) return null;
-  return props.subagents.find((item) => item.id === target) ?? props.subagents[0] ?? null;
+  return (
+    displayedSubagents.value.find((item) => item.id === target) ??
+    displayedSubagents.value[0] ??
+    null
+  );
 });
 
 function selectSubagent(id: string): void {
+  const targetTab = resolveSubagentDialogTab(props.subagents, internalTab.value, id, now.value);
+  if (targetTab !== internalTab.value) {
+    setTab(targetTab);
+  }
   internalSelectedId.value = id;
   emit("update:selectedId", id);
 }
 
-const counts = computed(() => summarizeSubagentCounts(props.subagents));
+const counts = computed(() => summarizeSubagentCounts(displayedSubagents.value));
 
 const approvalTerminals = computed(() =>
   mapApprovalTerminals(
@@ -91,22 +161,6 @@ function taskFor(toolCallId: string): BackgroundTask | undefined {
   return taskByToolCallId.value.get(toolCallId);
 }
 
-const now = ref(Date.now());
-let ticker: ReturnType<typeof setInterval> | null = null;
-
-onMounted(() => {
-  ticker = setInterval(() => {
-    now.value = Date.now();
-  }, 1000);
-});
-
-onBeforeUnmount(() => {
-  if (ticker !== null) {
-    clearInterval(ticker);
-    ticker = null;
-  }
-});
-
 function elapsedFor(item: SubagentItem): string {
   if (item.usage?.durationMs !== undefined && item.status !== "running") {
     return formatTaskElapsed(item.usage.durationMs);
@@ -114,11 +168,12 @@ function elapsedFor(item: SubagentItem): string {
   if (!item.startedAt) return "";
   const started = Date.parse(item.startedAt);
   if (Number.isNaN(started)) return "";
+  const endTimestamp = item.completedAt ?? item.updatedAt;
   const end =
     item.status === "running"
       ? now.value
-      : item.updatedAt && !Number.isNaN(Date.parse(item.updatedAt))
-        ? Date.parse(item.updatedAt)
+      : endTimestamp && !Number.isNaN(Date.parse(endTimestamp))
+        ? Date.parse(endTimestamp)
         : now.value;
   return formatTaskElapsed(Math.max(0, end - started));
 }
@@ -165,7 +220,7 @@ function statusBadgeClass(status: SubagentStatus): string {
             aria-hidden="true"
           />
           <Bot v-else :size="15" class="shrink-0 text-muted-foreground" />
-          <span>{{ t("subagentTree.dialogTitle") }} ({{ subagents.length }})</span>
+          <span>{{ t("subagentTree.dialogTitle") }} ({{ displayedSubagents.length }})</span>
         </DialogTitle>
         <DialogDescription class="text-xs text-muted-foreground">
           {{ t("subagentTree.dialogSubtitle", { count: subagents.length }) }}
@@ -183,71 +238,137 @@ function statusBadgeClass(status: SubagentStatus): string {
         v-else
         class="grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-cols-[280px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
       >
-        <!-- Left column: Subagent list -->
-        <ScrollArea
-          class="min-h-0 border-b border-border/80 bg-muted/20 max-md:max-h-44 max-md:[&>[data-slot=scroll-area-viewport]]:max-h-44 md:h-full md:border-r md:border-b-0 [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
+        <!-- Left column: Active / History tabs + Subagent list -->
+        <div
+          class="flex min-h-0 flex-col border-b border-border/80 bg-muted/20 max-md:max-h-56 md:h-full md:border-r md:border-b-0"
         >
-          <div
-            class="flex flex-col gap-1.5 p-2.5 pr-3"
-            role="listbox"
-            :aria-label="t('subagentTree.dialogTitle')"
-          >
+          <div class="grid shrink-0 grid-cols-2 gap-1 border-b border-border/70 p-2">
             <button
-              v-for="item in subagents"
-              :key="item.id"
               type="button"
-              role="option"
-              :aria-selected="activeSubagent?.id === item.id"
-              class="flex w-full cursor-pointer flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors"
+              class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors"
               :class="
-                activeSubagent?.id === item.id
-                  ? 'border-border bg-card shadow-2xs'
-                  : 'border-transparent hover:bg-muted/60'
+                internalTab === 'active'
+                  ? 'bg-card text-foreground shadow-2xs ring-1 ring-border/80'
+                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
               "
-              @click="selectSubagent(item.id)"
+              @click="setTab('active')"
             >
-              <div class="flex items-center justify-between gap-2">
-                <span class="truncate text-xs font-semibold text-foreground" :title="item.description">
-                  {{ item.description }}
-                </span>
-                <i
-                  v-if="item.status === 'running'"
-                  class="size-2 shrink-0 animate-pulse rounded-full bg-primary"
-                  :title="t('subagentTree.statusRunning')"
-                />
-                <Check
-                  v-else-if="item.status === 'completed'"
-                  :size="13"
-                  class="shrink-0 text-emerald-600 dark:text-emerald-400"
-                  :title="t('subagentTree.statusCompleted')"
-                />
-                <AlertCircle
-                  v-else-if="item.status === 'failed'"
-                  :size="13"
-                  class="shrink-0 text-destructive"
-                  :title="t('subagentTree.statusFailed')"
-                />
-                <CircleStop
-                  v-else
-                  :size="13"
-                  class="shrink-0 text-muted-foreground"
-                  :title="t('subagentTree.statusStopped')"
-                />
-              </div>
-
-              <div class="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-                <span
-                  v-if="item.subagentType || item.workflowName"
-                  class="rounded border border-border/80 bg-muted/60 px-1.5 py-0.25 text-[10px] text-foreground/80"
-                >
-                  {{ item.subagentType || item.workflowName }}
-                </span>
-                <span>{{ t("subagentTree.eventsCount", { count: item.events.length }) }}</span>
-                <span v-if="elapsedFor(item)">· {{ elapsedFor(item) }}</span>
-              </div>
+              <Bot :size="12" class="shrink-0" />
+              <span class="truncate">{{
+                t("subagentTree.activeTab", { count: visibleSubagents.length })
+              }}</span>
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors"
+              :class="
+                internalTab === 'history'
+                  ? 'bg-card text-foreground shadow-2xs ring-1 ring-border/80'
+                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+              "
+              @click="setTab('history')"
+            >
+              <History :size="12" class="shrink-0" />
+              <span class="truncate">{{
+                t("subagentTree.historyTab", { count: historySubagents.length })
+              }}</span>
             </button>
           </div>
-        </ScrollArea>
+
+          <ScrollArea
+            class="min-h-0 flex-1 max-md:[&>[data-slot=scroll-area-viewport]]:max-h-40 [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
+          >
+            <div
+              v-if="displayedSubagents.length === 0"
+              class="flex flex-col items-center justify-center gap-2.5 px-4 py-8 text-center text-xs text-muted-foreground"
+            >
+              <span>{{
+                internalTab === "active"
+                  ? t("subagentTree.activeEmptyWithHistory")
+                  : t("subagentTree.historyEmpty")
+              }}</span>
+              <Button
+                v-if="internalTab === 'active' && historySubagents.length > 0"
+                variant="outline"
+                size="xs"
+                class="gap-1.5"
+                @click="setTab('history')"
+              >
+                <History :size="12" />
+                <span>{{
+                  t("subagentTree.openHistoryBtn", { count: historySubagents.length })
+                }}</span>
+              </Button>
+            </div>
+
+            <div
+              v-else
+              class="flex flex-col gap-1.5 p-2.5 pr-3"
+              role="listbox"
+              :aria-label="t('subagentTree.dialogTitle')"
+            >
+              <button
+                v-for="item in displayedSubagents"
+                :key="item.id"
+                type="button"
+                role="option"
+                :aria-selected="activeSubagent?.id === item.id"
+                class="flex w-full cursor-pointer flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors"
+                :class="
+                  activeSubagent?.id === item.id
+                    ? 'border-border bg-card shadow-2xs'
+                    : 'border-transparent hover:bg-muted/60'
+                "
+                @click="selectSubagent(item.id)"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span
+                    class="truncate text-xs font-semibold text-foreground"
+                    :title="item.description"
+                  >
+                    {{ item.description }}
+                  </span>
+                  <i
+                    v-if="item.status === 'running'"
+                    class="size-2 shrink-0 animate-pulse rounded-full bg-primary"
+                    :title="t('subagentTree.statusRunning')"
+                  />
+                  <Check
+                    v-else-if="item.status === 'completed'"
+                    :size="13"
+                    class="shrink-0 text-emerald-600 dark:text-emerald-400"
+                    :title="t('subagentTree.statusCompleted')"
+                  />
+                  <AlertCircle
+                    v-else-if="item.status === 'failed'"
+                    :size="13"
+                    class="shrink-0 text-destructive"
+                    :title="t('subagentTree.statusFailed')"
+                  />
+                  <CircleStop
+                    v-else
+                    :size="13"
+                    class="shrink-0 text-muted-foreground"
+                    :title="t('subagentTree.statusStopped')"
+                  />
+                </div>
+
+                <div
+                  class="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground"
+                >
+                  <span
+                    v-if="item.subagentType || item.workflowName"
+                    class="rounded border border-border/80 bg-muted/60 px-1.5 py-0.25 text-[10px] text-foreground/80"
+                  >
+                    {{ item.subagentType || item.workflowName }}
+                  </span>
+                  <span>{{ t("subagentTree.eventsCount", { count: item.events.length }) }}</span>
+                  <span v-if="elapsedFor(item)">· {{ elapsedFor(item) }}</span>
+                </div>
+              </button>
+            </div>
+          </ScrollArea>
+        </div>
 
         <!-- Right column: Selected subagent event stream (same components as EventJournal.vue) -->
         <div
@@ -319,6 +440,29 @@ function statusBadgeClass(status: SubagentStatus): string {
               </template>
             </div>
           </ScrollArea>
+        </div>
+
+        <div
+          v-else
+          class="flex min-h-0 min-w-0 flex-col items-center justify-center gap-3 bg-card p-6 text-center text-xs text-muted-foreground"
+        >
+          <span>{{
+            internalTab === "active"
+              ? t("subagentTree.activeEmptyWithHistory")
+              : t("subagentTree.historyEmpty")
+          }}</span>
+          <Button
+            v-if="internalTab === 'active' && historySubagents.length > 0"
+            variant="outline"
+            size="sm"
+            class="gap-1.5"
+            @click="setTab('history')"
+          >
+            <History :size="13" />
+            <span>{{
+              t("subagentTree.openHistoryBtn", { count: historySubagents.length })
+            }}</span>
+          </Button>
         </div>
       </div>
     </DialogContent>
