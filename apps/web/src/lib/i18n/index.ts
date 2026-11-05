@@ -4,6 +4,8 @@ import { en } from "./locales/en.ts";
 import { vi } from "./locales/vi.ts";
 import type { Locale, TranslationDictionary } from "./types.ts";
 
+export type { Locale, TranslationDictionary };
+
 const dictionaries: Record<Locale, TranslationDictionary> = {
   vi,
   en,

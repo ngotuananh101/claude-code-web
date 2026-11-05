@@ -171,6 +171,8 @@ export type TranslationDictionary = {
     joined: string;
     preferences: string;
     language: string;
+    languageVi: string;
+    languageEn: string;
     theme: string;
     dark: string;
     light: string;
@@ -721,6 +723,7 @@ export type TranslationDictionary = {
     noRunner: string;
     hideDescriptions: string;
     showDescriptions: string;
+    providerProfile: string;
     clearProfile: string;
     clear: string;
     defaultRunnerHost: string;

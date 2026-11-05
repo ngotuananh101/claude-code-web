@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { EffortLevel, ProfileSummary, RunnerModel } from "@cc-web/protocol";
-import { Check, ChevronDown, ChevronRight, Cpu, Sparkles, Zap } from "@lucide/vue";
+import { Check, ChevronDown, ChevronRight, Cpu, Key, Sparkles, Zap } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { resolveModelLabel } from "@/features/composer/composer-logic.ts";
 import {
+  buildProfileMenuOptions,
   effortAt,
   effortLabel,
   effortLevelsFor,
@@ -15,6 +17,7 @@ import {
   modelFor,
   modelLabel,
   pickerModels,
+  profileTriggerLabel,
   stepEffort,
   triggerLabelWithProfile,
 } from "@/features/composer/model-picker.ts";
@@ -60,8 +63,14 @@ const emit = defineEmits<{
 }>();
 
 const open = ref(props.defaultOpen ?? false);
+const profileMenuOpen = ref(false);
 const { t } = useI18n();
-watch(open, (value) => emit("update:open", value));
+watch(open, (value) => {
+  emit("update:open", value);
+  if (!value) {
+    profileMenuOpen.value = false;
+  }
+});
 /** Compact rows by default (name only); the chevron unfolds descriptions. */
 const showDescriptions = ref(false);
 
@@ -99,9 +108,12 @@ const chipLabel = computed(() =>
 
 /** Whether the profile selector should be shown (only when profiles exist). */
 const showProfileSelector = computed(() => props.profiles.length > 0);
+const activeProfileLabel = computed(() => profileTriggerLabel(props.profileId, props.profiles));
+const profileOptions = computed(() => buildProfileMenuOptions(props.profileId, props.profiles));
 
 function selectProfile(value: string | null): void {
   emit("update:profileId", value);
+  profileMenuOpen.value = false;
 }
 
 /**
@@ -211,10 +223,14 @@ function percent(index: number): string {
       side="top"
       align="end"
       :side-offset="8"
-      class="max-h-[min(70dvh,32rem)] w-[336px] max-w-[calc(100vw-2rem)] gap-0 overflow-y-auto overscroll-contain rounded-xl p-2.5"
+      class="flex max-h-[min(70dvh,32rem)] w-[336px] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0"
     >
-      <!-- Provider header: whose lineup this is, with the API badge the image
-           shows and a chevron that unfolds the rows' descriptions. -->
+      <ScrollArea
+        class="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:max-h-[min(70dvh,32rem)] [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
+      >
+        <div class="p-2.5 pr-3">
+          <!-- Provider header: whose lineup this is, with the API badge the image
+               shows and a chevron that unfolds the rows' descriptions. -->
       <div class="flex items-center gap-2 px-1 pb-2">
         <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-muted text-foreground">
           <Sparkles :size="14" />
@@ -245,13 +261,14 @@ function percent(index: number): string {
         </button>
       </div>
 
-      <!-- Profile selector (§4.5.3): runner-host default first (null), then saved profiles.
+      <!-- Profile selector (§4.5.3): menu trigger opening a pop-out selection box
+           with runner-host default first (null), then saved profiles.
            When a profile with a model mapping is active, the rows below re-label
            the model roles with their upstream names (e.g. "Sonnet (prime)"). -->
-      <div v-if="showProfileSelector" class="border-b border-border pb-1.5">
+      <div v-if="showProfileSelector" class="mb-1 border-b border-border pb-2">
         <div class="flex items-center justify-between px-1 pb-1">
           <span class="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Provider profile
+            {{ t("modelPicker.providerProfile") }}
           </span>
           <button
             v-if="profileId"
@@ -263,42 +280,82 @@ function percent(index: number): string {
             {{ t("modelPicker.clear") }}
           </button>
         </div>
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="profileId == null"
-          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
-          :class="profileId == null && 'bg-accent/60'"
-          @click="selectProfile(null)"
-        >
-          <span class="min-w-0 flex-1 truncate text-[13px]">{{ t("modelPicker.defaultRunnerHost") }}</span>
-          <Check v-if="profileId == null" :size="14" class="shrink-0 text-primary" />
-        </button>
-        <button
-          v-for="profile in profiles"
-          :key="profile.profileId"
-          type="button"
-          role="radio"
-          :aria-checked="profile.profileId === profileId"
-          class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
-          :class="profile.profileId === profileId && 'bg-accent/60'"
-          @click="selectProfile(profile.profileId)"
-        >
-          <span class="min-w-0 flex-1">
-            <span
-              class="block truncate text-[13px]"
-              :class="
-                profile.profileId === profileId
-                  ? 'font-medium text-foreground'
-                  : 'text-foreground/90'
-              "
+
+        <Popover v-model:open="profileMenuOpen">
+          <PopoverTrigger as-child>
+            <button
+              type="button"
+              :aria-label="`${t('modelPicker.providerProfile')}: ${activeProfileLabel}`"
+              :aria-expanded="profileMenuOpen"
+              class="flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
+              :class="profileMenuOpen && 'bg-accent'"
             >
-              {{ profile.name }}</span>
-            <span class="block truncate font-mono text-[10px] text-muted-foreground">
-              {{ profile.endpoint }}</span>
-          </span>
-          <Check v-if="profile.profileId === profileId" :size="14" class="shrink-0 text-primary" />
-        </button>
+              <span class="flex min-w-0 flex-1 items-center gap-2">
+                <Key :size="13" class="shrink-0 text-muted-foreground" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[13px] font-medium text-foreground">
+                    {{ activeProfileLabel }}
+                  </span>
+                  <span
+                    v-if="activeProfile?.endpoint"
+                    class="block truncate font-mono text-[10px] text-muted-foreground"
+                  >
+                    {{ activeProfile.endpoint }}
+                  </span>
+                </span>
+              </span>
+              <ChevronDown
+                :size="14"
+                class="shrink-0 text-muted-foreground transition-transform"
+                :class="profileMenuOpen && 'rotate-180'"
+              />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="bottom"
+            align="start"
+            :side-offset="4"
+            :collision-padding="12"
+            class="flex max-h-[min(50dvh,20rem)] w-[316px] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-xl p-0"
+          >
+            <ScrollArea
+              class="min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:max-h-[min(50dvh,20rem)] [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
+            >
+              <div
+                class="grid gap-0.5 p-1.5 pr-3"
+                role="listbox"
+                :aria-label="t('modelPicker.providerProfile')"
+              >
+                <button
+                  v-for="opt in profileOptions"
+                  :key="opt.value ?? '__default__'"
+                  type="button"
+                  role="option"
+                  :aria-selected="opt.selected"
+                  class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5"
+                  :class="opt.selected && 'bg-accent/60'"
+                  @click="selectProfile(opt.value)"
+                >
+                  <span class="min-w-0 flex-1">
+                    <span
+                      class="block truncate text-[13px]"
+                      :class="opt.selected ? 'font-medium text-foreground' : 'text-foreground/90'"
+                    >
+                      {{ opt.label }}
+                    </span>
+                    <span
+                      v-if="opt.endpoint"
+                      class="block truncate font-mono text-[10px] text-muted-foreground"
+                    >
+                      {{ opt.endpoint }}
+                    </span>
+                  </span>
+                  <Check v-if="opt.selected" :size="14" class="shrink-0 text-primary" />
+                </button>
+              </div>
+            </ScrollArea>
+          </PopoverContent>
+        </Popover>
       </div>
 
       <!-- Models: one row per model the runner offers, check on the chosen one. -->
@@ -425,6 +482,8 @@ function percent(index: number): string {
           </span>
         </button>
       </div>
+        </div>
+      </ScrollArea>
     </PopoverContent>
   </Popover>
 </template>

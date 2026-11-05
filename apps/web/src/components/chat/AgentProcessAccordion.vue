@@ -30,6 +30,8 @@ const props = defineProps<{
   steps: AgentStep[];
   status: AgentTurn["status"];
   durationText?: string | undefined;
+  /** When true, starts expanded and stays expanded after settling (e.g. Subagent inspector). */
+  defaultOpen?: boolean | undefined;
   terminalFor?:
     | ((event: BrowserReplayEvent) => { decision?: "allow" | "deny"; reason?: string } | undefined)
     | undefined;
@@ -73,14 +75,14 @@ function needsDecision(step: ApprovalStep): boolean {
 const closedApprovals = computed(() => approvalSteps.value.filter((step) => !needsDecision(step)));
 const pendingApprovals = computed(() => approvalSteps.value.filter((step) => needsDecision(step)));
 
-/** Open while running or failed; collapsed once the run settles. */
-const isOpen = ref(props.status === "running" || props.status === "error");
+/** Open while running or failed; collapsed once the run settles unless defaultOpen is requested. */
+const isOpen = ref(props.defaultOpen ?? (props.status === "running" || props.status === "error"));
 
 watch(
   () => props.status,
   (next, prev) => {
     if (next === "running" || next === "error") isOpen.value = true;
-    else if (prev === "running") isOpen.value = false;
+    else if (prev === "running" && !props.defaultOpen) isOpen.value = false;
   },
 );
 

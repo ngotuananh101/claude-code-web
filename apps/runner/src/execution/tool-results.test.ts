@@ -136,4 +136,20 @@ describe("toolCompletionsOf", () => {
     expect(mainCompletions[0]).toBeDefined();
     expect("parentToolUseId" in (mainCompletions[0] ?? {})).toBe(false);
   });
+
+  test("preserves agentId when the user frame came from a subagent with agent_id", () => {
+    const completions = toolCompletionsOf({
+      ...userFrame([toolResult("toolu-wf-1", "workflow output")]),
+      parent_tool_use_id: null,
+      agent_id: "agent-wf-1",
+    });
+    expect(completions).toEqual([
+      {
+        toolCallId: "toolu-wf-1",
+        isError: false,
+        outputSummary: "workflow output",
+        agentId: "agent-wf-1",
+      },
+    ]);
+  });
 });

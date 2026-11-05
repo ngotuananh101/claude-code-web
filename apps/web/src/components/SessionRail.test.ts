@@ -1,4 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  buildLanguageMenuOptions,
+  buildThemeMenuOptions,
+  languageTriggerLabel,
+  themeTriggerLabel,
+  userSubmenuPlacement,
+} from "../features/layout/user-menu.ts";
+import { setLocale } from "../lib/i18n/index.ts";
 import { removeSession, sessions, updateSessionTitleInStore } from "../stores/sessions.ts";
 
 /**
@@ -68,5 +76,46 @@ describe("SessionRail display logic", () => {
     removeSession("sess-active");
     expect(sessions.sessions).toHaveLength(0);
     expect(sessions.activeId).toBeNull();
+  });
+});
+
+describe("SessionRail user menu options (language & theme)", () => {
+  afterEach(() => {
+    setLocale("vi");
+  });
+
+  test("builds language menu options and trigger label with active locale marked", () => {
+    setLocale("vi");
+    expect(languageTriggerLabel("vi")).toBe("Tiếng Việt");
+    expect(languageTriggerLabel("en")).toBe("English");
+    expect(buildLanguageMenuOptions("vi")).toEqual([
+      { value: "vi", flag: "🇻🇳", label: "Tiếng Việt", selected: true },
+      { value: "en", flag: "🇺🇸", label: "English", selected: false },
+    ]);
+    expect(buildLanguageMenuOptions("en").map((o) => o.selected)).toEqual([false, true]);
+  });
+
+  test("builds theme menu options and trigger label in vi and en", () => {
+    setLocale("vi");
+    expect(themeTriggerLabel("light")).toBe("Sáng");
+    expect(themeTriggerLabel("dark")).toBe("Tối");
+    expect(themeTriggerLabel("system")).toBe("Hệ thống");
+    expect(buildThemeMenuOptions("system")).toEqual([
+      { value: "light", label: "Sáng", selected: false },
+      { value: "dark", label: "Tối", selected: false },
+      { value: "system", label: "Hệ thống", selected: true },
+    ]);
+
+    setLocale("en");
+    expect(themeTriggerLabel("light")).toBe("Light");
+    expect(themeTriggerLabel("dark")).toBe("Dark");
+    expect(themeTriggerLabel("system")).toBe("System");
+  });
+
+  test("places user submenus above the trigger on narrow mobile viewports and to the right on wider viewports", () => {
+    expect(userSubmenuPlacement(390)).toEqual({ side: "top", align: "end" });
+    expect(userSubmenuPlacement(639)).toEqual({ side: "top", align: "end" });
+    expect(userSubmenuPlacement(640)).toEqual({ side: "right", align: "start" });
+    expect(userSubmenuPlacement(1280)).toEqual({ side: "right", align: "start" });
   });
 });

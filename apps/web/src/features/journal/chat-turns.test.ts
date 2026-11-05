@@ -1979,6 +1979,66 @@ describe("deriveChatTurns — subagent separation from main stream", () => {
     });
   });
 
+  test("filters live and historical workflow subagent frames keyed by agentId / agent_id out of main turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [
+        userMsg({ content: "Run workflow" }, "u-wf-1"),
+        assistantMsg(
+          { type: "assistant", content: [{ type: "text", text: "Historical main answer." }] },
+          "a-wf-main",
+        ),
+        {
+          type: "assistant",
+          uuid: "a-wf-sub",
+          agentId: "ae3454d16c5171399",
+          message: {
+            type: "assistant",
+            content: [{ type: "text", text: "Historical workflow subagent text" }],
+          },
+        },
+      ],
+      [
+        liveEvent("run.started", { prompt: "Live workflow" }, "r-wf"),
+        liveEvent(
+          "message.completed",
+          {
+            type: "assistant",
+            parent_tool_use_id: null,
+            agent_id: "a5c9439fdd06a1e7e",
+            message: {
+              id: "msg-wf-sub-1",
+              content: [{ type: "text", text: "Live workflow subagent internal prose" }],
+            },
+          },
+          "r-wf",
+        ),
+        liveEvent(
+          "tool.completed",
+          {
+            toolCallId: "toolu-wf-sub-read",
+            isError: false,
+            outputSummary: "sub read",
+            agentId: "a5c9439fdd06a1e7e",
+          },
+          "r-wf",
+        ),
+        liveEvent("message.started", { messageId: "msg-wf-main" }, "r-wf"),
+        liveEvent(
+          "message.delta",
+          { messageId: "msg-wf-main", text: "Clean main workflow summary." },
+          "r-wf",
+        ),
+        liveEvent("run.finished", { durationMs: 1000 }, "r-wf"),
+      ],
+    );
+
+    expect(turns).toHaveLength(4);
+    expect((turns[1] as AgentTurn).text).toBe("Historical main answer.");
+    expect((turns[3] as AgentTurn).text).toBe("Clean main workflow summary.");
+    expect((turns[3] as AgentTurn).steps).toHaveLength(0);
+  });
+
   test("filters historical subagent SessionMessages with parentToolUseId out of main turn", () => {
     const turns = deriveChatTurns(
       [

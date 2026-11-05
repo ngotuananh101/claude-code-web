@@ -256,6 +256,7 @@ export type SessionMessage = {
   uuid: string;
   message: unknown;
   parentToolUseId?: string;
+  agentId?: string;
 };
 
 /** The runner's answer to a `workspace.sessions.messages` command. */

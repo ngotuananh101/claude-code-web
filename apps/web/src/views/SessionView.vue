@@ -215,7 +215,13 @@ watch(
 // resolve the workspace path.
 const fetchedResume = ref<string | null>(null);
 watch(
-  () => sessions.stream?.events,
+  [
+    () => active.value?.sessionId,
+    () => active.value?.sdkSessionId,
+    () => active.value?.runnerId,
+    () => active.value?.workspaceId,
+    () => sessions.stream?.events.length,
+  ],
   () => {
     const stream = sessions.stream;
     if (stream === null) return;
@@ -240,12 +246,14 @@ watch(
     // survive into an async closure.
     const targetSession = active.value;
     if (!targetSession?.runnerId || !targetSession.workspaceId) return;
+    const expectedSessionId = targetSession.sessionId;
     const workspaceId = targetSession.workspaceId;
     const runnerId = targetSession.runnerId;
 
     fetchedResume.value = targetResume;
     void (async () => {
       const result = await fetchSessionMessages(workspaceId, targetResume, runnerId);
+      if (active.value?.sessionId !== expectedSessionId) return;
       if (result.ok) {
         historicalMessages.value = result.messages;
       } else {
@@ -253,6 +261,7 @@ watch(
       }
     })();
   },
+  { immediate: true },
 );
 
 const activePendingRun = computed(() => {
@@ -388,6 +397,8 @@ async function refreshNow(): Promise<void> {
               v-model:open="subagentDialogOpen"
               v-model:selected-id="selectedSubagentId"
               :subagents="subagentItems"
+              :events="sessions.stream?.events ?? []"
+              :background-task-state="backgroundTaskState"
             />
           </div>
         </ResizablePanel>

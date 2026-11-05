@@ -21,6 +21,7 @@ export type ToolCompletion = {
   isError: boolean;
   outputSummary?: string;
   parentToolUseId?: string;
+  agentId?: string;
 };
 
 function contentBlocks(message: Record<string, unknown>): unknown[] | null {
@@ -64,6 +65,8 @@ export function toolCompletionsOf(message: Record<string, unknown>): ToolComplet
   if (blocks === null) return [];
   const rawParent = message["parent_tool_use_id"];
   const parentToolUseId = typeof rawParent === "string" && rawParent !== "" ? rawParent : undefined;
+  const rawAgentId = message["agent_id"];
+  const agentId = typeof rawAgentId === "string" && rawAgentId !== "" ? rawAgentId : undefined;
   const completions: ToolCompletion[] = [];
   for (const block of blocks) {
     if (!isToolResultBlock(block)) continue;
@@ -73,6 +76,7 @@ export function toolCompletionsOf(message: Record<string, unknown>): ToolComplet
       isError: block["is_error"] === true,
       ...(summary === "" ? {} : { outputSummary: summary }),
       ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+      ...(agentId === undefined ? {} : { agentId }),
     };
     completions.push(completion);
   }

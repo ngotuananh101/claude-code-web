@@ -338,6 +338,284 @@ describe("deriveSubagentItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]!.taskId).toBe("task-real");
   });
+
+  test("captures live subagent tool calls from message.completed + tool.completed even when SDK emits no stream_event tool.started, and builds AgentTurn segments", () => {
+    resetSeq();
+    const events: BrowserReplayEvent[] = [
+      liveEvent(
+        "task.started",
+        {
+          taskId: "agent-live-no-stream",
+          runId: "run-1",
+          toolUseId: "toolu-parent-1",
+          description: "Inspect components",
+          subagentType: "Explore",
+        },
+        "run-1",
+        "2026-10-25T00:00:01Z",
+      ),
+      // Real Claude Code subagents emit complete assistant/user frames without stream_event tool.started
+      liveEvent(
+        "message.completed",
+        {
+          type: "assistant",
+          parent_tool_use_id: "toolu-parent-1",
+          agent_id: "agent-live-no-stream",
+          message: {
+            id: "msg-sub-complete-1",
+            content: [
+              { type: "thinking", thinking: "Need to read ModelPickerPopover.vue" },
+              {
+                type: "tool_use",
+                id: "toolu-sub-read-only-complete",
+                name: "Read",
+                input: { file_path: "apps/web/src/components/ModelPickerPopover.vue" },
+              },
+            ],
+          },
+        },
+        "run-1",
+        "2026-10-25T00:00:02Z",
+      ),
+      liveEvent(
+        "tool.completed",
+        {
+          toolCallId: "toolu-sub-read-only-complete",
+          isError: false,
+          outputSummary: "475 lines",
+          parentToolUseId: "toolu-parent-1",
+          agentId: "agent-live-no-stream",
+        },
+        "run-1",
+        "2026-10-25T00:00:03Z",
+      ),
+      liveEvent(
+        "message.completed",
+        {
+          type: "assistant",
+          parent_tool_use_id: "toolu-parent-1",
+          agent_id: "agent-live-no-stream",
+          message: {
+            id: "msg-sub-complete-2",
+            content: [{ type: "text", text: "## Summary\nWrap both popovers in `ScrollArea`." }],
+          },
+        },
+        "run-1",
+        "2026-10-25T00:00:04Z",
+      ),
+      liveEvent(
+        "task.completed",
+        {
+          taskId: "agent-live-no-stream",
+          runId: "run-1",
+          status: "completed",
+          usage: { totalTokens: 4200, toolUses: 1, durationMs: 3000 },
+        },
+        "run-1",
+        "2026-10-25T00:00:05Z",
+      ),
+    ];
+
+    const items = deriveSubagentItems([], events, taskStateFromEvents(events));
+    expect(items).toHaveLength(1);
+    const sub = items[0]!;
+    expect(sub.status).toBe("completed");
+    const tools = sub.events.filter((e) => e.kind === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.step).toMatchObject({
+      toolCallId: "toolu-sub-read-only-complete",
+      toolName: "Read",
+      filePath: "apps/web/src/components/ModelPickerPopover.vue",
+      state: "done",
+      outputSummary: "475 lines",
+    });
+
+    const agentTurn = sub.turns.find((t) => t.kind === "agent");
+    expect(agentTurn).toBeDefined();
+    expect(agentTurn?.kind === "agent" && agentTurn.status).toBe("done");
+    expect(agentTurn?.kind === "agent" && agentTurn.steps).toHaveLength(2);
+    expect(agentTurn?.kind === "agent" && agentTurn.text).toContain("Wrap both popovers");
+  });
+
+  test("correlates Workflow subagents by agentId in both live frames (parent_tool_use_id: null) and historical Workflow tool_result + subagent transcripts", () => {
+    resetSeq();
+    const history: SessionMessage[] = [
+      {
+        type: "assistant",
+        uuid: "main-wf-call",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-wf-1",
+              name: "Workflow",
+              input: { script: "export const meta = { name: 'audit' }" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "main-wf-res",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu-wf-1",
+              content: JSON.stringify({
+                summary: "Audit workflow",
+                workflowProgress: [
+                  {
+                    type: "workflow_agent",
+                    agentId: "ae3454d16c5171399",
+                    label: "investigate:scrollarea",
+                    phaseTitle: "Investigate",
+                    state: "done",
+                    tokens: 18715,
+                    toolCalls: 2,
+                    durationMs: 14000,
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "wf-sub-prompt",
+        agentId: "ae3454d16c5171399",
+        message: { role: "user", content: "Check ScrollArea.vue" },
+      },
+      {
+        type: "assistant",
+        uuid: "wf-sub-step",
+        agentId: "ae3454d16c5171399",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-wf-read-1",
+              name: "Read",
+              input: { file_path: "apps/web/src/components/ui/scroll-area/ScrollArea.vue" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "wf-sub-tool-res",
+        agentId: "ae3454d16c5171399",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu-wf-read-1", content: "29 lines" }],
+        },
+      },
+    ];
+
+    const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
+    expect(items).toHaveLength(1);
+    const wfSub = items[0]!;
+    expect(wfSub.taskId).toBe("ae3454d16c5171399");
+    expect(wfSub.description).toBe("investigate:scrollarea");
+    expect(wfSub.workflowName).toBe("Investigate");
+    expect(wfSub.status).toBe("completed");
+    expect(wfSub.usage).toEqual({ totalTokens: 18715, toolUses: 2, durationMs: 14000 });
+    expect(wfSub.events.filter((e) => e.kind === "tool")).toHaveLength(1);
+    expect(wfSub.turns.map((t) => t.kind)).toEqual(["user", "agent"]);
+
+    // Also verify replayed live events where a legacy tool.completed lacks agentId/parentToolUseId
+    // still resolves the subagent tool step by its globally unique toolCallId:
+    const liveWfEvents: BrowserReplayEvent[] = [
+      liveEvent("task.started", {
+        taskId: "wf-live-1",
+        runId: "run-wf",
+        description: "investigate:subagent",
+        workflowName: "Investigate",
+        subagentType: "workflow-subagent",
+      }),
+      liveEvent("message.completed", {
+        type: "assistant",
+        parent_tool_use_id: null,
+        agent_id: "wf-live-1",
+        message: {
+          id: "msg-wf-live-1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-wf-legacy-1",
+              name: "Read",
+              input: { file_path: "apps/web/src/components/chat/SubagentListDialog.vue" },
+            },
+          ],
+        },
+      }),
+      // Legacy tool.completed in journal before agentId was extracted on tool-results:
+      liveEvent("tool.completed", {
+        toolCallId: "toolu-wf-legacy-1",
+        isError: false,
+        outputSummary: "405 lines",
+      }),
+    ];
+    const liveWfItems = deriveSubagentItems([], liveWfEvents, taskStateFromEvents(liveWfEvents));
+    expect(liveWfItems).toHaveLength(1);
+    const liveWfStep = liveWfItems[0]!.events.find((e) => e.kind === "tool");
+    expect(liveWfStep?.kind === "tool" && liveWfStep.step).toMatchObject({
+      toolCallId: "toolu-wf-legacy-1",
+      state: "done",
+      outputSummary: "405 lines",
+    });
+  });
+
+  test("populates AgentTurn prose from task summary when subagent emitted tool steps without a separate text message", () => {
+    resetSeq();
+    const events: BrowserReplayEvent[] = [
+      liveEvent("task.started", {
+        taskId: "sub-summary-fallback",
+        runId: "run-1",
+        toolUseId: "toolu-sum-1",
+        description: "Quick file check",
+        subagentType: "Explore",
+      }),
+      liveEvent("message.completed", {
+        type: "assistant",
+        parent_tool_use_id: "toolu-sum-1",
+        agent_id: "sub-summary-fallback",
+        message: {
+          id: "msg-sum-1",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-sum-read",
+              name: "Read",
+              input: { file_path: "README.md" },
+            },
+          ],
+        },
+      }),
+      liveEvent("tool.completed", {
+        toolCallId: "toolu-sum-read",
+        isError: false,
+        outputSummary: "10 lines",
+        parentToolUseId: "toolu-sum-1",
+        agentId: "sub-summary-fallback",
+      }),
+      liveEvent("task.completed", {
+        taskId: "sub-summary-fallback",
+        runId: "run-1",
+        status: "completed",
+        summary: "README verified.",
+      }),
+    ];
+
+    const items = deriveSubagentItems([], events, taskStateFromEvents(events));
+    const turn = items[0]?.turns.find((t) => t.kind === "agent");
+    expect(turn?.kind === "agent" && turn.text).toBe("README verified.");
+    expect(turn?.kind === "agent" && turn.segments.map((s) => s.kind)).toEqual(["process", "text"]);
+  });
 });
 
 describe("summarizeSubagentCounts and resolveSelectedSubagentId", () => {
@@ -345,6 +623,7 @@ describe("summarizeSubagentCounts and resolveSelectedSubagentId", () => {
     description: partial.id,
     status: "running",
     events: [],
+    turns: [],
     ...partial,
   });
 

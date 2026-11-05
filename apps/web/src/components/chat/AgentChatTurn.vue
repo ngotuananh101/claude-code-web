@@ -17,6 +17,8 @@ const { t } = useI18n();
 const props = defineProps<{
   /** The agent turn to render. */
   turn: AgentTurn;
+  /** Keep process accordions open by default even when settled (used in Subagent view). */
+  defaultProcessOpen?: boolean | undefined;
   /** Optional terminal resolver for approval steps. */
   terminalFor?: (
     event: BrowserReplayEvent,
@@ -193,6 +195,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
           :steps="row.steps"
           :status="row.isLastProcess ? turn.status : 'done'"
           :duration-text="row.isLastProcess ? segmentDurationText : undefined"
+          :default-open="defaultProcessOpen"
           :terminal-for="terminalFor"
           :task-for="taskFor"
           @inspect-subagent="(id) => emit('inspectSubagent', id)"
@@ -214,6 +217,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
         :steps="completedSteps"
         :status="turn.status"
         :duration-text="turn.durationText"
+        :default-open="defaultProcessOpen"
         :terminal-for="terminalFor"
         :task-for="taskFor"
         @inspect-subagent="(id) => emit('inspectSubagent', id)"

@@ -65,4 +65,16 @@ describe("i18n module", () => {
     expect(t("user.notificationsSection")).toBe("Notification Preferences");
     expect(t("profiles.profileDeletedSuccess")).toBe("Profile deleted.");
   });
+
+  test("translates language and provider profile menu labels in vi and en", () => {
+    setLocale("vi");
+    expect(t("user.languageVi")).toBe("Tiếng Việt");
+    expect(t("user.languageEn")).toBe("English");
+    expect(t("modelPicker.providerProfile")).toBe("Provider profile");
+
+    setLocale("en");
+    expect(t("user.languageVi")).toBe("Tiếng Việt");
+    expect(t("user.languageEn")).toBe("English");
+    expect(t("modelPicker.providerProfile")).toBe("Provider profile");
+  });
 });

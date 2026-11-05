@@ -5,8 +5,14 @@ import { createStreamNormalizer } from "./stream-normalizer.ts";
 function streamEvent(
   event: Record<string, unknown>,
   parentToolUseId: string | null = null,
+  agentId?: string,
 ): Record<string, unknown> {
-  return { type: "stream_event", event, parent_tool_use_id: parentToolUseId };
+  return {
+    type: "stream_event",
+    event,
+    parent_tool_use_id: parentToolUseId,
+    ...(agentId === undefined ? {} : { agent_id: agentId }),
+  };
 }
 
 function messageStart(id: string): Record<string, unknown> {
@@ -230,5 +236,60 @@ describe("createStreamNormalizer", () => {
     );
     expect(event).toBeDefined();
     expect(Object.keys(event!.payload).sort()).toEqual(["toolCallId", "toolName"]);
+  });
+
+  test("propagates agentId and isolates concurrent subagent streams keyed by agent_id", () => {
+    const normalize = createStreamNormalizer();
+
+    expect(normalize(streamEvent(messageStart("msg_wf_a"), null, "agent-wf-a"))).toEqual([
+      {
+        type: "message.started",
+        payload: { messageId: "msg_wf_a", agentId: "agent-wf-a" },
+      },
+    ]);
+
+    expect(
+      normalize(streamEvent(messageStart("msg_wf_b"), "toolu-wf-parent", "agent-wf-b")),
+    ).toEqual([
+      {
+        type: "message.started",
+        payload: {
+          messageId: "msg_wf_b",
+          parentToolUseId: "toolu-wf-parent",
+          agentId: "agent-wf-b",
+        },
+      },
+    ]);
+
+    expect(normalize(streamEvent(textDelta("from A"), null, "agent-wf-a"))).toEqual([
+      {
+        type: "message.delta",
+        payload: { messageId: "msg_wf_a", text: "from A", agentId: "agent-wf-a" },
+      },
+    ]);
+
+    expect(
+      normalize(
+        streamEvent(
+          {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu-wf-read", name: "Read" },
+          },
+          "toolu-wf-parent",
+          "agent-wf-b",
+        ),
+      ),
+    ).toEqual([
+      {
+        type: "tool.started",
+        payload: {
+          toolCallId: "toolu-wf-read",
+          toolName: "Read",
+          parentToolUseId: "toolu-wf-parent",
+          agentId: "agent-wf-b",
+        },
+      },
+    ]);
   });
 });

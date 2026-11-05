@@ -3,10 +3,12 @@ import {
   ArrowDownAZ,
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
+  Check,
   ChevronLeft,
   ChevronRight,
   EllipsisVertical,
   Folder,
+  Globe,
   Key,
   LayoutDashboard,
   LogOut,
@@ -36,8 +38,15 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useI18n } from "@/lib/i18n";
-import { useTheme } from "@/lib/theme";
+import { type Locale, useI18n } from "@/lib/i18n";
+import { type ThemePreference, useTheme } from "@/lib/theme";
+import {
+  buildLanguageMenuOptions,
+  buildThemeMenuOptions,
+  languageTriggerLabel,
+  themeTriggerLabel,
+  userSubmenuPlacement,
+} from "../features/layout/user-menu.ts";
 import {
   groupSessions,
   nextGrouping,
@@ -121,12 +130,15 @@ const sortIcon = computed<Component>(() => {
   if (sort.value === "name") return ArrowDownAZ;
   return ArrowDownWideNarrow;
 });
-const sortLabels: Record<SessionSort, string> = {
-  recent: t("rail.sortRecent"),
-  oldest: t("rail.sortOldest"),
-  name: t("rail.sortName"),
-};
-const sortTitle = computed(() => `${t("rail.sort")}: ${sortLabels[sort.value]}`);
+const sortTitle = computed(() => {
+  void locale.value;
+  const sortLabels: Record<SessionSort, string> = {
+    recent: t("rail.sortRecent"),
+    oldest: t("rail.sortOldest"),
+    name: t("rail.sortName"),
+  };
+  return `${t("rail.sort")}: ${sortLabels[sort.value]}`;
+});
 
 function toggleGrouping(): void {
   grouping.value = nextGrouping(grouping.value);
@@ -152,6 +164,67 @@ const accountInitial = computed(() => sessions.account?.[0] ?? "?");
 
 const profileDialogOpen = ref(false);
 const userMenuOpen = ref(false);
+const languageMenuOpen = ref(false);
+const themeMenuOpen = ref(false);
+const viewportWidth = ref(typeof window !== "undefined" ? window.innerWidth : 1024);
+
+function onViewportResize(): void {
+  viewportWidth.value = window.innerWidth;
+}
+
+const submenuPlacement = computed(() => userSubmenuPlacement(viewportWidth.value));
+
+watch(userMenuOpen, (isOpen) => {
+  if (!isOpen) {
+    languageMenuOpen.value = false;
+    themeMenuOpen.value = false;
+  }
+});
+watch(languageMenuOpen, (isOpen) => {
+  if (isOpen) themeMenuOpen.value = false;
+});
+watch(themeMenuOpen, (isOpen) => {
+  if (isOpen) languageMenuOpen.value = false;
+});
+
+const languageOptions = computed(() => {
+  void locale.value;
+  return buildLanguageMenuOptions(locale.value);
+});
+const activeLanguageLabel = computed(() => {
+  void locale.value;
+  return languageTriggerLabel(locale.value);
+});
+const activeLanguageFlag = computed(() => (locale.value === "en" ? "🇺🇸" : "🇻🇳"));
+
+const themeOptions = computed(() => {
+  void locale.value;
+  return buildThemeMenuOptions(theme.value);
+});
+const activeThemeLabel = computed(() => {
+  void locale.value;
+  return themeTriggerLabel(theme.value);
+});
+
+function themeIconFor(value: ThemePreference): Component {
+  if (value === "light") return Sun;
+  if (value === "dark") return Moon;
+  return Monitor;
+}
+
+const activeThemeIcon = computed<Component>(() => themeIconFor(theme.value));
+
+function chooseLanguage(nextLocale: Locale): void {
+  setLocale(nextLocale);
+  languageMenuOpen.value = false;
+  userMenuOpen.value = false;
+}
+
+function chooseTheme(nextTheme: ThemePreference): void {
+  setTheme(nextTheme);
+  themeMenuOpen.value = false;
+  userMenuOpen.value = false;
+}
 
 // The rail's "5m ago" stays honest on an open page.
 const now = ref(Date.now());
@@ -177,9 +250,13 @@ function onKeydown(event: KeyboardEvent): void {
 }
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
+  window.addEventListener("resize", onViewportResize);
   void refreshWorkspaces();
 });
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("resize", onViewportResize);
+});
 
 // Re-read workspace declarations whenever sessions change so newly custom-registered
 // folders resolve their path without requiring a full page refresh.
@@ -560,61 +637,105 @@ async function handleDeleteConfirm(): Promise<void> {
           :side-offset="4"
           @open-auto-focus="(e: Event) => e.preventDefault()"
         >
-          <div class="px-2 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground">
-            {{ t("user.language") }}
-          </div>
-          <div class="grid grid-cols-2 gap-1 px-2 pb-1.5">
-            <Button
-              :variant="locale === 'vi' ? 'secondary' : 'ghost'"
-              size="xs"
-              class="gap-1"
-              @click="() => { setLocale('vi'); userMenuOpen = false }"
+          <Popover v-model:open="languageMenuOpen">
+            <PopoverTrigger as-child>
+              <button
+                type="button"
+                :aria-label="`${t('user.language')}: ${activeLanguageLabel}`"
+                :aria-expanded="languageMenuOpen"
+                class="flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-muted sm:min-h-0 sm:py-1.5 sm:text-xs"
+                :class="languageMenuOpen && 'bg-muted'"
+              >
+                <span class="flex items-center gap-2">
+                  <Globe :size="13" class="shrink-0 text-muted-foreground" />
+                  <span>{{ t("user.language") }}</span>
+                </span>
+                <span class="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                  <span>{{ activeLanguageFlag }}</span>
+                  <span class="truncate">{{ activeLanguageLabel }}</span>
+                  <ChevronRight :size="12" class="shrink-0 opacity-60" />
+                </span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              :side="submenuPlacement.side"
+              :align="submenuPlacement.align"
+              :side-offset="6"
+              :collision-padding="12"
+              class="w-48 max-w-[calc(100vw-2rem)] gap-0.5 rounded-lg p-1"
+              role="listbox"
+              :aria-label="t('user.language')"
             >
-              <span>🇻🇳</span>
-              <span>VN</span>
-            </Button>
-            <Button
-              :variant="locale === 'en' ? 'secondary' : 'ghost'"
-              size="xs"
-              class="gap-1"
-              @click="() => { setLocale('en'); userMenuOpen = false }"
+              <button
+                v-for="opt in languageOptions"
+                :key="opt.value"
+                type="button"
+                role="option"
+                :aria-selected="opt.selected"
+                class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5 sm:text-xs"
+                :class="opt.selected && 'bg-accent/60 font-medium'"
+                @click="chooseLanguage(opt.value)"
+              >
+                <span>{{ opt.flag }}</span>
+                <span class="flex-1 truncate">{{ opt.label }}</span>
+                <Check v-if="opt.selected" :size="13" class="shrink-0 text-primary" />
+              </button>
+            </PopoverContent>
+          </Popover>
+
+          <Popover v-model:open="themeMenuOpen">
+            <PopoverTrigger as-child>
+              <button
+                type="button"
+                :aria-label="`${t('user.theme')}: ${activeThemeLabel}`"
+                :aria-expanded="themeMenuOpen"
+                class="flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-muted sm:min-h-0 sm:py-1.5 sm:text-xs"
+                :class="themeMenuOpen && 'bg-muted'"
+              >
+                <span class="flex items-center gap-2">
+                  <component
+                    :is="activeThemeIcon"
+                    :size="13"
+                    class="shrink-0 text-muted-foreground"
+                  />
+                  <span>{{ t("user.theme") }}</span>
+                </span>
+                <span class="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                  <span class="truncate">{{ activeThemeLabel }}</span>
+                  <ChevronRight :size="12" class="shrink-0 opacity-60" />
+                </span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              :side="submenuPlacement.side"
+              :align="submenuPlacement.align"
+              :side-offset="6"
+              :collision-padding="12"
+              class="w-48 max-w-[calc(100vw-2rem)] gap-0.5 rounded-lg p-1"
+              role="listbox"
+              :aria-label="t('user.theme')"
             >
-              <span>🇺🇸</span>
-              <span>EN</span>
-            </Button>
-          </div>
-          <div class="px-2 pt-1 pb-1 text-[11px] font-medium text-muted-foreground">
-            {{ t("user.theme") }}
-          </div>
-          <div class="grid grid-cols-3 gap-1 px-2 pb-1.5">
-            <Button
-              :variant="theme === 'light' ? 'secondary' : 'ghost'"
-              size="xs"
-              class="gap-1 px-1.5"
-              @click="() => { setTheme('light'); userMenuOpen = false }"
-            >
-              <Sun :size="12" />
-              <span class="truncate">{{ t("user.light") }}</span>
-            </Button>
-            <Button
-              :variant="theme === 'dark' ? 'secondary' : 'ghost'"
-              size="xs"
-              class="gap-1 px-1.5"
-              @click="() => { setTheme('dark'); userMenuOpen = false }"
-            >
-              <Moon :size="12" />
-              <span class="truncate">{{ t("user.dark") }}</span>
-            </Button>
-            <Button
-              :variant="theme === 'system' ? 'secondary' : 'ghost'"
-              size="xs"
-              class="gap-1 px-1.5"
-              @click="() => { setTheme('system'); userMenuOpen = false }"
-            >
-              <Monitor :size="12" />
-              <span class="truncate">{{ t("user.system") }}</span>
-            </Button>
-          </div>
+              <button
+                v-for="opt in themeOptions"
+                :key="opt.value"
+                type="button"
+                role="option"
+                :aria-selected="opt.selected"
+                class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent sm:min-h-0 sm:py-1.5 sm:text-xs"
+                :class="opt.selected && 'bg-accent/60 font-medium'"
+                @click="chooseTheme(opt.value)"
+              >
+                <component
+                  :is="themeIconFor(opt.value)"
+                  :size="13"
+                  class="shrink-0 text-muted-foreground"
+                />
+                <span class="flex-1 truncate">{{ opt.label }}</span>
+                <Check v-if="opt.selected" :size="13" class="shrink-0 text-primary" />
+              </button>
+            </PopoverContent>
+          </Popover>
+
           <div class="my-1 h-px bg-border" />
           <button
             type="button"

@@ -7,8 +7,21 @@
  * accepts, and where the slider's knob sits for each.
  */
 
-import { EFFORT_LEVELS, type EffortLevel, MODEL_IDS, type RunnerModel } from "@cc-web/protocol";
+import {
+  EFFORT_LEVELS,
+  type EffortLevel,
+  MODEL_IDS,
+  type ProfileSummary,
+  type RunnerModel,
+} from "@cc-web/protocol";
 import { t } from "@/lib/i18n";
+
+export interface ProfileMenuOption {
+  value: string | null;
+  label: string;
+  endpoint: string | null;
+  selected: boolean;
+}
 
 /** The model rows the picker shows for a runner. */
 export type PickerModel = RunnerModel;
@@ -216,6 +229,49 @@ export function triggerLabelWithProfile(
 ): string {
   const name = profileName?.trim();
   return name ? `${modelLabelText} · ${name}` : modelLabelText;
+}
+
+/**
+ * The label shown on the Provider profile menu trigger button.
+ * Falls back to `defaultRunnerHost` when no profile is selected or when the
+ * stored profileId no longer matches any saved profile.
+ */
+export function profileTriggerLabel(
+  profileId: string | null | undefined,
+  profiles: readonly ProfileSummary[],
+): string {
+  if (!profileId) {
+    return t("modelPicker.defaultRunnerHost");
+  }
+  const active = profiles.find((profile) => profile.profileId === profileId);
+  return active ? active.name : t("modelPicker.defaultRunnerHost");
+}
+
+/**
+ * Builds the pop-out menu options for the Provider profile selector, with the
+ * runner-host default row first and exactly one row marked `selected: true`.
+ */
+export function buildProfileMenuOptions(
+  profileId: string | null | undefined,
+  profiles: readonly ProfileSummary[],
+): ProfileMenuOption[] {
+  const activeId =
+    profileId && profiles.some((profile) => profile.profileId === profileId) ? profileId : null;
+
+  return [
+    {
+      value: null,
+      label: t("modelPicker.defaultRunnerHost"),
+      endpoint: null,
+      selected: activeId === null,
+    },
+    ...profiles.map((profile) => ({
+      value: profile.profileId,
+      label: profile.name,
+      endpoint: profile.endpoint,
+      selected: profile.profileId === activeId,
+    })),
+  ];
 }
 
 /**

@@ -33,7 +33,12 @@ export function createStreamNormalizer(): (
     if (sdkMessage["type"] !== "stream_event") return [];
     const parentKey =
       typeof sdkMessage["parent_tool_use_id"] === "string" ? sdkMessage["parent_tool_use_id"] : "";
-    const parentField = parentKey !== "" ? { parentToolUseId: parentKey } : {};
+    const agentKey = typeof sdkMessage["agent_id"] === "string" ? sdkMessage["agent_id"] : "";
+    const chainKey = `${parentKey}::${agentKey}`;
+    const routingFields = {
+      ...(parentKey !== "" ? { parentToolUseId: parentKey } : {}),
+      ...(agentKey !== "" ? { agentId: agentKey } : {}),
+    };
     const event = sdkMessage["event"];
     if (typeof event !== "object" || event === null) return [];
     const raw = event as Record<string, unknown>;
@@ -45,8 +50,8 @@ export function createStreamNormalizer(): (
           ? (message as Record<string, unknown>)["id"]
           : undefined;
       if (typeof id !== "string" || id === "") return [];
-      currentId.set(parentKey, id);
-      return [{ type: "message.started", payload: { messageId: id, ...parentField } }];
+      currentId.set(chainKey, id);
+      return [{ type: "message.started", payload: { messageId: id, ...routingFields } }];
     }
 
     if (raw["type"] === "content_block_start") {
@@ -63,7 +68,7 @@ export function createStreamNormalizer(): (
       const toolName = toolUse["name"];
       if (typeof toolCallId !== "string" || toolCallId === "") return [];
       if (typeof toolName !== "string" || toolName === "") return [];
-      return [{ type: "tool.started", payload: { toolCallId, toolName, ...parentField } }];
+      return [{ type: "tool.started", payload: { toolCallId, toolName, ...routingFields } }];
     }
 
     if (raw["type"] === "content_block_delta") {
@@ -72,9 +77,9 @@ export function createStreamNormalizer(): (
       const fragment = delta as Record<string, unknown>;
       if (fragment["type"] !== "text_delta") return [];
       const text = fragment["text"];
-      const id = currentId.get(parentKey);
+      const id = currentId.get(chainKey);
       if (typeof text !== "string" || id === undefined) return [];
-      return [{ type: "message.delta", payload: { messageId: id, text, ...parentField } }];
+      return [{ type: "message.delta", payload: { messageId: id, text, ...routingFields } }];
     }
 
     return [];

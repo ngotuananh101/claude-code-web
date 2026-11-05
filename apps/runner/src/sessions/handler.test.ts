@@ -433,6 +433,133 @@ describe("workspace.sessions.messages", () => {
 
     expect(getSessionMessagesCalls[0]![1].includeSystemMessages).toBe(false);
   });
+
+  test("loads subagent transcripts via listSubagents + getSubagentMessages, links Agent toolUseId, skips housekeeping ids, and redacts sensitive fields", async () => {
+    const mainMessages = [
+      {
+        type: "assistant" as const,
+        uuid: "m-main-1",
+        session_id: "s1",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-agent-explore",
+              name: "Agent",
+              input: { description: "Explore repo", subagent_type: "Explore" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user" as const,
+        uuid: "m-main-2",
+        session_id: "s1",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu-agent-explore",
+              content: [{ type: "text", text: "Found files.\nagentId: a37b4b1e86821c096" }],
+            },
+          ],
+        },
+      },
+    ];
+
+    const listSubagentsCalls: Array<[string, { dir?: string } | undefined]> = [];
+    const getSubagentMessagesCalls: Array<
+      [string, string, { dir?: string; limit?: number; offset?: number } | undefined]
+    > = [];
+
+    const { sdk } = makeMockSdk([], mainMessages);
+    sdk.listSubagents = mock(async (sessionId: string, opts?: { dir?: string }) => {
+      listSubagentsCalls.push([sessionId, opts]);
+      return [
+        "a37b4b1e86821c096",
+        "ae3454d16c5171399",
+        "acompact-0fd4323b87bc3b5b",
+        "aprompt_suggestion-407bd7",
+      ];
+    });
+    sdk.getSubagentMessages = mock(
+      async (
+        sessionId: string,
+        agentId: string,
+        opts?: { dir?: string; limit?: number; offset?: number },
+      ) => {
+        getSubagentMessagesCalls.push([sessionId, agentId, opts]);
+        if (agentId === "a37b4b1e86821c096") {
+          return [
+            {
+              type: "assistant" as const,
+              uuid: "sub-m1",
+              message: {
+                role: "assistant",
+                apiKey: "sk-ant-leak-secret-1234567890",
+                content: [{ type: "tool_use", id: "toolu-sub-read", name: "Read", input: {} }],
+              },
+            },
+          ];
+        }
+        return [
+          {
+            type: "assistant" as const,
+            uuid: "wf-m1",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "Workflow finding" }],
+            },
+          },
+        ];
+      },
+    );
+
+    const handler = createSessionsHandler({
+      workspacePathFor: (id: string) => (id === "ws-2" ? "/abs/ws-2" : undefined),
+      sdk,
+    });
+
+    const frame = (await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", dir: "ws-2" },
+      }),
+    )) as {
+      ok: boolean;
+      result: {
+        messages: Array<{
+          type: string;
+          uuid: string;
+          message: Record<string, unknown>;
+          parentToolUseId?: string;
+          agentId?: string;
+        }>;
+      };
+    };
+
+    expect(frame.ok).toBe(true);
+    expect(listSubagentsCalls).toEqual([["s1", { dir: "/abs/ws-2" }]]);
+    // Housekeeping compact & prompt_suggestion subagents must be skipped
+    expect(getSubagentMessagesCalls.map((c) => c[1])).toEqual([
+      "a37b4b1e86821c096",
+      "ae3454d16c5171399",
+    ]);
+
+    expect(frame.result.messages).toHaveLength(4);
+    const agentMsg = frame.result.messages.find((m) => m.uuid === "sub-m1");
+    expect(agentMsg).toBeDefined();
+    expect(agentMsg?.agentId).toBe("a37b4b1e86821c096");
+    expect(agentMsg?.parentToolUseId).toBe("toolu-agent-explore");
+    expect("apiKey" in (agentMsg?.message ?? {})).toBe(false);
+
+    const wfMsg = frame.result.messages.find((m) => m.uuid === "wf-m1");
+    expect(wfMsg).toBeDefined();
+    expect(wfMsg?.agentId).toBe("ae3454d16c5171399");
+    expect("parentToolUseId" in (wfMsg ?? {})).toBe(false);
+  });
 });
 
 describe("error handling", () => {

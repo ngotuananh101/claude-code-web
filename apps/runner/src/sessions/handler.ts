@@ -31,7 +31,10 @@ import {
   type SessionsListRequest,
   type SessionsListResult,
 } from "@cc-web/protocol";
-import { redactErrorText } from "../execution/redact.ts";
+import { redactErrorText, redactSdkMessage } from "../execution/redact.ts";
+
+const MAX_SUBAGENTS_PER_SESSION = 30;
+const MAX_SUBAGENT_MESSAGES_LIMIT = 100;
 
 /** The subset of the Claude Agent SDK this handler uses. */
 export type SessionsSdk = {
@@ -49,6 +52,12 @@ export type SessionsSdk = {
       offset?: number;
       includeSystemMessages: false;
     },
+  ): Promise<SDKSessionMessage[]>;
+  listSubagents?(sessionId: string, options?: { dir?: string }): Promise<string[]>;
+  getSubagentMessages?(
+    sessionId: string,
+    agentId: string,
+    options?: { dir?: string; limit?: number; offset?: number },
   ): Promise<SDKSessionMessage[]>;
 };
 
@@ -68,6 +77,7 @@ type SDKSessionMessage = {
   uuid: string;
   message: unknown;
   parent_tool_use_id?: string | null;
+  agent_id?: string | null;
 };
 
 export type SessionsHandlerOptions = {
@@ -179,7 +189,23 @@ export function createSessionsHandler(
           includeSystemMessages: false,
         });
 
-        const mapped: SessionMessage[] = messages.map(toSessionMessage);
+        const mapped: SessionMessage[] = messages.map((msg) => toSessionMessage(msg));
+
+        if (
+          (msgRequest.offset === undefined || msgRequest.offset === 0) &&
+          sdk.listSubagents !== undefined &&
+          sdk.getSubagentMessages !== undefined
+        ) {
+          const subagentMessages = await loadSubagentSessionMessages(
+            sdk as Required<Pick<SessionsSdk, "listSubagents" | "getSubagentMessages">>,
+            msgRequest.sessionId,
+            resolvedDir,
+            Math.min(limit, MAX_SUBAGENT_MESSAGES_LIMIT),
+            messages,
+          );
+          mapped.push(...subagentMessages);
+        }
+
         const result: SessionMessagesResult = {
           op: "sessions.messages",
           sessionId: msgRequest.sessionId,
@@ -195,11 +221,7 @@ function resolveSdk(options: SessionsHandlerOptions): SessionsSdk {
   if (options.sdk !== undefined) return options.sdk;
   // Lazy require so importing this module in tests does not load the bundled
   // binary. `require` is Bun's synchronous loader (§20.3).
-  const sdk = require("@anthropic-ai/claude-agent-sdk") as {
-    listSessions: SessionsSdk["listSessions"];
-    getSessionMessages: SessionsSdk["getSessionMessages"];
-  };
-  return sdk;
+  return require("@anthropic-ai/claude-agent-sdk") as SessionsSdk;
 }
 
 function clampLimit(value: number | undefined, defaultLimit: number, maxLimit: number): number {
@@ -221,14 +243,146 @@ function toSessionSummary(sdk: SDKSessionInfoLike): SessionSummary {
   return summary;
 }
 
-function toSessionMessage(msg: SDKSessionMessage): SessionMessage {
+function redactMessageField(value: unknown): unknown {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return redactSdkMessage(value);
+  }
+  if (typeof value === "string") {
+    return redactErrorText(value);
+  }
+  return value;
+}
+
+function toSessionMessage(
+  msg: SDKSessionMessage,
+  extra?: { agentId?: string; parentToolUseId?: string },
+): SessionMessage {
   const out: SessionMessage = {
     type: msg.type,
     uuid: msg.uuid,
-    message: msg.message,
+    message: redactMessageField(msg.message),
   };
-  if (typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== "") {
-    out.parentToolUseId = msg.parent_tool_use_id;
+  const parentId =
+    typeof msg.parent_tool_use_id === "string" && msg.parent_tool_use_id !== ""
+      ? msg.parent_tool_use_id
+      : extra?.parentToolUseId;
+  if (parentId !== undefined && parentId !== "") {
+    out.parentToolUseId = parentId;
+  }
+  const agentId =
+    typeof msg.agent_id === "string" && msg.agent_id !== "" ? msg.agent_id : extra?.agentId;
+  if (agentId !== undefined && agentId !== "") {
+    out.agentId = agentId;
   }
   return out;
+}
+
+function isHousekeepingSubagentId(agentId: string): boolean {
+  return (
+    agentId.startsWith("acompact-") ||
+    agentId.startsWith("aprompt_suggestion-") ||
+    agentId.startsWith("aside_question-")
+  );
+}
+
+function flattenResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "object" && item !== null) {
+      const rec = item as Record<string, unknown>;
+      if (rec["type"] === "text" && typeof rec["text"] === "string") {
+        parts.push(rec["text"]);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+function extractAgentIdToToolUseIdMap(
+  mainMessages: readonly SDKSessionMessage[],
+): Map<string, string> {
+  const subagentToolUseIds = new Set<string>();
+  const agentIdToToolUseId = new Map<string, string>();
+
+  for (const msg of mainMessages) {
+    if (typeof msg.message !== "object" || msg.message === null) continue;
+    const content = (msg.message as Record<string, unknown>)["content"];
+    if (!Array.isArray(content)) continue;
+
+    if (msg.type === "assistant") {
+      for (const block of content) {
+        if (typeof block !== "object" || block === null) continue;
+        const rec = block as Record<string, unknown>;
+        if (rec["type"] !== "tool_use") continue;
+        const id = rec["id"];
+        const name = rec["name"];
+        if (typeof id === "string" && (name === "Agent" || name === "Task")) {
+          subagentToolUseIds.add(id);
+        }
+      }
+    } else if (msg.type === "user") {
+      for (const block of content) {
+        if (typeof block !== "object" || block === null) continue;
+        const rec = block as Record<string, unknown>;
+        if (rec["type"] !== "tool_result") continue;
+        const toolUseId = rec["tool_use_id"];
+        if (typeof toolUseId !== "string" || !subagentToolUseIds.has(toolUseId)) continue;
+        const text = flattenResultText(rec["content"]);
+        const match = /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text);
+        if (match?.[1] !== undefined) {
+          agentIdToToolUseId.set(match[1], toolUseId);
+        }
+      }
+    }
+  }
+
+  return agentIdToToolUseId;
+}
+
+async function loadSubagentSessionMessages(
+  sdk: Required<Pick<SessionsSdk, "listSubagents" | "getSubagentMessages">>,
+  sessionId: string,
+  resolvedDir: string | undefined,
+  perSubagentLimit: number,
+  mainMessages: readonly SDKSessionMessage[],
+): Promise<SessionMessage[]> {
+  let subagentIds: string[];
+  try {
+    subagentIds = await sdk.listSubagents(
+      sessionId,
+      resolvedDir !== undefined ? { dir: resolvedDir } : undefined,
+    );
+  } catch {
+    return [];
+  }
+
+  const eligibleIds = subagentIds
+    .filter((id) => typeof id === "string" && id !== "" && !isHousekeepingSubagentId(id))
+    .slice(0, MAX_SUBAGENTS_PER_SESSION);
+  if (eligibleIds.length === 0) return [];
+
+  const agentIdToToolUseId = extractAgentIdToToolUseIdMap(mainMessages);
+  const batches = await Promise.all(
+    eligibleIds.map(async (agentId) => {
+      try {
+        const subMsgs = await sdk.getSubagentMessages(sessionId, agentId, {
+          ...(resolvedDir !== undefined ? { dir: resolvedDir } : {}),
+          limit: perSubagentLimit,
+        });
+        const parentToolUseId = agentIdToToolUseId.get(agentId);
+        return subMsgs.map((subMsg) =>
+          toSessionMessage(subMsg, {
+            agentId,
+            ...(parentToolUseId !== undefined ? { parentToolUseId } : {}),
+          }),
+        );
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  return batches.flat();
 }

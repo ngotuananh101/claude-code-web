@@ -514,6 +514,10 @@ export function eventParentToolUseId(payload: Record<string, unknown>): string |
   return asString(payload["parentToolUseId"]) ?? asString(payload["parent_tool_use_id"]);
 }
 
+export function eventAgentId(payload: Record<string, unknown>): string | undefined {
+  return asString(payload["agentId"]) ?? asString(payload["agent_id"]);
+}
+
 type PendingTool = {
   toolCallId: string;
   toolName: string;
@@ -648,7 +652,8 @@ export function deriveChatTurns(
 
   for (const event of liveEvents) {
     const payload = asRecord(event.payload) ?? {};
-    if (eventParentToolUseId(payload) !== undefined) continue;
+    if (eventParentToolUseId(payload) !== undefined || eventAgentId(payload) !== undefined)
+      continue;
     if (event.type === "run.started") {
       hasLiveRuns = true;
       const prompt = asString(payload["prompt"]);
@@ -690,7 +695,8 @@ export function deriveChatTurns(
 
   for (const message of historicalMessages) {
     if (message.type === "system") continue;
-    if (asString(message.parentToolUseId) !== undefined) continue;
+    if (asString(message.parentToolUseId) !== undefined || asString(message.agentId) !== undefined)
+      continue;
 
     if (message.type === "user") {
       const msg = asRecord(message.message);
@@ -874,7 +880,8 @@ export function deriveChatTurns(
 
   for (const event of liveEvents) {
     const payload = asRecord(event.payload) ?? {};
-    if (eventParentToolUseId(payload) !== undefined) continue;
+    if (eventParentToolUseId(payload) !== undefined || eventAgentId(payload) !== undefined)
+      continue;
 
     if (event.type === "run.started") {
       if (liveAgentTurn !== null) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { RunnerModel } from "@cc-web/protocol";
+import type { ProfileSummary, RunnerModel } from "@cc-web/protocol";
 import {
+  buildProfileMenuOptions,
   effortAt,
   effortLabel,
   effortLevelsFor,
@@ -13,6 +14,7 @@ import {
   modelTier,
   normalizeEffort,
   pickerModels,
+  profileTriggerLabel,
   stepEffort,
   triggerLabelWithProfile,
 } from "./model-picker.ts";
@@ -86,6 +88,59 @@ describe("triggerLabelWithProfile", () => {
     expect(triggerLabelWithProfile("Sonnet (prime)", null)).toBe("Sonnet (prime)");
     expect(triggerLabelWithProfile("Sonnet (prime)", undefined)).toBe("Sonnet (prime)");
     expect(triggerLabelWithProfile("Sonnet (prime)", "   ")).toBe("Sonnet (prime)");
+  });
+});
+
+describe("profileTriggerLabel / buildProfileMenuOptions", () => {
+  const sampleProfiles: ProfileSummary[] = [
+    {
+      profileId: "p-1",
+      name: "9Router",
+      endpoint: "https://api.9router.example",
+      authField: "ANTHROPIC_AUTH_TOKEN",
+      hasKey: true,
+      modelMapping: {},
+    },
+    {
+      profileId: "p-2",
+      name: "OpenRouter",
+      endpoint: "https://openrouter.ai/api",
+      authField: "ANTHROPIC_API_KEY",
+      hasKey: true,
+      modelMapping: {},
+    },
+  ];
+
+  test("profileTriggerLabel returns active profile name or defaultRunnerHost fallback", () => {
+    expect(profileTriggerLabel(null, sampleProfiles)).toBe("Mặc định (Runner Host)");
+    expect(profileTriggerLabel(undefined, sampleProfiles)).toBe("Mặc định (Runner Host)");
+    expect(profileTriggerLabel("p-1", sampleProfiles)).toBe("9Router");
+    expect(profileTriggerLabel("p-missing", sampleProfiles)).toBe("Mặc định (Runner Host)");
+  });
+
+  test("buildProfileMenuOptions lists default option first followed by saved profiles with single selection", () => {
+    const defaultSelected = buildProfileMenuOptions(null, sampleProfiles);
+    expect(defaultSelected).toEqual([
+      { value: null, label: "Mặc định (Runner Host)", endpoint: null, selected: true },
+      {
+        value: "p-1",
+        label: "9Router",
+        endpoint: "https://api.9router.example",
+        selected: false,
+      },
+      {
+        value: "p-2",
+        label: "OpenRouter",
+        endpoint: "https://openrouter.ai/api",
+        selected: false,
+      },
+    ]);
+
+    const profileSelected = buildProfileMenuOptions("p-2", sampleProfiles);
+    expect(profileSelected.map((o) => o.selected)).toEqual([false, false, true]);
+
+    const staleSelected = buildProfileMenuOptions("stale-id", sampleProfiles);
+    expect(staleSelected.map((o) => o.selected)).toEqual([true, false, false]);
   });
 });
 
