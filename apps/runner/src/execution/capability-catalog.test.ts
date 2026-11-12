@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { embeddedCliPath } from "@cc-web/agent-adapter";
 import {
   type CapabilityCatalogLoad,
   type CapabilityCatalogQuery,
@@ -215,6 +216,29 @@ describe("discoverCapabilities", () => {
     expect(typeof options?.["pathToClaudeCodeExecutable"]).toBe("string");
     // A zero-turn probe: the prompt stream never yields.
     expect(load.state.params[0]?.prompt).toBeDefined();
+  });
+
+  test("passes an explicit CLI path to the SDK probe", async () => {
+    const load = fakeLoad({ init: {} });
+    await discoverCapabilities({
+      cwd: CWD,
+      homeDir: HOME,
+      load: load.load,
+      claudeCliPath: "/opt/claude/claude",
+    });
+    expect(load.state.params[0]?.options["pathToClaudeCodeExecutable"]).toBe("/opt/claude/claude");
+  });
+
+  test("omits the CLI path when the build embeds one", async () => {
+    const load = fakeLoad({ init: {} });
+    await discoverCapabilities({
+      cwd: CWD,
+      homeDir: HOME,
+      load: load.load,
+    });
+    expect("pathToClaudeCodeExecutable" in (load.state.params[0]?.options ?? {})).toBe(
+      embeddedCliPath() !== undefined,
+    );
   });
 
   test("parses installed_plugins.json into plugin records", async () => {

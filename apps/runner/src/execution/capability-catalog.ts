@@ -58,6 +58,11 @@ export type DiscoverCapabilitiesOptions = {
   cwd: string;
   /** The host user's home; anchors the `~/.claude` reads. */
   homeDir: string;
+  /**
+   * The resolved host CLI for a slim build; absent means the build's own
+   * embedded asset.
+   */
+  claudeCliPath?: string;
   /** Overrides the SDK seam for tests; production loads the real one lazily. */
   load?: CapabilityCatalogLoad;
   /** Overrides the file seam for tests. */
@@ -91,14 +96,15 @@ export async function discoverCapabilities(
   let query: CapabilityCatalogQuery | undefined;
   try {
     const load = options.load ?? loadSdk();
-    const cliPath = embeddedCliPath();
     query = load({
       prompt: noTurns(),
       options: {
         cwd: options.cwd,
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        ...(cliPath === undefined ? {} : { pathToClaudeCodeExecutable: cliPath }),
+        ...(options.claudeCliPath === undefined && embeddedCliPath() === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: options.claudeCliPath ?? embeddedCliPath() }),
       },
     });
     const init = await withTimeout(

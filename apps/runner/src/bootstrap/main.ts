@@ -258,13 +258,7 @@ function executablePath(): string {
   return script.endsWith(".ts") ? `${process.execPath} ${script}` : process.execPath;
 }
 
-async function start(
-  options?: Record<string, string>,
-  // Task 5 threads this into the probes and the daemon.
-  claudeCliPath?: string,
-): Promise<void> {
-  const _claudeCliPath = claudeCliPath;
-  void _claudeCliPath;
+async function start(options?: Record<string, string>, claudeCliPath?: string): Promise<void> {
   const dir = options?.["home"] ?? identityDir();
   const defaultWorkspaceEnv = process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"];
 
@@ -293,6 +287,7 @@ async function start(
   // answer just means the composer falls back to the protocol's own list.
   const models = await discoverModels({
     cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? homedir(),
+    ...(claudeCliPath === undefined ? {} : { claudeCliPath }),
   });
   console.log(
     `discovered ${models.length} model${models.length === 1 ? "" : "s"}: ${models
@@ -306,6 +301,7 @@ async function start(
   const capabilities = await discoverCapabilities({
     cwd: defaultWorkspaceEnv ?? process.env["HOME"] ?? homedir(),
     homeDir: process.env["HOME"] ?? homedir(),
+    ...(claudeCliPath === undefined ? {} : { claudeCliPath }),
   });
   console.log(
     `discovered ${capabilities.commands.length} command${capabilities.commands.length === 1 ? "" : "s"}, ${capabilities.plugins.length} plugin${capabilities.plugins.length === 1 ? "" : "s"}, ${capabilities.agents.length} agent${capabilities.agents.length === 1 ? "" : "s"}, ${capabilities.mcpServers.length} MCP server${capabilities.mcpServers.length === 1 ? "" : "s"}`,
@@ -317,6 +313,7 @@ async function start(
     sdkVersion: "0.3.309",
     models,
     runnerCapabilities: capabilities,
+    ...(claudeCliPath === undefined ? {} : { claudeCliPath }),
     workspacePathFor: (workspaceId) => registry.pathFor(workspaceId),
     declaredWorkspaces: () =>
       registry.list().map((workspace) => {

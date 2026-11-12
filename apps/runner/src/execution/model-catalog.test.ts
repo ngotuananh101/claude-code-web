@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { embeddedCliPath } from "@cc-web/agent-adapter";
 import { discoverModels, type ModelCatalogLoad, type ModelCatalogQuery } from "./model-catalog.ts";
 
 /**
@@ -105,6 +106,20 @@ describe("discoverModels", () => {
     expect(options?.["cwd"]).toBe("/srv/proj");
     // §20.3: the probe spawns the same embedded CLI a run does.
     expect(typeof options?.["pathToClaudeCodeExecutable"]).toBe("string");
+  });
+
+  test("passes an explicit CLI path to the SDK probe", async () => {
+    const p = probe();
+    await discoverModels({ cwd: "/w", load: p.load, claudeCliPath: "/opt/claude/claude" });
+    expect(p.params[0]?.options["pathToClaudeCodeExecutable"]).toBe("/opt/claude/claude");
+  });
+
+  test("omits the CLI path when the build embeds one", async () => {
+    const p = probe();
+    await discoverModels({ cwd: "/w", load: p.load });
+    expect("pathToClaudeCodeExecutable" in (p.params[0]?.options ?? {})).toBe(
+      embeddedCliPath() !== undefined,
+    );
   });
 
   test("a failed probe reports no models instead of rejecting", async () => {

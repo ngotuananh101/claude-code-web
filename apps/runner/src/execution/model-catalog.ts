@@ -36,6 +36,11 @@ export type DiscoverModelsOptions = {
    * a run's would be, so a model configured in the project shows up too.
    */
   cwd: string;
+  /**
+   * The resolved host CLI for a slim build; absent means the build's own
+   * embedded asset.
+   */
+  claudeCliPath?: string;
   /** Overrides the SDK seam for tests; production loads the real one lazily. */
   load?: ModelCatalogLoad;
   /** Hard cap on the probe; past it, the runner reports no models. */
@@ -53,7 +58,6 @@ export async function discoverModels(options: DiscoverModelsOptions): Promise<Ru
   let query: ModelCatalogQuery | undefined;
   try {
     const load = options.load ?? loadSdk();
-    const cliPath = embeddedCliPath();
     query = load({
       // No turn is ever started: an async iterable that yields nothing is how
       // streaming input says "nothing to send yet". The init frame arrives
@@ -65,7 +69,9 @@ export async function discoverModels(options: DiscoverModelsOptions): Promise<Ru
         // sources a run reads, so what the picker offers is what a run accepts.
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        ...(cliPath === undefined ? {} : { pathToClaudeCodeExecutable: cliPath }),
+        ...(options.claudeCliPath === undefined && embeddedCliPath() === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: options.claudeCliPath ?? embeddedCliPath() }),
       },
     });
     const init = await withTimeout(

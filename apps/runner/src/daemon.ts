@@ -225,6 +225,11 @@ export type DaemonOptions = {
    */
   sdk?: SdkStream;
   /**
+   * The resolved host CLI path (§20.3). A slim build has no embedded CLI, so
+   * every SDK call must name this one; absent leaves the adapter's default.
+   */
+  claudeCliPath?: string;
+  /**
    * The pump's retry-timer seams, passed straight through. They exist so a test
    * can observe that `stop()` reaches `pump.stop()` and cancels an armed retry,
    * rather than only trusting that it does.
@@ -357,7 +362,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     db,
     localRunnerId: identity.runnerId,
     workspacePathFor: options.workspacePathFor ?? (() => undefined),
-    sdk: options.sdk ?? ((input) => createSdkStream(input)),
+    sdk:
+      options.sdk ??
+      ((input) =>
+        createSdkStream({
+          ...input,
+          ...(options.claudeCliPath === undefined
+            ? {}
+            : { pathToClaudeCodeExecutable: options.claudeCliPath }),
+        })),
     runnerHome: options.identityDir,
     ...(serverUrl === undefined ? {} : { serverUrl }),
     token: identity.credential,
