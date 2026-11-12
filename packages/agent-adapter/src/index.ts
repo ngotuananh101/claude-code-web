@@ -14,6 +14,7 @@
 import { embeddedCliPath } from "./claude-asset.ts";
 
 export { claudeCliKind, embeddedCliPath } from "./claude-asset.ts";
+export { MIN_CLAUDE_CLI_VERSION } from "./claude-cli-version.ts";
 
 /** The subset of the SDK's `query` this adapter uses. */
 export type QueryFn = (params: {

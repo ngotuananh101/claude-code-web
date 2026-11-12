@@ -9,9 +9,10 @@
  * mode this guards is a windows artifact that carries a linux `claude` and
  * only dies on the runner host, at first use.
  *
- *   bun run build:runner                                # host target
- *   bun run build:runner --target bun-windows-x64 \
- *     --outfile dist/cc-web-runner-windows-x64.exe      \
+ *   bun run build:runner                                # slim, host target
+ *   bun run build:runner --with-cli                     # bundled CLI
+ *   bun run build:runner --with-cli --target bun-windows-x64 \
+ *     --outfile dist/cc-web-runner-bundled-windows-x64.exe \
  *     --define 'CC_WEB_DEFAULT_SERVER:"https://cc.example.com"'
  */
 
@@ -20,15 +21,29 @@ import { generateShim } from "./claude-asset.ts";
 const ENTRY = "apps/runner/src/bootstrap/main.ts";
 const DEFAULT_OUTFILE = "dist/cc-web-runner";
 
-export type BuildArgs = { target: string; outfile: string; defines: string[] };
+export type BuildArgs = {
+  target: string;
+  outfile: string;
+  defines: string[];
+  variant: "slim" | "bundled";
+};
 
 export function parseArgs(argv: string[]): BuildArgs {
-  const args: BuildArgs = { target: "host", outfile: DEFAULT_OUTFILE, defines: [] };
-  const known = ["--target", "--outfile", "--define"];
+  const args: BuildArgs = {
+    target: "host",
+    outfile: DEFAULT_OUTFILE,
+    defines: [],
+    variant: "slim",
+  };
+  const known = ["--target", "--outfile", "--define", "--with-cli"];
   for (let i = 0; i < argv.length; i++) {
     // Both `--flag value` and the workflow's `--flag=value` (one bash word) are
     // accepted, so the release contract cannot drift from local invocations.
     const token = argv[i] ?? "";
+    if (token === "--with-cli") {
+      args.variant = "bundled";
+      continue;
+    }
     const flag = known.find((f) => token === f || token.startsWith(`${f}=`));
     if (flag === undefined) throw new Error(`unknown build:runner flag: ${token}`);
     const inline = token === flag ? undefined : token.slice(flag.length + 1);
@@ -45,7 +60,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   // The shim must name the target's platform binary before the bundler reads
   // it — this is the whole point of the script.
-  await generateShim(args.target);
+  await generateShim(args.target, args.variant);
 
   const spawned = Bun.spawnSync(
     [
