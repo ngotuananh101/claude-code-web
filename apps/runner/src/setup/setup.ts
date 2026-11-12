@@ -1,3 +1,4 @@
+import type { ClaudeCliResolution } from "../execution/claude-cli.ts";
 import type { RunnerIdentity } from "../identity/identity-store.ts";
 
 /**
@@ -71,11 +72,19 @@ export type SetupInput = {
   runnerId: string;
   token: string | undefined;
   identityDir: string;
+  /** `--skip-cli-check`: write the identity even when the host CLI is unusable. */
+  skipCliCheck?: boolean;
 };
 
 export type SetupDeps = {
   /** The real 0600 atomic write; injected so tests never touch the disk. */
   saveIdentity: (dir: string, identity: RunnerIdentity) => Promise<void> | void;
+  /**
+   * Resolves this runner's Claude Code CLI. Absent means "do not check": a
+   * bundled build needs no host CLI, and callers outside the connector keep
+   * working unchanged.
+   */
+  resolveCli?: () => ClaudeCliResolution;
 };
 
 export type SetupResult = { ok: true; controlUrl: string } | { ok: false; message: string };
@@ -100,6 +109,11 @@ export async function runSetup(input: SetupInput, deps: SetupDeps): Promise<Setu
       ok: false,
       message: "setup: no token arrived (env CC_WEB_RUNNER_TOKEN, TTY or stdin)",
     };
+  }
+
+  if (deps.resolveCli !== undefined && input.skipCliCheck !== true) {
+    const cli = deps.resolveCli();
+    if (!cli.ok) return { ok: false, message: cli.guidance };
   }
 
   await deps.saveIdentity(input.identityDir, {

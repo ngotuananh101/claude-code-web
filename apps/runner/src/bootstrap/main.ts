@@ -15,9 +15,11 @@ import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { claudeCliKind } from "@cc-web/agent-adapter";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverCapabilities } from "../execution/capability-catalog.ts";
+import { type ClaudeCliResolution, hostClaudeCli } from "../execution/claude-cli.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
@@ -55,9 +57,9 @@ const bakedServerUrl =
 const USAGE = `${runnerInfo.name}
 
 usage:
-  runner setup --server <http(s) origin> --runner-id <id>   token: CC_WEB_RUNNER_TOKEN | TTY | stdin
-  runner connect
-  runner service install [--scope user|system] [--user <name>] [--home <path>]
+  runner setup --server <http(s) origin> --runner-id <id> [--skip-cli-check]   token: CC_WEB_RUNNER_TOKEN | TTY | stdin
+  runner connect [--skip-cli-check]
+  runner service install [--scope user|system] [--user <name>] [--home <path>] [--skip-cli-check]
   runner service uninstall [--scope user|system]
   runner service print [--scope user|system] [--user <name>] [--home <path>]`;
 
@@ -224,6 +226,29 @@ function parseOptions(argv: string[]): Record<string, string> {
   return options;
 }
 
+/** `--skip-cli-check`, or CC_WEB_SKIP_CLI_CHECK=1, bypasses the host-CLI gate. */
+function skipsCliCheck(options: Record<string, string>): boolean {
+  return options["skip-cli-check"] === "true" || process.env["CC_WEB_SKIP_CLI_CHECK"] === "1";
+}
+
+/**
+ * One resolution per process: connect, service install and setup all use it,
+ * and the resolved path is what the probes and the executor receive.
+ */
+function requireClaudeCli(
+  options: Record<string, string>,
+): Extract<ClaudeCliResolution, { ok: true }> | undefined {
+  const cli = hostClaudeCli();
+  if (cli.ok) return cli;
+  if (skipsCliCheck(options)) {
+    process.stderr.write(`warning: ${cli.guidance}\n`);
+    return undefined;
+  }
+  process.stderr.write(`${cli.guidance}\n`);
+  process.exit(1);
+  return undefined;
+}
+
 /**
  * The compiled binary's execPath is the executable itself; under `bun run`
  * the script file must ride along for the unit's ExecStart to work.
@@ -233,7 +258,13 @@ function executablePath(): string {
   return script.endsWith(".ts") ? `${process.execPath} ${script}` : process.execPath;
 }
 
-async function start(options?: Record<string, string>): Promise<void> {
+async function start(
+  options?: Record<string, string>,
+  // Task 5 threads this into the probes and the daemon.
+  claudeCliPath?: string,
+): Promise<void> {
+  const _claudeCliPath = claudeCliPath;
+  void _claudeCliPath;
   const dir = options?.["home"] ?? identityDir();
   const defaultWorkspaceEnv = process.env["CC_WEB_RUNNER_DEFAULT_WORKSPACE"];
 
@@ -325,7 +356,9 @@ switch (command) {
   case "-v":
   case "--version":
   case "version": {
-    console.log(`${runnerInfo.name} (protocol v${runnerInfo.protocolVersion})`);
+    console.log(
+      `${runnerInfo.name} (protocol v${runnerInfo.protocolVersion}, cli ${runnerInfo.cliMode})`,
+    );
     break;
   }
 
@@ -335,6 +368,7 @@ switch (command) {
     if (options["home"]) {
       process.env["CC_WEB_RUNNER_HOME"] = options["home"];
     }
+    const cli = requireClaudeCli(options);
     const home = options["home"] ?? identityDir();
     const logDir = options["log-dir"] ?? process.env["CC_WEB_RUNNER_LOG_DIR"];
 
@@ -347,7 +381,7 @@ switch (command) {
       });
       logger.install();
     }
-    await start(options);
+    await start(options, cli?.path);
     break;
   }
 
@@ -355,7 +389,7 @@ switch (command) {
     const rawArgs = process.argv.slice(3);
     if (rawArgs.includes("-h") || rawArgs.includes("--help") || rawArgs.includes("help")) {
       console.log(
-        "usage: runner setup --server <http(s) origin> --runner-id <id>   token: CC_WEB_RUNNER_TOKEN | TTY | stdin",
+        "usage: runner setup --server <http(s) origin> --runner-id <id> [--skip-cli-check]   token: CC_WEB_RUNNER_TOKEN | TTY | stdin",
       );
       break;
     }
@@ -369,8 +403,13 @@ switch (command) {
         runnerId: options["runner-id"] ?? "",
         token,
         identityDir: identityDir(),
+        skipCliCheck: skipsCliCheck(options),
       },
-      { saveIdentity },
+      {
+        saveIdentity,
+        // A bundled build carries its own CLI; only slim builds depend on the host.
+        ...(claudeCliKind() === "external" ? { resolveCli: () => hostClaudeCli() } : {}),
+      },
     );
 
     if (!result.ok) {
@@ -399,6 +438,8 @@ switch (command) {
     const scope: UnitScope = resolveScope(options);
     const targetUser = scope === "user" ? undefined : resolveTargetUser(options);
     const home = resolveServiceHome(targetUser, options);
+
+    if (sub === "install") requireClaudeCli(options);
 
     if (process.platform === "win32") {
       const environmentFile = process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"];

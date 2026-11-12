@@ -158,3 +158,92 @@ describe("runSetup", () => {
     expect(JSON.stringify(good)).not.toContain(token);
   });
 });
+
+describe("the Claude Code CLI gate", () => {
+  const base = {
+    serverUrl: "http://localhost:8787",
+    runnerId: "r1",
+    token: "t0ken",
+    identityDir: "/tmp/identity",
+  };
+
+  test("refuses before writing anything when the CLI is missing", async () => {
+    let saved = 0;
+    const result = await runSetup(
+      { ...base },
+      {
+        saveIdentity: () => {
+          saved += 1;
+        },
+        resolveCli: () => ({ ok: false, reason: "missing", guidance: "install claude first" }),
+      },
+    );
+    expect(result).toEqual({ ok: false, message: "install claude first" });
+    expect(saved).toBe(0);
+  });
+
+  test("--skip-cli-check writes the identity anyway", async () => {
+    let saved = 0;
+    const result = await runSetup(
+      { ...base, skipCliCheck: true },
+      {
+        saveIdentity: () => {
+          saved += 1;
+        },
+        resolveCli: () => ({ ok: false, reason: "missing", guidance: "install claude first" }),
+      },
+    );
+    expect(result).toMatchObject({ ok: true, controlUrl: "ws://localhost:8787/ws/runner" });
+    expect(saved).toBe(1);
+  });
+
+  test("a usable CLI changes nothing", async () => {
+    let saved = 0;
+    const result = await runSetup(
+      { ...base },
+      {
+        saveIdentity: () => {
+          saved += 1;
+        },
+        resolveCli: () => ({
+          ok: true,
+          mode: "external",
+          path: "/usr/bin/claude",
+          version: "2.1.400",
+        }),
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(saved).toBe(1);
+  });
+
+  test("no resolver injected means no check (bundled builds, older callers)", async () => {
+    let saved = 0;
+    const result = await runSetup(
+      { ...base },
+      {
+        saveIdentity: () => {
+          saved += 1;
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(saved).toBe(1);
+  });
+
+  test("the token is still checked before the CLI gate", async () => {
+    // Precedence: an operator who also forgot the token must hear about the
+    // token, not be sent to install a CLI for a setup that could not work.
+    const result = await runSetup(
+      { ...base, token: undefined },
+      {
+        saveIdentity: () => {},
+        resolveCli: () => ({ ok: false, reason: "missing", guidance: "install claude first" }),
+      },
+    );
+    expect(result).toEqual({
+      ok: false,
+      message: "setup: no token arrived (env CC_WEB_RUNNER_TOKEN, TTY or stdin)",
+    });
+  });
+});
