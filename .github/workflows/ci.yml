@@ -43,6 +43,19 @@ jobs:
       - name: Unit tests
         run: bun test
 
+      # The generated CLI shim is shared mutable state: it lives on disk and
+      # every test file imports whatever shape was last written there. The run
+      # above passes with the postinstall default (bundled), so it cannot prove
+      # the suite survives the shape a slim build leaves behind. Generate that
+      # shape and run the suite again — an ordering-masked dependency on the
+      # shim fails here instead of on a developer's machine.
+      - name: Unit tests under the slim shim
+        run: |
+          bun -e 'await (await import("./scripts/claude-asset.ts")).generateShim("host", "slim")'
+          grep -q 'kind: "external"' packages/agent-adapter/src/claude-asset.generated.ts
+          bun test
+          bun -e 'await (await import("./scripts/claude-asset.ts")).generateShim("host", "bundled")'
+
       # These probes cross real process boundaries. They need no Docker: the
       # container variants are run by hand, because a hosted runner's Docker
       # is slow and the process variants already exercise the same guarantees.
