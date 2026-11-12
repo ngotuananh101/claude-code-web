@@ -126,6 +126,10 @@ if (build.exitCode === 0) {
     // identity behind — half a configuration fails later and more confusingly.
     const refusedHome = await mkdtemp(join(tmpdir(), "cc-web-refused-"));
     try {
+      // HOME must point at the temp dir: the resolver's last step checks
+      // well-known install locations, so a real ~/.local/bin/claude on the
+      // developer's machine would satisfy the check and the refusal would
+      // never fire. PATH is cleared for the same reason.
       const env: Record<string, string | undefined> = {
         ...process.env,
         PATH: "",
