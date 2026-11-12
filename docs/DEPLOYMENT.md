@@ -216,7 +216,9 @@ bug from the browser: the socket never opens while HTTP calls work.
 ### 1. Build or download the binary
 
 The runner comes in two build variants:
-- **slim (default)**: uses the host's existing `claude` CLI. Keeps the download small (~30–40 MB).
+- **slim (default)**: uses the host's existing `claude` CLI. The artifact is
+  ~106 MB uncompressed (measured 111,003,824 B on linux-x64; ~50–52 MB gzipped
+  or zstd-compressed) — that is ~293 MB smaller than the bundled variant.
 - **bundled (`--with-cli`)**: embeds the Agent SDK's platform binary (~280 MB larger) for self-contained or offline hosts.
 
 ```sh
