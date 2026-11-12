@@ -46,12 +46,28 @@ jobs:
         include:
           - target: bun-linux-x64
             binary: cc-web-runner-linux-x64
+            variant: slim
           - target: bun-linux-arm64
             binary: cc-web-runner-linux-arm64
+            variant: slim
           - target: bun-windows-x64
             binary: cc-web-runner-windows-x64.exe
+            variant: slim
           - target: bun-windows-arm64
             binary: cc-web-runner-windows-arm64.exe
+            variant: slim
+          - target: bun-linux-x64
+            binary: cc-web-runner-bundled-linux-x64
+            variant: bundled
+          - target: bun-linux-arm64
+            binary: cc-web-runner-bundled-linux-arm64
+            variant: bundled
+          - target: bun-windows-x64
+            binary: cc-web-runner-bundled-windows-x64.exe
+            variant: bundled
+          - target: bun-windows-arm64
+            binary: cc-web-runner-bundled-windows-arm64.exe
+            variant: bundled
 
     steps:
       - uses: actions/checkout@v7
@@ -70,6 +86,7 @@ jobs:
       # where the asset shim resolves it (§20.3). Idempotent: the host row
       # finds its package already installed and moves on.
       - name: Install the target platform's SDK CLI
+        if: matrix.variant == 'bundled'
         run: bun run scripts/claude-target-asset.ts --target=${{ matrix.target }}
 
       # The URL travels into the --define flag below, so it must be a plain
@@ -90,6 +107,9 @@ jobs:
           SERVER_URL: ${{ inputs.server_url }}
         run: |
           args=(--target="${{ matrix.target }}" --outfile "dist/${{ matrix.binary }}")
+          if [ "${{ matrix.variant }}" = "bundled" ]; then
+            args+=(--with-cli)
+          fi
           if [ -n "$SERVER_URL" ]; then
             args+=(--define "CC_WEB_DEFAULT_SERVER:\"$SERVER_URL\"")
           fi
@@ -99,7 +119,7 @@ jobs:
       # Only the x64 linux build executes on this runner; the deeper
       # behaviors (service unit, setup identity) are CI's probes' job.
       - name: Smoke the linux-x64 binary
-        if: matrix.target == 'bun-linux-x64'
+        if: matrix.target == 'bun-linux-x64' && matrix.variant == 'slim'
         run: |
           set +e
           dist/cc-web-runner-linux-x64 frobnicate

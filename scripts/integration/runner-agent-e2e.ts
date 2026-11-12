@@ -162,8 +162,11 @@ let runnerProc: Bun.Subprocess | undefined;
 
 try {
   // --- 1. build the binary through build:runner (the asset-shim path) ---
-  console.log("building dist/cc-web-runner (bun run build:runner)…");
-  const build = Bun.spawnSync(["bun", "run", "build:runner", "--outfile", binary], {
+  // This probe exists to prove the EMBEDDED path: the SDK cannot resolve its
+  // own CLI inside $bunfs, so the asset is extracted at first use. A slim build
+  // has no asset to extract, hence --with-cli.
+  console.log("building dist/cc-web-runner (bun run build:runner --with-cli)…");
+  const build = Bun.spawnSync(["bun", "run", "build:runner", "--with-cli", "--outfile", binary], {
     cwd: repoRoot,
     stdout: "pipe",
     stderr: "pipe",

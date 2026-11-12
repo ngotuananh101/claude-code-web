@@ -20,6 +20,7 @@
  *   bun run scripts/integration/runner-binary.ts
  */
 
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,7 +89,16 @@ if (build.exitCode === 0) {
   try {
     const runnerId = "7b3a0f1e-1111-4222-8333-444455556666";
     const setup = Bun.spawnSync(
-      [binary, "setup", "--server", "http://localhost:8787", "--runner-id", runnerId],
+      [
+        binary,
+        "setup",
+        "--server",
+        "http://localhost:8787",
+        "--runner-id",
+        runnerId,
+        // The default build is slim: this CI host has no Claude Code.
+        "--skip-cli-check",
+      ],
       {
         env: {
           ...process.env,
@@ -111,6 +121,38 @@ if (build.exitCode === 0) {
         mode === 0o600,
       `exit=${setup.exitCode} mode=${mode.toString(8)}`,
     );
+
+    // Slim default + no CLI anywhere on PATH: setup must refuse and leave no
+    // identity behind — half a configuration fails later and more confusingly.
+    const refusedHome = await mkdtemp(join(tmpdir(), "cc-web-refused-"));
+    try {
+      const refused = Bun.spawnSync(
+        [binary, "setup", "--server", "http://localhost:8787", "--runner-id", "no-cli"],
+        {
+          env: {
+            ...process.env,
+            PATH: "",
+            HOME: refusedHome,
+            CC_WEB_RUNNER_HOME: refusedHome,
+            CC_WEB_RUNNER_TOKEN: "x",
+            CC_WEB_CLAUDE_BIN: "",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const stderr = new TextDecoder().decode(refused.stderr);
+      check(
+        "slim setup without a host CLI refuses and writes nothing",
+        refused.exitCode === 1 &&
+          (stderr.includes("https://claude.ai/install.sh") ||
+            stderr.includes("CC_WEB_CLAUDE_BIN")) &&
+          !existsSync(join(refusedHome, "identity.json")),
+        `exit=${refused.exitCode}`,
+      );
+    } finally {
+      await rm(refusedHome, { recursive: true, force: true });
+    }
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -134,15 +176,18 @@ if (build.exitCode === 0) {
   if (bakedBuild.exitCode === 0) {
     const bakedHome = await mkdtemp(join(tmpdir(), "cc-web-baked-"));
     try {
-      const setup = Bun.spawnSync([bakedBinary, "setup", "--runner-id", "baked-runner"], {
-        env: {
-          ...process.env,
-          CC_WEB_RUNNER_HOME: bakedHome,
-          CC_WEB_RUNNER_TOKEN: "baked-smoke-token",
+      const setup = Bun.spawnSync(
+        [bakedBinary, "setup", "--runner-id", "baked-runner", "--skip-cli-check"],
+        {
+          env: {
+            ...process.env,
+            CC_WEB_RUNNER_HOME: bakedHome,
+            CC_WEB_RUNNER_TOKEN: "baked-smoke-token",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
         },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      );
       const raw = await readFile(join(bakedHome, "identity.json"), "utf8");
       const identity = JSON.parse(raw) as Record<string, string>;
       check(
