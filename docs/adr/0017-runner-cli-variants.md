@@ -113,7 +113,7 @@ artifacts retain the `.exe` extension).
   Custom binary locations can be provided via `CC_WEB_CLAUDE_BIN` in the service
   environment file.
 - **CI and verification**: CI verifies both paths without installing Claude Code
-  on the runner runner: `runner-binary.ts` verifies slim default builds and
+  on the runner: `runner-binary.ts` verifies slim default builds and
   refusal semantics, while `runner-agent-e2e.ts` compiles with `--with-cli` to
   prove asset extraction and execution.
 - **Protocol compatibility**: Both variants expose identical protocol
