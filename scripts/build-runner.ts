@@ -35,7 +35,7 @@ export function parseArgs(argv: string[]): BuildArgs {
     defines: [],
     variant: "slim",
   };
-  const known = ["--target", "--outfile", "--define", "--with-cli"];
+  const known = ["--target", "--outfile", "--define"];
   for (let i = 0; i < argv.length; i++) {
     // Both `--flag value` and the workflow's `--flag=value` (one bash word) are
     // accepted, so the release contract cannot drift from local invocations.

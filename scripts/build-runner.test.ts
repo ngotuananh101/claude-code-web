@@ -72,4 +72,10 @@ describe("variant selection", () => {
       variant: "bundled",
     });
   });
+
+  test("the flag takes no value, so an equals form is rejected", () => {
+    // A boolean flag must never reach the value-parsing path: before this was
+    // pinned, --with-cli=true silently overwrote `outfile` with "true".
+    expect(() => parseArgs(["--with-cli=true"])).toThrow("unknown build:runner flag");
+  });
 });
