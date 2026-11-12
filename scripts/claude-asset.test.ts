@@ -1,35 +1,51 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { claudeAssetTarget } from "../packages/agent-adapter/src/claude-asset-targets.ts";
 import { generateShim } from "./claude-asset.ts";
 
-const SHIM_PATH = new URL(
-  "../packages/agent-adapter/src/claude-asset.generated.ts",
-  import.meta.url,
-).pathname;
+// Every test generates into its own temp file: writing the real shim here would
+// change the build variant every later test in the process imports.
+async function withTempShim<T>(run: (outPath: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), "cc-web-claude-asset-"));
+  try {
+    return await run(join(dir, "claude-asset.generated.ts"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 describe("generateShim", () => {
   test("bundled shim names the host target's binary as a file asset", async () => {
-    const pending = generateShim("host", "bundled");
-    expect(pending).toBeInstanceOf(Promise);
-    await pending;
-    const asset = claudeAssetTarget("host");
-    const shim = readFileSync(SHIM_PATH, "utf8");
-    expect(shim).toContain(`import binPath from "${asset.pkg}/${asset.binary}"`);
-    expect(shim).toContain('kind: "embedded"');
+    await withTempShim(async (outPath) => {
+      const pending = generateShim("host", "bundled", outPath);
+      expect(pending).toBeInstanceOf(Promise);
+      await pending;
+      const asset = claudeAssetTarget("host");
+      const shim = readFileSync(outPath, "utf8");
+      expect(shim).toContain(`import binPath from "${asset.pkg}/${asset.binary}"`);
+      expect(shim).toContain('kind: "embedded"');
+    });
   });
 
   test("slim shim imports no platform package at all", async () => {
-    await generateShim("host", "slim");
-    const shim = readFileSync(SHIM_PATH, "utf8");
-    expect(shim).toContain('kind: "external"');
-    // A single static import is enough to pull 293 MB into the executable.
-    expect(shim).not.toContain("@anthropic-ai/claude-agent-sdk-");
-    expect(shim).not.toContain('with { type: "file" }');
+    await withTempShim(async (outPath) => {
+      await generateShim("host", "slim", outPath);
+      const shim = readFileSync(outPath, "utf8");
+      expect(shim).toContain('kind: "external"');
+      // A single static import is enough to pull 293 MB into the executable.
+      expect(shim).not.toContain("@anthropic-ai/claude-agent-sdk-");
+      expect(shim).not.toContain('with { type: "file" }');
+    });
   });
 
   test("the variant defaults to bundled", async () => {
-    await generateShim("host");
-    expect(readFileSync(SHIM_PATH, "utf8")).toContain('kind: "embedded"');
+    await withTempShim(async (outPath) => {
+      // undefined keeps the variant argument at its default.
+      await generateShim("host", undefined, outPath);
+      expect(readFileSync(outPath, "utf8")).toContain('kind: "embedded"');
+    });
   });
 });

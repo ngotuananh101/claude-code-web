@@ -104,8 +104,10 @@ describe("discoverModels", () => {
     // §7.1: the picker must offer what a run would accept — the same sources.
     expect(options?.["settingSources"]).toEqual(["user", "project", "local"]);
     expect(options?.["cwd"]).toBe("/srv/proj");
-    // §20.3: the probe spawns the same embedded CLI a run does.
-    expect(typeof options?.["pathToClaudeCodeExecutable"]).toBe("string");
+    // §20.3: the probe passes the CLI path it was given; with none, it passes
+    // one only when this build embeds the CLI. The build variant is a generated
+    // shim on disk, so the expectation must follow it, not assume bundled.
+    expect("pathToClaudeCodeExecutable" in (options ?? {})).toBe(embeddedCliPath() !== undefined);
   });
 
   test("passes an explicit CLI path to the SDK probe", async () => {

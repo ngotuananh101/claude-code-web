@@ -212,8 +212,10 @@ describe("discoverCapabilities", () => {
     // §7.1: the catalogue must offer what a run would accept — the same sources.
     expect(options?.["settingSources"]).toEqual(["user", "project", "local"]);
     expect(options?.["cwd"]).toBe(CWD);
-    // §20.3: the probe spawns the same embedded CLI a run does.
-    expect(typeof options?.["pathToClaudeCodeExecutable"]).toBe("string");
+    // §20.3: the probe passes the CLI path it was given; with none, it passes
+    // one only when this build embeds the CLI. The build variant is a generated
+    // shim on disk, so the expectation must follow it, not assume bundled.
+    expect("pathToClaudeCodeExecutable" in (options ?? {})).toBe(embeddedCliPath() !== undefined);
     // A zero-turn probe: the prompt stream never yields.
     expect(load.state.params[0]?.prompt).toBeDefined();
   });
