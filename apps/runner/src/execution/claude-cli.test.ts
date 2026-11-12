@@ -1,0 +1,238 @@
+import { describe, expect, test } from "bun:test";
+import {
+  type ClaudeCliInput,
+  compareVersions,
+  hostClaudeCli,
+  installGuidance,
+  parseCliVersion,
+  resolveClaudeCli,
+} from "./claude-cli.ts";
+
+const MIN = "2.1.309";
+
+function input(overrides: Partial<ClaudeCliInput> = {}): ClaudeCliInput {
+  return {
+    kind: "external",
+    env: {},
+    home: "/home/op",
+    platform: "linux",
+    which: () => undefined,
+    exists: () => false,
+    versionOf: () => "2.1.400 (Claude Code)",
+    ...overrides,
+  };
+}
+
+describe("parseCliVersion", () => {
+  test("reads the triple out of the CLI's version line", () => {
+    expect(parseCliVersion("2.1.322 (Claude Code)\n")).toBe("2.1.322");
+    expect(parseCliVersion("2.0.1")).toBe("2.0.1");
+  });
+
+  test("garbage output counts as unusable", () => {
+    expect(parseCliVersion("")).toBeUndefined();
+    expect(parseCliVersion("command not found")).toBeUndefined();
+  });
+});
+
+describe("compareVersions", () => {
+  test("compares numerically, not lexically", () => {
+    expect(compareVersions("2.1.309", "2.1.309")).toBe(0);
+    expect(compareVersions("2.1.400", "2.1.309")).toBe(1);
+    expect(compareVersions("2.1.99", "2.1.309")).toBe(-1);
+    expect(compareVersions("2.10.0", "2.9.99")).toBe(1);
+  });
+});
+
+describe("resolveClaudeCli", () => {
+  test("embedded builds answer the extracted path and probe nothing", () => {
+    const result = resolveClaudeCli(
+      input({
+        kind: "embedded",
+        embeddedPath: "/tmp/claude-extracted",
+        which: () => {
+          throw new Error("must not probe");
+        },
+      }),
+    );
+    expect(result).toEqual({ ok: true, mode: "embedded", path: "/tmp/claude-extracted" });
+  });
+
+  test("an explicit CC_WEB_CLAUDE_BIN wins over PATH", () => {
+    const result = resolveClaudeCli(
+      input({
+        env: { CC_WEB_CLAUDE_BIN: "/opt/claude/bin/claude" },
+        exists: (p) => p === "/opt/claude/bin/claude",
+        which: () => "/usr/bin/claude",
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "external",
+      path: "/opt/claude/bin/claude",
+      version: "2.1.400",
+    });
+  });
+
+  test("a bad CC_WEB_CLAUDE_BIN is refused, never bypassed", () => {
+    const result = resolveClaudeCli(
+      input({ env: { CC_WEB_CLAUDE_BIN: "/nope/claude" }, which: () => "/usr/bin/claude" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("override-invalid");
+    expect(result.guidance).toContain("CC_WEB_CLAUDE_BIN");
+  });
+
+  test("a bare command CC_WEB_CLAUDE_BIN resolves through which", () => {
+    const result = resolveClaudeCli(
+      input({
+        env: { CC_WEB_CLAUDE_BIN: "my-claude" },
+        which: (name) => (name === "my-claude" ? "/custom/bin/my-claude" : undefined),
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "external",
+      path: "/custom/bin/my-claude",
+      version: "2.1.400",
+    });
+  });
+
+  test("a bare command CC_WEB_CLAUDE_BIN that resolves to nothing fails as override-invalid", () => {
+    const result = resolveClaudeCli(
+      input({
+        env: { CC_WEB_CLAUDE_BIN: "missing-claude" },
+        which: () => undefined,
+        exists: () => false,
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("override-invalid");
+    expect(result.guidance).toContain("CC_WEB_CLAUDE_BIN");
+  });
+
+  test("a bare command CC_WEB_CLAUDE_BIN resolves through exists when which misses", () => {
+    const result = resolveClaudeCli(
+      input({
+        env: { CC_WEB_CLAUDE_BIN: "local-claude" },
+        which: () => undefined,
+        exists: (p) => p === "local-claude",
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "external",
+      path: "local-claude",
+      version: "2.1.400",
+    });
+  });
+
+  test("PATH answers when no override is set", () => {
+    const result = resolveClaudeCli(input({ which: () => "/usr/local/bin/claude" }));
+    expect(result).toMatchObject({ ok: true, path: "/usr/local/bin/claude" });
+  });
+
+  test("finds the native installer's binary when PATH lacks it", () => {
+    // systemd starts services with PATH=/usr/bin:/bin; the native installer
+    // puts the launcher in ~/.local/bin.
+    const result = resolveClaudeCli(input({ exists: (p) => p === "/home/op/.local/bin/claude" }));
+    expect(result).toMatchObject({ ok: true, path: "/home/op/.local/bin/claude" });
+  });
+
+  test("finds the Windows native install under the user profile", () => {
+    const result = resolveClaudeCli(
+      input({
+        platform: "win32",
+        home: "C:\\Users\\op",
+        exists: (p) => p === "C:\\Users\\op\\.local\\bin\\claude.exe",
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, path: "C:\\Users\\op\\.local\\bin\\claude.exe" });
+  });
+
+  test("nothing found is a missing CLI with install guidance", () => {
+    const result = resolveClaudeCli(input());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("missing");
+    expect(result.guidance).toContain("https://claude.ai/install.sh");
+  });
+
+  test("a .cmd/.ps1 shim is refused as spawnable", () => {
+    // The SDK spawns the path as a native binary; an npm shim is a batch file.
+    const result = resolveClaudeCli(
+      input({ platform: "win32", which: () => "C:\\Users\\op\\AppData\\Roaming\\npm\\claude.cmd" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("override-invalid");
+    expect(result.guidance).toContain("claude.exe");
+  });
+
+  test("shims with varying casing like .BAT are refused", () => {
+    const result = resolveClaudeCli(
+      input({ platform: "win32", which: () => "C:\\Tools\\claude.BAT" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("override-invalid");
+    expect(result.guidance).toContain("claude.exe");
+  });
+
+  test("an older CLI is refused with upgrade guidance", () => {
+    const result = resolveClaudeCli(
+      input({ which: () => "/usr/bin/claude", versionOf: () => "2.1.100 (Claude Code)" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("too-old");
+    expect(result.guidance).toContain("claude update");
+    expect(result.guidance).toContain(MIN);
+  });
+
+  test("probe output with unparseable garbage maps to too-old", () => {
+    const result = resolveClaudeCli(
+      input({ which: () => "/usr/bin/claude", versionOf: () => "not a valid version" }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("too-old");
+  });
+
+  test("a hung or failed version probe is a failure, not a hang", () => {
+    const result = resolveClaudeCli(
+      input({ which: () => "/usr/bin/claude", versionOf: () => undefined }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("too-old");
+  });
+});
+
+describe("installGuidance", () => {
+  test("names every supported install path and the override", () => {
+    const text = installGuidance(MIN, "missing");
+    expect(text).toContain("curl -fsSL https://claude.ai/install.sh | bash");
+    expect(text).toContain("irm https://claude.ai/install.ps1 | iex");
+    expect(text).toContain("npm install -g @anthropic-ai/claude-code");
+    expect(text).toContain("CC_WEB_CLAUDE_BIN");
+    expect(text).toContain(MIN);
+  });
+
+  test("the override and upgrade reasons say what to fix", () => {
+    expect(installGuidance(MIN, "override-invalid")).toContain("CC_WEB_CLAUDE_BIN");
+    expect(installGuidance(MIN, "too-old")).toContain("claude update");
+  });
+});
+
+describe("hostClaudeCli", () => {
+  test("answers without throwing in the host environment", () => {
+    const result = hostClaudeCli();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("embedded");
+    expect(typeof result.path).toBe("string");
+  });
+});
