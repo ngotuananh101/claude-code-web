@@ -11,16 +11,24 @@ import {
 const MIN = "2.1.309";
 
 function input(overrides: Partial<ClaudeCliInput> = {}): ClaudeCliInput {
-  return {
-    kind: "external",
+  const base = {
     env: {},
     home: "/home/op",
     platform: "linux",
     which: () => undefined,
     exists: () => false,
     versionOf: () => "2.1.400 (Claude Code)",
-    ...overrides,
   };
+  // The union's embedded arm requires a path; the one embedded test supplies
+  // its own.
+  return overrides.kind === "embedded"
+    ? {
+        ...base,
+        ...overrides,
+        kind: "embedded",
+        embeddedPath: overrides.embeddedPath ?? "/tmp/claude-extracted",
+      }
+    : { ...base, ...overrides, kind: "external" };
 }
 
 describe("parseCliVersion", () => {
@@ -188,6 +196,7 @@ describe("resolveClaudeCli", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("too-old");
+    expect(result.path).toBe("/usr/bin/claude");
     expect(result.guidance).toContain("claude update");
     expect(result.guidance).toContain(MIN);
   });
@@ -199,6 +208,7 @@ describe("resolveClaudeCli", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("too-old");
+    expect(result.path).toBe("/usr/bin/claude");
   });
 
   test("a hung or failed version probe is a failure, not a hang", () => {
@@ -208,6 +218,7 @@ describe("resolveClaudeCli", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("too-old");
+    expect(result.path).toBe("/usr/bin/claude");
   });
 });
 
@@ -224,6 +235,14 @@ describe("installGuidance", () => {
   test("the override and upgrade reasons say what to fix", () => {
     expect(installGuidance(MIN, "override-invalid")).toContain("CC_WEB_CLAUDE_BIN");
     expect(installGuidance(MIN, "too-old")).toContain("claude update");
+  });
+
+  test("every refusal names the hatch that gets past it", () => {
+    for (const reason of ["missing", "override-invalid", "too-old"] as const) {
+      const text = installGuidance(MIN, reason);
+      expect(text).toContain("--skip-cli-check");
+      expect(text).toContain("CC_WEB_SKIP_CLI_CHECK=1");
+    }
   });
 });
 

@@ -6,11 +6,18 @@ import { claudeCliKind, embeddedCliPath, MIN_CLAUDE_CLI_VERSION } from "@cc-web/
 
 export type ClaudeCliResolution =
   | { ok: true; mode: "embedded" | "external"; path: string; version?: string }
-  | { ok: false; reason: "missing" | "override-invalid" | "too-old"; guidance: string };
+  | {
+      ok: false;
+      reason: "missing" | "override-invalid" | "too-old";
+      guidance: string;
+      /** Set for "too-old": the CLI was found, just below the floor. */
+      path?: string;
+    };
 
-export type ClaudeCliInput = {
-  kind: "embedded" | "external";
-  embeddedPath?: string | undefined;
+export type ClaudeCliInput = (
+  | { kind: "embedded"; embeddedPath: string }
+  | { kind: "external"; embeddedPath?: string | undefined }
+) & {
   env: Record<string, string | undefined>;
   home: string;
   platform: string;
@@ -46,33 +53,46 @@ export function compareVersions(a: string, b: string): number {
 
 /**
  * Build install, override, or upgrade guidance text for CLI resolution failures.
+ *
+ * One shared body with a per-reason first line, and every text ends with the
+ * skip hatch: the refusal is useless to an operator who cannot get past it.
  */
 export function installGuidance(
   minimum: string,
   reason: "missing" | "override-invalid" | "too-old",
 ): string {
-  switch (reason) {
-    case "missing":
-      return [
-        `Claude Code CLI (version >= ${minimum}) was not found on PATH or standard install locations.`,
-        "Install Claude Code using one of the following methods:",
-        "  - macOS / Linux:  curl -fsSL https://claude.ai/install.sh | bash",
-        "  - Windows:        irm https://claude.ai/install.ps1 | iex",
-        "  - npm:            npm install -g @anthropic-ai/claude-code",
-        "Alternatively, set CC_WEB_CLAUDE_BIN to the absolute path of the claude executable.",
-      ].join("\n");
-    case "override-invalid":
-      return [
-        "The configured Claude Code CLI executable is invalid or not spawnable.",
-        "Ensure CC_WEB_CLAUDE_BIN points to an existing, executable binary.",
-        "On Windows, .cmd, .bat, or .ps1 script shims are not supported directly; point directly to claude.exe instead.",
-      ].join("\n");
-    case "too-old":
-      return [
-        `Claude Code CLI is older than the required minimum version (${minimum}) or failed to report its version.`,
-        `Please run 'claude update' or reinstall Claude Code to upgrade to >= ${minimum}.`,
-      ].join("\n");
+  const head =
+    reason === "missing"
+      ? `Claude Code CLI (version >= ${minimum}) was not found on PATH or standard install locations.`
+      : reason === "override-invalid"
+        ? "The configured Claude Code CLI executable is invalid or not spawnable."
+        : `Claude Code CLI is older than the required minimum version (${minimum}) or failed to report its version.`;
+
+  const body: string[] = [];
+  if (reason === "missing") {
+    body.push(
+      "Install Claude Code using one of the following methods:",
+      "  - macOS / Linux:  curl -fsSL https://claude.ai/install.sh | bash",
+      "  - Windows:        irm https://claude.ai/install.ps1 | iex",
+      "  - npm:            npm install -g @anthropic-ai/claude-code",
+    );
   }
+  if (reason === "override-invalid") {
+    body.push(
+      "Ensure CC_WEB_CLAUDE_BIN points to an existing, executable binary.",
+      "On Windows, .cmd, .bat, or .ps1 script shims are not supported directly; point directly to claude.exe instead.",
+    );
+  }
+  if (reason === "too-old") {
+    body.push(`Please run 'claude update' or reinstall Claude Code to upgrade to >= ${minimum}.`);
+  }
+  if (reason === "missing") {
+    body.push(
+      "Alternatively, set CC_WEB_CLAUDE_BIN to the absolute path of the claude executable.",
+    );
+  }
+  body.push("To proceed anyway: --skip-cli-check (or CC_WEB_SKIP_CLI_CHECK=1).");
+  return [head, ...body].join("\n");
 }
 
 function isShim(filePath: string): boolean {
@@ -85,7 +105,7 @@ function isShim(filePath: string): boolean {
  */
 export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
   if (input.kind === "embedded") {
-    return { ok: true, mode: "embedded", path: input.embeddedPath! };
+    return { ok: true, mode: "embedded", path: input.embeddedPath };
   }
 
   let chosenPath: string | undefined;
@@ -177,6 +197,7 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
       ok: false,
       reason: "too-old",
       guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old"),
+      path: chosenPath,
     };
   }
 
@@ -186,6 +207,7 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
       ok: false,
       reason: "too-old",
       guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old"),
+      path: chosenPath,
     };
   }
 
@@ -194,6 +216,7 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
       ok: false,
       reason: "too-old",
       guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old"),
+      path: chosenPath,
     };
   }
 
@@ -212,9 +235,7 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
 export function hostClaudeCli(
   env: Record<string, string | undefined> = process.env,
 ): ClaudeCliResolution {
-  return resolveClaudeCli({
-    kind: claudeCliKind(),
-    embeddedPath: embeddedCliPath(),
+  const common = {
     env,
     home: env["HOME"] ?? env["USERPROFILE"] ?? homedir(),
     platform: process.platform,
@@ -231,5 +252,13 @@ export function hostClaudeCli(
         return undefined;
       }
     },
-  });
+  };
+  const kind = claudeCliKind();
+  const embedded = embeddedCliPath();
+  // claudeCliKind() and embeddedCliPath() both read the shim so they agree, but
+  // the union's embedded arm needs the path narrowed to a string.
+  if (kind === "embedded" && embedded !== undefined) {
+    return resolveClaudeCli({ kind: "embedded", embeddedPath: embedded, ...common });
+  }
+  return resolveClaudeCli({ kind: "external", ...common });
 }
