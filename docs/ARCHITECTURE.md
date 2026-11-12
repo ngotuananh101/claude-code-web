@@ -344,7 +344,11 @@ Runner quảng bá khả năng thực tế: platform, SDK version, Git/file supp
 
 ### 7.1. Quyết định cốt lõi
 
-Mỗi Runner dùng bundled Claude Code của SDK và kế thừa config trong môi trường của chính Runner đó. Không cần cài CLI global và không buộc đồng bộ config giữa các Runner.
+Runner hỗ trợ hai chế độ build (ADR-017):
+- **slim (mặc định)**: sử dụng `claude` có sẵn trên host, được resolve theo thứ tự `CC_WEB_CLAUDE_BIN` → `PATH` (`which("claude")`) → well-known install directories, và yêu cầu phiên bản tối thiểu `MIN_CLAUDE_CLI_VERSION` (khớp với version mà SDK bundle).
+- **bundled** (`--with-cli`): nhúng trực tiếp native CLI package của SDK thông qua build shim sinh tự động, phù hợp cho môi trường offline hoặc tự chứa (self-contained).
+
+Dù chạy binary nào, Runner kế thừa config trong môi trường của chính Runner đó mà không buộc đồng bộ config giữa các Runner:
 
 ```ts
 {
@@ -354,7 +358,7 @@ Mỗi Runner dùng bundled Claude Code của SDK và kế thừa config trong m�
 }
 ```
 
-`pathToClaudeCodeExecutable` không đặt mặc định; SDK tự resolve packaged binary. Binary và configuration là hai vấn đề độc lập. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
+`pathToClaudeCodeExecutable` luôn được thiết lập tường minh bởi resolver của Runner (đối với slim) hoặc bởi adapter từ extracted asset (đối với bundled), vì binary compiled không thể để SDK tự resolve trong `$bunfs`. Kế thừa cấu hình (`settingSources`) và binary thực thi là hai vấn đề hoàn toàn độc lập. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
 
 ### 7.2. Config sources
 
@@ -1138,7 +1142,11 @@ Không cần inbound port trên máy Runner cho control protocol. Model/provider
 - Caddy/proxy WebSocket timeouts và idle behavior phải kiểm thử.
 - Docker tùy chọn: mount đúng config/data, UID/GID và paths; host helpers không tự có trong image.
 
-Connector runner được compile thành single executable (`bun run build:runner`, smoke bởi `scripts/integration/runner-binary.ts`): `setup`/`connect`/`service` chạy trên binary compiled. Chạy agent thật từ binary compiled đã được verify (2026-10-25): `@anthropic-ai/claude-agent-sdk` ship CLI native theo platform package, được embed vào binary qua file asset (`with { type: "file" }`; shim sinh theo `--target` bởi `scripts/build-runner.ts`), extract ra temp root per-user 0700 bằng `extractFromBunfs` của SDK và truyền vào SDK qua `pathToClaudeCodeExecutable`. Probe end-to-end `scripts/integration/runner-agent-e2e.ts` chạy một run thật từ binary compiled: host có credential thì run finished; host không có credential (CI) thì fail với lỗi auth-shaped (`Not logged in`), không bao giờ là lỗi asset resolution. Binary to thêm ~280 MB (kích thước CLI). Cross-compile cần platform package của target trên đĩa trước build. `bun install --os/--cpu` KHÔNG relink optional dependency mà lockfile đã resolve (bun 1.4.3 no-op cả có lẫn không có `--frozen-lockfile` — thất bại thật trên CI run đầu tiên), nên `runner-build.yml` dùng `scripts/claude-target-asset.ts` đặt thẳng package vào `packages/agent-adapter/node_modules/`: fetch tarball từ npm registry đúng version SDK đã cài, verify sha512 theo `dist.integrity`, idempotent (package đúng version sẵn có được giữ lại). Platform matrix hiện có: linux-x64, linux-arm64, windows-x64, windows-arm64. [^https://platform.claude.com/docs/en/agent-sdk/typescript]
+Connector runner được compile thành single executable (`bun run build:runner`, smoke bởi `scripts/integration/runner-binary.ts`): `setup`/`connect`/`service` chạy trên binary compiled. Build mặc định là **slim** (không nhúng CLI; sử dụng `claude` của host). Flag `--with-cli` kích hoạt biến thể **bundled** (nhúng CLI của SDK, tăng thêm ~280 MB — dung lượng này nay là opt-in).
+
+Với biến thể **slim**, runner từ chối các lệnh `setup`, `connect`/`run`, và `service install` (exit 1 kèm hướng dẫn cài đặt) nếu host thiếu Claude Code hoặc CLI cũ hơn `MIN_CLAUDE_CLI_VERSION` (hướng dẫn chạy `claude update`). Cờ `--skip-cli-check` (hoặc biến môi trường `CC_WEB_SKIP_CLI_CHECK=1`) là escape hatch chuyển từ chối thành cảnh báo (`warning:`). `service print` và `service uninstall` không bao giờ kiểm tra CLI. Ma trận release (`runner-build.yml`) xuất bản 8 artifacts: `cc-web-runner-<os>-<arch>` (slim) và `cc-web-runner-bundled-<os>-<arch>` cho 4 platforms: linux-x64, linux-arm64, windows-x64, windows-arm64 (Windows giữ đuôi `.exe`).
+
+Với biến thể **bundled**, chạy agent thật từ binary compiled đã được verify (2026-10-25): `@anthropic-ai/claude-agent-sdk` ship CLI native theo platform package, được embed vào binary qua file asset (`with { type: "file" }`; shim sinh theo `--target` bởi `scripts/build-runner.ts`), extract ra temp root per-user 0700 bằng `extractFromBunfs` của SDK và truyền vào SDK qua `pathToClaudeCodeExecutable` (probe `scripts/integration/runner-agent-e2e.ts` verify trực tiếp biến thể này bằng `--with-cli`). Cross-compile bundled cần platform package của target trên đĩa trước build. `bun install --os/--cpu` KHÔNG relink optional dependency mà lockfile đã resolve (bun 1.4.3 no-op cả có lẫn không có `--frozen-lockfile` — thất bại thật trên CI run đầu tiên), nên `runner-build.yml` dùng `scripts/claude-target-asset.ts` đặt thẳng package vào `packages/agent-adapter/node_modules/`: fetch tarball từ npm registry đúng version SDK đã cài, verify sha512 theo `dist.integrity`, idempotent (package đúng version sẵn có được giữ lại). [^https://platform.claude.com/docs/en/agent-sdk/typescript]
 
 ### 20.4. Graceful shutdown
 
@@ -1362,6 +1370,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | ADR-014 | Host-native Runner ưu tiên | Tái sử dụng user config và toolchain ít sai khác |
 | ADR-015 | Runner là connector với token mint từ web (2026-10-24); phần owner auth (better-auth) đã đảo ngược 2026-10-25 — quay lại ADR-0001 | Token hiển thị một lần, DB chỉ giữ hash; systemd unit không chứa secret |
 | ADR-016 | Scheduled tasks thuộc Control Server (2026-10-31) | Lịch sống qua restart, chạy đúng giờ mà không giữ process; CronList/CronDelete của CLI chỉ thấy trong process tạo lịch |
+| ADR-017 | Runner build variants: slim (default) uses the host's Claude Code; `--with-cli` embeds the SDK CLI (2026-11-12) | Không tải 293 MB cho host đã có CLI; host tự quản lý version |
 
 ### 24.2. Cần chốt khi bắt đầu implementation
 

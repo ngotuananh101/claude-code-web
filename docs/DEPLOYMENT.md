@@ -213,11 +213,41 @@ bug from the browser: the socket never opens while HTTP calls work.
 
 ## Connect a Runner
 
-On the machine that will run agents (not necessarily the compose host):
+### 1. Build or download the binary
+
+The runner comes in two build variants:
+- **slim (default)**: uses the host's existing `claude` CLI. Keeps the download small (~30–40 MB).
+- **bundled (`--with-cli`)**: embeds the Agent SDK's platform binary (~280 MB larger) for self-contained or offline hosts.
 
 ```sh
-bun run build:runner                       # produces dist/cc-web-runner
+bun run build:runner                       # produces dist/cc-web-runner (slim)
+bun run build:runner --with-cli            # produces dist/cc-web-runner (bundled)
 ```
+
+Pre-built binaries from GitHub Releases follow the naming scheme:
+- Slim: `cc-web-runner-<os>-<arch>` (Windows: `cc-web-runner-<os>-<arch>.exe`)
+- Bundled: `cc-web-runner-bundled-<os>-<arch>` (Windows: `cc-web-runner-bundled-<os>-<arch>.exe`)
+
+Eight artifacts are published across four targets: `linux-x64`, `linux-arm64`, `windows-x64`, and `windows-arm64`.
+
+### 2. Prerequisites for slim runners
+
+A slim runner requires Claude Code installed on the host (minimum version `2.1.309`):
+
+```sh
+# macOS / Linux:
+curl -fsSL https://claude.ai/install.sh | bash
+# Windows PowerShell:
+# irm https://claude.ai/install.ps1 | iex
+# Or npm:
+# npm install -g @anthropic-ai/claude-code
+```
+
+Run `claude` once and log in before starting the runner.
+
+When running as a systemd service, systemd's default `PATH` does not include `~/.local/bin`. The runner's built-in resolver checks standard fallback locations (`~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`) automatically. If Claude Code is installed in a non-standard path, set `CC_WEB_CLAUDE_BIN=/path/to/claude` in `/etc/cc-web-runner.env`.
+
+### 3. Setup and connect
 
 Mint a runner token in the web UI, then on the runner host:
 
@@ -238,10 +268,13 @@ runner serves under the id `default`, and the same value is what the runner
 advertises on hello/reconcile. Without it the runner still connects and reads
 `ready`, but every `run.start` is refused `unknown_workspace` and the session
 stays `session_busy` until the stale slot is cleared. Make it durable for the
-service so a reboot does not lose it:
+service so a reboot does not lose it (and set `CC_WEB_CLAUDE_BIN` here if using
+a custom CLI location):
 
 ```sh
 echo 'CC_WEB_RUNNER_DEFAULT_WORKSPACE=/path/to/workspace' | sudo tee /etc/cc-web-runner.env
+# Optional custom CLI path:
+# echo 'CC_WEB_CLAUDE_BIN=/path/to/claude' | sudo tee -a /etc/cc-web-runner.env
 CC_WEB_RUNNER_ENV_FILE=/etc/cc-web-runner.env ./dist/cc-web-runner service install
 sudo systemctl restart cc-web-runner.service
 ```
