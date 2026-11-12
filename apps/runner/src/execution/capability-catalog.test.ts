@@ -229,7 +229,7 @@ describe("discoverCapabilities", () => {
     expect(load.state.params[0]?.options["pathToClaudeCodeExecutable"]).toBe("/opt/claude/claude");
   });
 
-  test("omits the CLI path when the build embeds one", async () => {
+  test("omits the CLI path only when the build is slim and no explicit path is given", async () => {
     const load = fakeLoad({ init: {} });
     await discoverCapabilities({
       cwd: CWD,

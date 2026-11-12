@@ -114,7 +114,7 @@ describe("discoverModels", () => {
     expect(p.params[0]?.options["pathToClaudeCodeExecutable"]).toBe("/opt/claude/claude");
   });
 
-  test("omits the CLI path when the build embeds one", async () => {
+  test("omits the CLI path only when the build is slim and no explicit path is given", async () => {
     const p = probe();
     await discoverModels({ cwd: "/w", load: p.load });
     expect("pathToClaudeCodeExecutable" in (p.params[0]?.options ?? {})).toBe(
