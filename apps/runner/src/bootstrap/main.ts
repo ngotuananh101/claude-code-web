@@ -19,7 +19,7 @@ import { claudeCliKind } from "@cc-web/agent-adapter";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverCapabilities } from "../execution/capability-catalog.ts";
-import { type ClaudeCliResolution, hostClaudeCli } from "../execution/claude-cli.ts";
+import { hostClaudeCli } from "../execution/claude-cli.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
@@ -234,15 +234,24 @@ function skipsCliCheck(options: Record<string, string>): boolean {
 /**
  * One resolution per process: connect, service install and setup all use it,
  * and the resolved path is what the probes and the executor receive.
+ *
+ * Returns the path to use, or undefined when there is none. A refusal exits 1
+ * unless the operator skipped the check; a skipped run still threads the path
+ * of a too-old CLI, because "knowingly run an older CLI" is the hatch's stated
+ * purpose and without a path the SDK would fall back to a lookup that fails in
+ * a compiled binary.
  */
-function requireClaudeCli(
-  options: Record<string, string>,
-): Extract<ClaudeCliResolution, { ok: true }> | undefined {
+function requireClaudeCli(options: Record<string, string>): string | undefined {
   const cli = hostClaudeCli();
-  if (cli.ok) return cli;
+  if (cli.ok) return cli.path;
   if (skipsCliCheck(options)) {
     process.stderr.write(`warning: ${cli.guidance}\n`);
-    return undefined;
+    if (cli.reason === "missing") {
+      process.stderr.write(
+        "warning: no Claude Code CLI was found; runs will fail until one is installed\n",
+      );
+    }
+    return cli.path;
   }
   process.stderr.write(`${cli.guidance}\n`);
   process.exit(1);
@@ -365,7 +374,7 @@ switch (command) {
     if (options["home"]) {
       process.env["CC_WEB_RUNNER_HOME"] = options["home"];
     }
-    const cli = requireClaudeCli(options);
+    const cliPath = requireClaudeCli(options);
     const home = options["home"] ?? identityDir();
     const logDir = options["log-dir"] ?? process.env["CC_WEB_RUNNER_LOG_DIR"];
 
@@ -378,7 +387,7 @@ switch (command) {
       });
       logger.install();
     }
-    await start(options, cli?.path);
+    await start(options, cliPath);
     break;
   }
 
@@ -426,7 +435,7 @@ switch (command) {
     const sub = process.argv[3];
     if (sub === "-h" || sub === "--help" || sub === "help" || sub === undefined) {
       console.log(
-        "usage: runner service install | uninstall | print [--scope user|system] [--user <name>] [--home <path>]",
+        "usage: runner service install [--scope user|system] [--user <name>] [--home <path>] [--skip-cli-check] | uninstall | print [--scope user|system] [--user <name>] [--home <path>]",
       );
       break;
     }
