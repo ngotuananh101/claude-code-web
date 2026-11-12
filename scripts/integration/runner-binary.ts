@@ -126,17 +126,19 @@ if (build.exitCode === 0) {
     // identity behind — half a configuration fails later and more confusingly.
     const refusedHome = await mkdtemp(join(tmpdir(), "cc-web-refused-"));
     try {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: "",
+        HOME: refusedHome,
+        CC_WEB_RUNNER_HOME: refusedHome,
+        CC_WEB_RUNNER_TOKEN: "x",
+      };
+      // Unset, not empty: an empty override is itself an invalid override.
+      delete env["CC_WEB_CLAUDE_BIN"];
       const refused = Bun.spawnSync(
         [binary, "setup", "--server", "http://localhost:8787", "--runner-id", "no-cli"],
         {
-          env: {
-            ...process.env,
-            PATH: "",
-            HOME: refusedHome,
-            CC_WEB_RUNNER_HOME: refusedHome,
-            CC_WEB_RUNNER_TOKEN: "x",
-            CC_WEB_CLAUDE_BIN: "",
-          },
+          env,
           stdout: "pipe",
           stderr: "pipe",
         },
@@ -145,8 +147,7 @@ if (build.exitCode === 0) {
       check(
         "slim setup without a host CLI refuses and writes nothing",
         refused.exitCode === 1 &&
-          (stderr.includes("https://claude.ai/install.sh") ||
-            stderr.includes("CC_WEB_CLAUDE_BIN")) &&
+          stderr.includes("https://claude.ai/install.sh") &&
           !existsSync(join(refusedHome, "identity.json")),
         `exit=${refused.exitCode}`,
       );
