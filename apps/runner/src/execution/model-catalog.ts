@@ -53,6 +53,7 @@ export async function discoverModels(options: DiscoverModelsOptions): Promise<Ru
   let query: ModelCatalogQuery | undefined;
   try {
     const load = options.load ?? loadSdk();
+    const cliPath = embeddedCliPath();
     query = load({
       // No turn is ever started: an async iterable that yields nothing is how
       // streaming input says "nothing to send yet". The init frame arrives
@@ -64,9 +65,7 @@ export async function discoverModels(options: DiscoverModelsOptions): Promise<Ru
         // sources a run reads, so what the picker offers is what a run accepts.
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        ...(embeddedCliPath() === undefined
-          ? {}
-          : { pathToClaudeCodeExecutable: embeddedCliPath() }),
+        ...(cliPath === undefined ? {} : { pathToClaudeCodeExecutable: cliPath }),
       },
     });
     const init = await withTimeout(

@@ -91,15 +91,14 @@ export async function discoverCapabilities(
   let query: CapabilityCatalogQuery | undefined;
   try {
     const load = options.load ?? loadSdk();
+    const cliPath = embeddedCliPath();
     query = load({
       prompt: noTurns(),
       options: {
         cwd: options.cwd,
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        ...(embeddedCliPath() === undefined
-          ? {}
-          : { pathToClaudeCodeExecutable: embeddedCliPath() }),
+        ...(cliPath === undefined ? {} : { pathToClaudeCodeExecutable: cliPath }),
       },
     });
     const init = await withTimeout(

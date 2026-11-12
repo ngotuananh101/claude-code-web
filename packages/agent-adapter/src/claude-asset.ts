@@ -13,11 +13,18 @@
 import { extractFromBunfs } from "@anthropic-ai/claude-agent-sdk/extract";
 import { asset } from "./claude-asset.generated.ts";
 
+/** The shape the generated shim exports; one arm per build variant. */
+export type ClaudeAsset =
+  | { readonly kind: "embedded"; readonly binPath: string }
+  | { readonly kind: "external" };
+
+const buildAsset: ClaudeAsset = asset;
+
 export function claudeCliKind(): "embedded" | "external" {
-  return asset.kind === "embedded" ? "embedded" : "external";
+  return buildAsset.kind === "embedded" ? "embedded" : "external";
 }
 
 /** The extracted path of the embedded CLI; `undefined` in a slim build. */
 export function embeddedCliPath(): string | undefined {
-  return asset.kind === "embedded" ? extractFromBunfs(asset.binPath) : undefined;
+  return buildAsset.kind === "embedded" ? extractFromBunfs(buildAsset.binPath) : undefined;
 }

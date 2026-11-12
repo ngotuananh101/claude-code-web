@@ -1,17 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { claudeCliKind, embeddedCliPath } from "./claude-asset.ts";
+import { asset } from "./claude-asset.generated.ts";
+import { type ClaudeAsset, claudeCliKind, embeddedCliPath } from "./claude-asset.ts";
 
 describe("the build's CLI source", () => {
-  test("an embedded build extracts a binary that exists on this host", () => {
-    if (claudeCliKind() !== "embedded") return;
-    const path = embeddedCliPath();
-    expect(path).toBeDefined();
-    expect(existsSync(path!)).toBe(true);
+  test("names the kind the generated shim declares", () => {
+    // Whichever shim is on disk, the adapter must report it — never a guess.
+    const shim = asset as ClaudeAsset;
+    expect(claudeCliKind()).toBe(shim.kind === "embedded" ? "embedded" : "external");
   });
 
-  test("a slim build names no embedded path and import stays cheap", () => {
-    if (claudeCliKind() !== "external") return;
-    expect(embeddedCliPath()).toBeUndefined();
+  test("an embedded build extracts an existing binary; a slim build names none", () => {
+    const path = embeddedCliPath();
+    const shim = asset as ClaudeAsset;
+    if (shim.kind === "embedded") {
+      expect(path).toBeDefined();
+      expect(existsSync(path as string)).toBe(true);
+      return;
+    }
+    expect(path).toBeUndefined();
   });
 });
