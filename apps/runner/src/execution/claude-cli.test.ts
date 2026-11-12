@@ -228,11 +228,17 @@ describe("installGuidance", () => {
 });
 
 describe("hostClaudeCli", () => {
-  test("answers without throwing in the host environment", () => {
+  test("answers a well-formed resolution in the host environment", () => {
+    // Never throws, and the shape is one of the two arms. Which arm depends on
+    // the shim on disk and the host's own `claude`, so both are valid here —
+    // the per-shape behavior is covered by the injected tests above.
     const result = hostClaudeCli();
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("embedded");
-    expect(typeof result.path).toBe("string");
+    if (result.ok) {
+      expect(["embedded", "external"]).toContain(result.mode);
+      expect(typeof result.path).toBe("string");
+      return;
+    }
+    expect(["missing", "override-invalid", "too-old"]).toContain(result.reason);
+    expect(typeof result.guidance).toBe("string");
   });
 });
