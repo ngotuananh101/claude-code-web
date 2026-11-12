@@ -1,17 +1,23 @@
 /**
- * The spawnable path of the Agent SDK's native CLI (§20.3).
+ * Where this build's Claude Code CLI comes from (§20.3).
  *
- * A `bun build --compile` binary cannot resolve the CLI at runtime — the SDK's
- * own node_modules lookup fails inside `$bunfs`. The README-documented recipe
- * embeds the platform package's binary as a file asset and extracts it to a
- * real temp directory before spawning; `extractFromBunfs` is self-guarding, so
- * a plain node_modules path (running from source) passes through unchanged and
- * one call serves both modes.
+ * `bundled` builds embed the SDK's platform binary as a file asset and extract
+ * it at first use — a `bun build --compile` binary cannot resolve the CLI
+ * inside `$bunfs`. `slim` builds embed nothing and use the host's own `claude`
+ * (resolved by apps/runner/src/execution/claude-cli.ts).
+ *
+ * The generated shim is the switch: importing the platform package is what
+ * pulls ~293 MB into the executable, so the slim shim has no such import.
  */
 
 import { extractFromBunfs } from "@anthropic-ai/claude-agent-sdk/extract";
-import binPath from "./claude-asset.generated.ts";
+import { asset } from "./claude-asset.generated.ts";
 
-export function claudeCliPath(): string {
-  return extractFromBunfs(binPath);
+export function claudeCliKind(): "embedded" | "external" {
+  return asset.kind === "embedded" ? "embedded" : "external";
+}
+
+/** The extracted path of the embedded CLI; `undefined` in a slim build. */
+export function embeddedCliPath(): string | undefined {
+  return asset.kind === "embedded" ? extractFromBunfs(asset.binPath) : undefined;
 }

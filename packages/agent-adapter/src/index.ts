@@ -11,9 +11,9 @@
  * make every runner test load the bundled binary just by importing this module.
  */
 
-import { claudeCliPath } from "./claude-asset.ts";
+import { embeddedCliPath } from "./claude-asset.ts";
 
-export { claudeCliPath } from "./claude-asset.ts";
+export { claudeCliKind, embeddedCliPath } from "./claude-asset.ts";
 
 /** The subset of the SDK's `query` this adapter uses. */
 export type QueryFn = (params: {
@@ -56,9 +56,8 @@ export type SdkStreamInput = {
     { behavior: "allow"; updatedInput?: unknown } | { behavior: "deny"; message: string }
   >;
   /**
-   * Where the SDK's CLI subprocess lives (§20.3). Production resolves the
-   * embedded platform binary via `claudeCliPath()`; the field exists so tests
-   * and exotic hosts can name another one.
+   * Where the SDK's CLI subprocess lives (§20.3). The default is the embedded
+   * asset when the build has one; tests and slim builds supply their own path.
    */
   pathToClaudeCodeExecutable?: string;
 };
@@ -174,10 +173,10 @@ export function createSdkStream(
     };
   }
   if (input.canUseTool !== undefined) options["canUseTool"] = input.canUseTool;
-  // §20.3: unlike the options above there is no "inherit" to preserve — the
-  // SDK's own resolution cannot find the CLI inside a compiled binary — so the
-  // resolved path is always set: the caller's override, else the asset.
-  options["pathToClaudeCodeExecutable"] = input.pathToClaudeCodeExecutable ?? claudeCliPath();
+  // §20.3: a bundled build always names its extracted CLI; a slim build names
+  // nothing and lets the caller (the runner's resolver) supply the host's.
+  const cliPath = input.pathToClaudeCodeExecutable ?? embeddedCliPath();
+  if (cliPath !== undefined) options["pathToClaudeCodeExecutable"] = cliPath;
 
   // Loaded inside the generator body, so importing this module costs nothing.
   return (async function* () {

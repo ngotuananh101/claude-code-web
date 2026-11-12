@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { claudeCliPath } from "./claude-asset.ts";
+import { embeddedCliPath } from "./claude-asset.ts";
 import { createSdkStream, type QueryFn } from "./index.ts";
 
 /**
@@ -143,13 +143,19 @@ describe("mapping a run to SDK options", () => {
     expect(params.options?.["canUseTool"]).toBe(canUseTool);
   });
 
-  test("defaults the CLI path to the resolved asset", () => {
-    // A compiled binary cannot resolve the SDK's CLI on its own (§20.3): the
-    // default is the embedded-and-extracted binary, which from source is the
-    // node_modules path. Either way the option must always be set.
-    expect(
-      captureOptions({ prompt: "hi", cwd: "/w" }).options?.["pathToClaudeCodeExecutable"],
-    ).toBe(claudeCliPath());
+  test("defaults the CLI path to the embedded asset when the build has one", () => {
+    // §20.3: a bundled build always sets the option; a slim build omits it so
+    // the runner's resolver supplies the host path.
+    const value = captureOptions({ prompt: "hi", cwd: "/w" }).options?.[
+      "pathToClaudeCodeExecutable"
+    ];
+    expect(value).toBe(embeddedCliPath());
+    if (embeddedCliPath() === undefined) {
+      expect(
+        captureOptions({ prompt: "hi", cwd: "/w" }).options !== undefined &&
+          "pathToClaudeCodeExecutable" in captureOptions({ prompt: "hi", cwd: "/w" }).options!,
+      ).toBe(false);
+    }
   });
 
   test("an explicit pathToClaudeCodeExecutable wins verbatim", () => {

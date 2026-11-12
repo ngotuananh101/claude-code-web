@@ -9,15 +9,27 @@ const SHIM_PATH = new URL(
 ).pathname;
 
 describe("generateShim", () => {
-  test("resolves only after the shim names the host target's binary", async () => {
-    // The returned promise is the ordering guarantee build:runner relies on:
-    // the shim must be on disk before the bundler reads it.
-    const pending = generateShim("host");
+  test("bundled shim names the host target's binary as a file asset", async () => {
+    const pending = generateShim("host", "bundled");
     expect(pending).toBeInstanceOf(Promise);
     await pending;
     const asset = claudeAssetTarget("host");
-    expect(readFileSync(SHIM_PATH, "utf8")).toContain(
-      `import binPath from "${asset.pkg}/${asset.binary}"`,
-    );
+    const shim = readFileSync(SHIM_PATH, "utf8");
+    expect(shim).toContain(`import binPath from "${asset.pkg}/${asset.binary}"`);
+    expect(shim).toContain('kind: "embedded"');
+  });
+
+  test("slim shim imports no platform package at all", async () => {
+    await generateShim("host", "slim");
+    const shim = readFileSync(SHIM_PATH, "utf8");
+    expect(shim).toContain('kind: "external"');
+    // A single static import is enough to pull 293 MB into the executable.
+    expect(shim).not.toContain("@anthropic-ai/claude-agent-sdk-");
+    expect(shim).not.toContain('with { type: "file" }');
+  });
+
+  test("the variant defaults to bundled", async () => {
+    await generateShim("host");
+    expect(readFileSync(SHIM_PATH, "utf8")).toContain('kind: "embedded"');
   });
 });

@@ -21,7 +21,7 @@
  */
 
 import { readFile as readFileFs } from "node:fs/promises";
-import { claudeCliPath } from "@cc-web/agent-adapter";
+import { embeddedCliPath } from "@cc-web/agent-adapter";
 import {
   parseRunnerAgents,
   parseRunnerCommands,
@@ -97,7 +97,9 @@ export async function discoverCapabilities(
         cwd: options.cwd,
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        pathToClaudeCodeExecutable: claudeCliPath(),
+        ...(embeddedCliPath() === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: embeddedCliPath() }),
       },
     });
     const init = await withTimeout(

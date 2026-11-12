@@ -15,7 +15,7 @@
  * never worth refusing to start a runner over a missing picker.
  */
 
-import { claudeCliPath } from "@cc-web/agent-adapter";
+import { embeddedCliPath } from "@cc-web/agent-adapter";
 import { parseRunnerModels, type RunnerModel } from "@cc-web/protocol";
 
 /** The subset of the SDK's `Query` this module uses. */
@@ -64,7 +64,9 @@ export async function discoverModels(options: DiscoverModelsOptions): Promise<Ru
         // sources a run reads, so what the picker offers is what a run accepts.
         settingSources: ["user", "project", "local"],
         // §20.3: a compiled binary cannot let the SDK resolve the CLI itself.
-        pathToClaudeCodeExecutable: claudeCliPath(),
+        ...(embeddedCliPath() === undefined
+          ? {}
+          : { pathToClaudeCodeExecutable: embeddedCliPath() }),
       },
     });
     const init = await withTimeout(
