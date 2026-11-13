@@ -97,15 +97,22 @@ describe("runBuild", () => {
     defines: [],
     variant: "slim",
   };
+  const PREVIOUS = "// the shim that was here before the build\n";
 
   function deps(overrides: Partial<Parameters<typeof runBuild>[1]>) {
     const shims: string[] = [];
+    const written: string[] = [];
     const errors: string[] = [];
     return {
       shims,
+      written,
       errors,
       deps: {
         compile: () => ({ exitCode: 0 }),
+        readShim: async () => PREVIOUS,
+        writeShimFile: async (text: string) => {
+          written.push(text);
+        },
         writeShim: async (target: string) => {
           shims.push(target);
         },
@@ -117,45 +124,57 @@ describe("runBuild", () => {
     };
   }
 
-  test("writes the target's shim first, restores the host shim after", async () => {
+  test("writes the target's shim first, then puts the previous one back", async () => {
     const d = deps({});
     expect(await runBuild(args, d.deps)).toBe(0);
-    expect(d.shims).toEqual(["bun-windows-x64", "host"]);
+    expect(d.shims).toEqual(["bun-windows-x64"]);
+    expect(d.written).toEqual([PREVIOUS]);
   });
 
   test("a failed compile keeps its own exit code", async () => {
     const d = deps({ compile: () => ({ exitCode: 2 }) });
     expect(await runBuild(args, d.deps)).toBe(2);
-    expect(d.shims.at(-1)).toBe("host");
+    expect(d.written).toEqual([PREVIOUS]);
+  });
+
+  test("the restore is the previous text, so a darwin host needs no target mapping", async () => {
+    // darwin is absent from the target map: regenerating "host, bundled" threw
+    // after a successful slim compile and turned exit 0 into exit 1. Writing
+    // the captured text back never consults the map.
+    let consulted = false;
+    const d = deps({
+      writeShim: async (target: string) => {
+        d.shims.push(target);
+        if (target === "host") consulted = true;
+      },
+    });
+    expect(await runBuild(args, d.deps)).toBe(0);
+    expect(consulted).toBe(false);
+    expect(d.written).toEqual([PREVIOUS]);
   });
 
   test("a restore that throws does not replace the compile's exit code", async () => {
-    // darwin hosts are absent from the target map: a cross-build there used to
-    // end 1 with a mapping error even after a successful compile, and hid the
-    // real compile failure when there was one.
     const d = deps({
       compile: () => ({ exitCode: 2 }),
-      writeShim: async (target: string) => {
-        d.shims.push(target);
-        if (target === "host") throw new Error("no platform package is mapped for target host");
+      writeShimFile: async () => {
+        throw new Error("ENOSPC");
       },
     });
     expect(await runBuild(args, d.deps)).toBe(2);
-    expect(d.errors.join("\n")).toContain("could not restore the host shim");
+    expect(d.errors.join("\n")).toContain("could not restore the shim");
   });
 
   test("a restore failure on a clean build does not report success", async () => {
-    // The compile succeeded, but a foreign shim was left on disk: the next
-    // `bun test` in this checkout would import another platform's package.
+    // The compile succeeded, but the shim was left naming another target: the
+    // next `bun test` in this checkout would import the wrong package.
     const d = deps({
-      writeShim: async (target: string) => {
-        d.shims.push(target);
-        if (target === "host") throw new Error("ENOSPC");
+      writeShimFile: async () => {
+        throw new Error("ENOSPC");
       },
     });
     expect(await runBuild(args, d.deps)).toBe(1);
     expect(d.errors.length).toBe(2);
-    expect(d.errors[0]).toContain("could not restore the host shim");
+    expect(d.errors[0]).toContain("could not restore the shim");
   });
 
   test("a target shim that cannot be written refuses before compiling", async () => {
@@ -173,5 +192,6 @@ describe("runBuild", () => {
     await expect(runBuild(args, d.deps)).rejects.toThrow("no platform package is mapped");
     expect(compiled).toBe(false);
     expect(d.shims).toEqual(["bun-windows-x64"]);
+    expect(d.written).toEqual([]);
   });
 });

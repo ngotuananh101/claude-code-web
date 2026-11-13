@@ -64,9 +64,16 @@ export function parseArgs(argv: string[]): BuildArgs {
 
 type BuildDeps = {
   compile: (args: BuildArgs) => { exitCode: number | null };
+  readShim: () => Promise<string>;
+  writeShimFile: (text: string) => Promise<void>;
   writeShim: (target: string, variant: "slim" | "bundled") => Promise<void>;
   error: (line: string) => void;
 };
+
+const SHIM_FILE = new URL(
+  "../packages/agent-adapter/src/claude-asset.generated.ts",
+  import.meta.url,
+).pathname;
 
 function realDeps(): BuildDeps {
   return {
@@ -84,22 +91,29 @@ function realDeps(): BuildDeps {
         ],
         { stdout: "inherit", stderr: "inherit" },
       ),
+    readShim: () => Bun.file(SHIM_FILE).text(),
+    writeShimFile: async (text) => {
+      await Bun.write(SHIM_FILE, text);
+    },
     writeShim: generateShim,
     error: (line) => console.error(line),
   };
 }
 
 /**
- * One build, then restore the host shim. Returns the exit code the process
- * should end with; deps are injectable so the restore-failure path is tested
- * without compiling anything.
+ * One build, then restore the shim that was on disk before it. Returns the exit
+ * code the process should end with; deps are injectable so the restore paths
+ * are tested without compiling anything.
  */
 export async function runBuild(args: BuildArgs, deps: BuildDeps = realDeps()): Promise<number> {
+  // Restoring the EXACT previous text, not "bundled for the host", matters on
+  // two counts: a host absent from the target map (darwin) has no bundled shim
+  // to restore — regenerating one throws — and a checkout deliberately left in
+  // the slim shape must not be flipped back.
+  const previous = await deps.readShim();
   // The shim must name the target's platform binary before the bundler reads
-  // it — this is the whole point of the script. It is regenerated for the host
-  // on the way out: leaving a cross-compile target's shim on disk breaks every
-  // later `bun test` (the target's package is not installed on this host).
-  // Outside the try: it throws before writing, so there is nothing to undo.
+  // it — this is the whole point of the script. Outside the try: an unmapped
+  // target throws before anything is written, so there is nothing to undo.
   await deps.writeShim(args.target, args.variant);
 
   let code = 1;
@@ -107,23 +121,21 @@ export async function runBuild(args: BuildArgs, deps: BuildDeps = realDeps()): P
   try {
     code = deps.compile(args).exitCode ?? 1;
   } finally {
-    // `host` must be regenerated through writeShim so the restore is a valid
-    // shim, not a stale copy of another target's specifier. A failed restore
-    // (host missing from the target map, read-only checkout, ENOSPC) must not
-    // replace the build's own result with a mapping error.
+    // A failed restore (read-only checkout, ENOSPC) must not replace the
+    // build's own result with a write error: it is reported, and the code
+    // below decides what to return.
     try {
-      await deps.writeShim("host", "bundled");
+      await deps.writeShimFile(previous);
     } catch (error) {
       restored = false;
       deps.error(
-        `warning: could not restore the host shim: ${error instanceof Error ? error.message : String(error)}`,
+        `warning: could not restore the shim: ${error instanceof Error ? error.message : String(error)}`,
       );
       deps.error("warning: run `bun run scripts/claude-asset.ts` before the next build or test.");
     }
   }
-  // A compile that failed keeps its own code; a clean build that left a foreign
-  // shim on disk did not do what this script promises, so it does not report
-  // success either.
+  // A compile that failed keeps its own code; a clean build that left the shim
+  // altered did not do what this script promises, so it does not report success.
   return code !== 0 ? code : restored ? 0 : 1;
 }
 
