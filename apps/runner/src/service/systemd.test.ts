@@ -27,6 +27,21 @@ describe("renderSystemdUnit", () => {
     expect(unit).toContain("User=root");
   });
 
+  test("the hatch survives into the unit, or the daemon restart-loops", () => {
+    // `service install --skip-cli-check` skips the install-time check only; a
+    // plain `connect` in the unit re-runs the gate and exits 1 on a host with
+    // no CLI, and Restart=on-failure turns that into a loop.
+    const skipped = renderSystemdUnit({
+      executablePath: "/usr/local/bin/cc-web-runner",
+      homeDir: "/var/lib/cc-web-runner",
+      skipCliCheck: true,
+    });
+    expect(skipped).toContain("Environment=CC_WEB_SKIP_CLI_CHECK=1");
+    expect(skipped).toContain("ExecStart=/usr/local/bin/cc-web-runner connect\n");
+    // A default install must not carry the hatch: it would hide a real refusal.
+    expect(unit).not.toContain("CC_WEB_SKIP_CLI_CHECK");
+  });
+
   test("renders custom target user for system unit", () => {
     const withUser = renderSystemdUnit({
       executablePath: "/usr/local/bin/cc-web-runner",

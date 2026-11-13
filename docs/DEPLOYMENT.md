@@ -262,19 +262,22 @@ claude --version                                   # must be >= 2.1.309, and log
 `runner --version` names which one you have: `cli external` is slim,
 `cli embedded` is bundled.
 
-`--skip-cli-check` on `service install` only skips the check at install time;
-the unit it writes is still plain `connect`, and the install enables it
-immediately (`systemctl enable --now`). On a host with no CLI the service
-therefore starts, exits 1, and enters the same restart loop.
+`--skip-cli-check` on `service install` skips the check at install time **and**
+writes the hatch into what starts the daemon: the systemd unit gets
+`Environment=CC_WEB_SKIP_CLI_CHECK=1`, and the Windows task's command line gets
+`--skip-cli-check`. Without that carried hatch the daemon would re-run the gate,
+exit 1, and `Restart=on-failure` would loop — the skip would look like it had
+worked.
 
-A path recorded **only** in `/etc/cc-web-runner.env` does not help either. The
-gate runs in the daemon too, and the daemon reads that file — so it can see the
-path — but the check itself failed before the unit was ever written, and
-`--skip-cli-check` is not carried into `ExecStart`. Record the path in the
-service environment **and** make the install-time check see it, by exporting
-`CC_WEB_CLAUDE_BIN` in the shell that runs `service install` (or by putting the
-CLI somewhere the resolver already looks). That is the only combination that
-both installs and starts.
+The hatch only bypasses the *check*. It does not give the runner a CLI: on a
+host with no usable `claude`, every run still fails, and `setup` now says so
+("runs will fail until one is installed"). Prefer installing Claude Code (step
+2) or exporting `CC_WEB_CLAUDE_BIN` in the shell that runs `service install`.
+
+A path recorded **only** in `/etc/cc-web-runner.env` is not visible to the
+install-time check, which runs in your shell. Export `CC_WEB_CLAUDE_BIN` there
+as well (or put the CLI where the resolver already looks) and the install
+succeeds on its own merits; the env file then covers the daemon.
 
 ### 2. Prerequisites for slim runners
 
@@ -297,7 +300,7 @@ rejects the wrapper. It still looks for a native `claude.exe` in the standard
 locations, so a host carrying both works — a host with only the npm wrapper is
 refused with guidance to install the native build.
 
-When running as a systemd service, systemd's default `PATH` does not include `~/.local/bin`. The runner's built-in resolver checks standard fallback locations (`~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`) automatically. If Claude Code is installed in a non-standard path, export `CC_WEB_CLAUDE_BIN=/path/to/claude` in the shell that runs the command performing the check (`setup`, `connect`, `service install`), **and** record it in the service environment file so the daemon finds it too. `--skip-cli-check` is not a substitute: it silences the install-time check but is not carried into the unit's `ExecStart`.
+When running as a systemd service, systemd's default `PATH` does not include `~/.local/bin`. The runner's built-in resolver checks standard fallback locations (`~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`) automatically. If Claude Code is installed in a non-standard path, export `CC_WEB_CLAUDE_BIN=/path/to/claude` in the shell that runs the command performing the check (`setup`, `connect`, `service install`), **and** record it in the service environment file so the daemon finds it too. `--skip-cli-check` is the alternative to exporting it for the install-time check — it is carried into the unit — but it does not supply a path, so runs on a host with no CLI still fail.
 
 ### 3. Setup and connect
 

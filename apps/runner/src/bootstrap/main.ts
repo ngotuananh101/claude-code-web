@@ -246,9 +246,12 @@ function requireClaudeCli(options: Record<string, string>): string | undefined {
   if (cli.ok) return cli.path;
   if (skipsCliCheck(options)) {
     process.stderr.write(`${skippedCheckWarning(cli.guidance)}\n`);
-    if (cli.reason === "missing") {
+    // Both arms hand the daemon no path: shim-found has nothing spawnable, and
+    // missing never had one. Say so for each, rather than only for missing —
+    // the two are the same dead end at run time.
+    if (cli.reason === "missing" || cli.reason === "shim-found") {
       process.stderr.write(
-        "warning: no Claude Code CLI was found; runs will fail until one is installed\n",
+        "warning: no usable Claude Code CLI was found; runs will fail until one is installed\n",
       );
     }
     return cli.path;
@@ -455,12 +458,17 @@ switch (command) {
     if (process.platform === "win32") {
       const environmentFile = process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"];
 
+      // The skip the operator chose at install time must reach the process the
+      // task actually starts: `connect` alone re-runs the gate and exits 1.
+      const skipCliCheck = skipsCliCheck(options);
+
       if (sub === "print") {
         process.stdout.write(
           renderWindowsTaskXml({
             executablePath: executablePath(),
             homeDir: home,
             scope,
+            skipCliCheck,
             ...(environmentFile === undefined ? {} : { environmentFile }),
           }),
         );
@@ -473,6 +481,7 @@ switch (command) {
             executablePath: executablePath(),
             homeDir: home,
             scope,
+            skipCliCheck,
             ...(environmentFile === undefined ? {} : { environmentFile }),
           },
           realServiceIo(),
@@ -508,6 +517,10 @@ switch (command) {
       process.exit(1);
     }
 
+    // Same as the Windows task: a skip chosen at install time has to survive
+    // into the unit, or the daemon re-runs the gate and restart-loops.
+    const skipCliCheck = skipsCliCheck(options);
+
     if (sub === "print") {
       process.stdout.write(
         renderSystemdUnit({
@@ -515,6 +528,7 @@ switch (command) {
           homeDir: home,
           user: targetUser,
           scope,
+          skipCliCheck,
           environmentFile: process.env["CC_WEB_RUNNER_ENV_FILE"] ?? options["env-file"],
         }),
       );
@@ -554,6 +568,7 @@ switch (command) {
           homeDir: home,
           user: targetUser,
           scope,
+          skipCliCheck,
           ...(environmentFile === undefined ? {} : { environmentFile }),
         },
         realServiceIo(),

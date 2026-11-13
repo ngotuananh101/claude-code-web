@@ -209,7 +209,45 @@ describe("the Claude Code CLI gate", () => {
     );
     // §6.3: the hatch downgrades the refusal to a warning, never to silence.
     expect(result).toMatchObject({ ok: true });
-    expect(warnings).toEqual(["warning: install claude first"]);
+    expect(warnings[0]).toBe("warning: install claude first");
+    // "missing" means the identity was written with no CLI at all: saying so
+    // is the difference between a warning and a false all-clear.
+    expect(warnings.join("\n")).toContain("runs will fail");
+  });
+
+  test("a skipped shim-found warns that runs will fail too", async () => {
+    // The wrapper is on PATH but unusable, so the daemon gets no path either —
+    // the same dead end as "missing", and it must not read as success.
+    const warnings: string[] = [];
+    await runSetup(
+      { ...base, skipCliCheck: true },
+      {
+        saveIdentity: () => {},
+        resolveCli: () => ({ ok: false, reason: "shim-found", guidance: "install claude first" }),
+        warn: (line) => warnings.push(line),
+      },
+    );
+    expect(warnings.join("\n")).toContain("runs will fail");
+  });
+
+  test("a skipped too-old check does not claim runs will fail", async () => {
+    // An older CLI still has a path and usually still runs: the hatch's stated
+    // purpose. Only the two no-path reasons get the dead-end warning.
+    const warnings: string[] = [];
+    await runSetup(
+      { ...base, skipCliCheck: true },
+      {
+        saveIdentity: () => {},
+        resolveCli: () => ({
+          ok: false,
+          reason: "too-old",
+          guidance: "upgrade claude",
+          path: "/usr/bin/claude",
+        }),
+        warn: (line) => warnings.push(line),
+      },
+    );
+    expect(warnings.join("\n")).not.toContain("runs will fail");
   });
 
   test("a skipped check that actually passes stays silent", async () => {

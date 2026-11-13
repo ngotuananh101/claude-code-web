@@ -100,16 +100,21 @@ enforce the CLI check:
   every refusal (`missing`, `too-old`, `override-invalid`, `shim-found`) to a
   `warning:` on stderr, allowing operators to set up the runner prior to
   installing Claude Code or knowingly test unsupported versions. The warning
-  omits the "to proceed anyway" line — the run already proceeded.
+  omits the "to proceed anyway" line — the run already proceeded — and for the
+  two reasons that leave no usable path (`missing`, `shim-found`) it also says
+  runs will fail until a CLI is installed.
+- On `service install` the hatch is carried into what starts the daemon: the
+  systemd unit gains `Environment=CC_WEB_SKIP_CLI_CHECK=1` and the Windows task
+  command line gains `--skip-cli-check`. Skipping only the install-time check
+  would leave the daemon to re-run the gate, exit 1 and restart-loop under
+  `Restart=on-failure`.
 
 The check reads the environment of the **invoking shell**, not the service
 environment file. `CC_WEB_CLAUDE_BIN` must be exported before
 `setup` / `connect` / `service install`, or the check is refused before the
 unit is ever written. Recording it in `/etc/cc-web-runner.env` alone is not
 enough: that file reaches the daemon, but the install-time check runs in the
-operator's shell and `--skip-cli-check` is not carried into `ExecStart`. A
-non-standard path therefore needs both — exported for the install, recorded
-for the daemon.
+operator's shell. Export the path for the install and record it for the daemon.
 
 ### Diagnostics and release matrix
 

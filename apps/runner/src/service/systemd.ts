@@ -23,6 +23,13 @@ export type UnitOptions = {
   /** Optional env file, referenced by path only. */
   environmentFile?: string | undefined;
   /**
+   * Carry the CLI-check hatch into the unit. `service install --skip-cli-check`
+   * checks nothing at install time; without this the unit's plain `connect`
+   * re-runs the gate, exits 1 and restart-loops — the operator's chosen skip
+   * must survive into the process systemd actually starts.
+   */
+  skipCliCheck?: boolean | undefined;
+  /**
    * System service target user (only rendered for system scope).
    * Defaults to "root" when scope is "system" and user is omitted.
    * Not rendered when scope is "user".
@@ -46,6 +53,9 @@ export function userUnitPath(homeDir?: string): string {
 export function renderSystemdUnit(opts: UnitOptions): string {
   const envFile =
     opts.environmentFile === undefined ? "" : `EnvironmentFile=${opts.environmentFile}\n`;
+  // The hatch, not a flag on ExecStart: systemd reads the environment line, and
+  // keeping it out of the command keeps `connect` the only verb in the unit.
+  const skipLine = opts.skipCliCheck === true ? "Environment=CC_WEB_SKIP_CLI_CHECK=1\n" : "";
   const isUserScope = opts.scope === "user";
 
   if (isUserScope) {
@@ -57,7 +67,7 @@ Wants=network-online.target
 [Service]
 ExecStart=${opts.executablePath} connect
 Environment=CC_WEB_RUNNER_HOME=${opts.homeDir}
-${envFile}Restart=on-failure
+${skipLine}${envFile}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -75,7 +85,7 @@ Wants=network-online.target
 [Service]
 ExecStart=${opts.executablePath} connect
 Environment=CC_WEB_RUNNER_HOME=${opts.homeDir}
-${envFile}Restart=on-failure
+${skipLine}${envFile}Restart=on-failure
 RestartSec=5
 ${userLine}
 [Install]

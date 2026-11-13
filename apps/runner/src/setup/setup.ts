@@ -123,8 +123,16 @@ export async function runSetup(input: SetupInput, deps: SetupDeps): Promise<Setu
     // "we wrote the identity anyway" with no warning reads as success.
     const cli = deps.resolveCli();
     if (!cli.ok) {
-      if (input.skipCliCheck === true) deps.warn?.(skippedCheckWarning(cli.guidance));
-      else return { ok: false, message: cli.guidance };
+      if (input.skipCliCheck === true) {
+        deps.warn?.(skippedCheckWarning(cli.guidance));
+        // missing and shim-found both hand the daemon no usable path: the
+        // identity is written, and every run fails until a CLI is installed.
+        if (cli.reason === "missing" || cli.reason === "shim-found") {
+          deps.warn?.(
+            "warning: no usable Claude Code CLI was found; runs will fail until one is installed",
+          );
+        }
+      } else return { ok: false, message: cli.guidance };
     }
   }
 

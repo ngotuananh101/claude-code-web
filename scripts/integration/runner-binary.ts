@@ -158,6 +158,23 @@ if (build.exitCode === 0) {
           !existsSync(join(refusedHome, "identity.json")),
         `exit=${refused.exitCode}`,
       );
+
+      // The same host with the hatch: the run proceeds, and the warning must
+      // say that runs will still fail — a skip that reads as "you are fine"
+      // sends an operator to a silent failure at dispatch time.
+      env["CC_WEB_SKIP_CLI_CHECK"] = "1";
+      const skipped = Bun.spawnSync(
+        [binary, "setup", "--server", "http://localhost:8787", "--runner-id", "no-cli"],
+        { env, stdout: "pipe", stderr: "pipe" },
+      );
+      const skipStderr = new TextDecoder().decode(skipped.stderr);
+      check(
+        "a skipped check warns that runs will fail, and does not re-advise the hatch",
+        skipped.exitCode === 0 &&
+          skipStderr.includes("runs will fail") &&
+          !skipStderr.includes("To proceed anyway"),
+        `exit=${skipped.exitCode}`,
+      );
     } finally {
       await rm(refusedHome, { recursive: true, force: true });
     }

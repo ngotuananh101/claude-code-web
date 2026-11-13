@@ -56,6 +56,14 @@ describe("renderRunnerCmd", () => {
     );
   });
 
+  test("the hatch rides into the task's command line", () => {
+    // Same trap as the systemd unit: the scheduled `connect` re-runs the gate.
+    const cmd = renderRunnerCmd({ ...sampleOpts, skipCliCheck: true });
+    expect(cmd).toContain("connect --home ");
+    expect(cmd).toContain("--skip-cli-check");
+    expect(renderRunnerCmd(sampleOpts)).not.toContain("--skip-cli-check");
+  });
+
   test("includes environment file when configured", () => {
     const cmd = renderRunnerCmd({
       ...sampleOpts,

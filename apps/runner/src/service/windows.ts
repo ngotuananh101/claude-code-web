@@ -19,6 +19,12 @@ export type WindowsTaskOptions = {
   executablePath: string;
   homeDir: string;
   environmentFile?: string | undefined;
+  /**
+   * Carry the CLI-check hatch into the task's command line. Same reason as the
+   * systemd unit: `service install --skip-cli-check` skips only the install-time
+   * check, and the scheduled `connect` would otherwise re-run the gate.
+   */
+  skipCliCheck?: boolean | undefined;
   scope?: "system" | "user" | undefined;
   logDir?: string | undefined;
   logFile?: string | undefined;
@@ -70,6 +76,7 @@ export function windowsTaskPaths(opts: WindowsTaskOptions): WindowsTaskPaths {
 export function renderRunnerCmd(opts: WindowsTaskOptions): string {
   const paths = windowsTaskPaths(opts);
   const argsList = ["connect", `--home "${paths.homeDir}"`, `--log-dir "${paths.logDir}"`];
+  if (opts.skipCliCheck === true) argsList.push("--skip-cli-check");
   if (opts.environmentFile) {
     argsList.push(`--env-file "${opts.environmentFile.replaceAll("/", "\\")}"`);
   }
