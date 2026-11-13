@@ -227,7 +227,10 @@ bun run build:runner                       # produces dist/cc-web-runner (slim)
 bun run build:runner --with-cli            # produces dist/cc-web-runner (bundled)
 ```
 
-Pre-built binaries from GitHub Releases follow the naming scheme:
+Pre-built binaries come from the "Runner build" workflow
+(`.github/workflows/runner-build.yml`), which uploads them as workflow artifacts
+on every push to `main` — Actions run page → Artifacts. They follow the naming
+scheme:
 - Slim: `cc-web-runner-<os>-<arch>` (Windows: `cc-web-runner-<os>-<arch>.exe`)
 - Bundled: `cc-web-runner-bundled-<os>-<arch>` (Windows: `cc-web-runner-bundled-<os>-<arch>.exe`)
 
@@ -256,9 +259,14 @@ claude --version                                   # must be >= 2.1.309, and log
 ```
 
 `runner --version` names which one you have: `cli external` is slim,
-`cli embedded` is bundled. To upgrade to the slim artifact before installing a
-CLI, add `--skip-cli-check` to `service install`; the env file below does not
-cover the check itself (see §2).
+`cli embedded` is bundled.
+
+`--skip-cli-check` on `service install` only skips the check at install time;
+the unit it writes is still plain `connect`, and the install enables it
+immediately (`systemctl enable --now`). On a host with no CLI the service
+therefore starts, exits 1, and enters the same restart loop. Use it only when
+the CLI is present but lives where the install-time check cannot see it — for
+example a path recorded **only** in `/etc/cc-web-runner.env` (see §2 and §3).
 
 ### 2. Prerequisites for slim runners
 
@@ -316,8 +324,9 @@ echo 'CC_WEB_RUNNER_DEFAULT_WORKSPACE=/path/to/workspace' | sudo tee /etc/cc-web
 # export CC_WEB_CLAUDE_BIN=/path/to/claude
 
 CC_WEB_RUNNER_ENV_FILE=/etc/cc-web-runner.env ./dist/cc-web-runner service install
-# `service install` without --scope/--user installs a USER unit, so restart it
-# as that user. (`sudo` would be a SYSTEM unit and find nothing to restart.)
+# `service install` run as a regular user without --scope/--user installs a
+# USER unit, so restart it as that user. (Under root or sudo it defaults to a
+# SYSTEM unit; with --scope system the command is `systemctl restart`.)
 systemctl --user restart cc-web-runner.service
 ```
 

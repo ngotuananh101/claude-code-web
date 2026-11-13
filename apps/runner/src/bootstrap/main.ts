@@ -19,7 +19,7 @@ import { claudeCliKind } from "@cc-web/agent-adapter";
 import { migrateRunnerDb } from "@cc-web/runner-db";
 import { startDaemon } from "../daemon.ts";
 import { discoverCapabilities } from "../execution/capability-catalog.ts";
-import { hostClaudeCli } from "../execution/claude-cli.ts";
+import { hostClaudeCli, skippedCheckWarning } from "../execution/claude-cli.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
 import { currentBranch, listBranches } from "../git/branches.ts";
 import { saveIdentity } from "../identity/identity-store.ts";
@@ -245,7 +245,7 @@ function requireClaudeCli(options: Record<string, string>): string | undefined {
   const cli = hostClaudeCli();
   if (cli.ok) return cli.path;
   if (skipsCliCheck(options)) {
-    process.stderr.write(`warning: ${cli.guidance}\n`);
+    process.stderr.write(`${skippedCheckWarning(cli.guidance)}\n`);
     if (cli.reason === "missing") {
       process.stderr.write(
         "warning: no Claude Code CLI was found; runs will fail until one is installed\n",

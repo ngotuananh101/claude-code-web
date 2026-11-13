@@ -1,4 +1,5 @@
 import type { ClaudeCliResolution } from "../execution/claude-cli.ts";
+import { skippedCheckWarning } from "../execution/claude-cli.ts";
 import type { RunnerIdentity } from "../identity/identity-store.ts";
 
 /**
@@ -122,7 +123,7 @@ export async function runSetup(input: SetupInput, deps: SetupDeps): Promise<Setu
     // "we wrote the identity anyway" with no warning reads as success.
     const cli = deps.resolveCli();
     if (!cli.ok) {
-      if (input.skipCliCheck === true) deps.warn?.(`warning: ${cli.guidance}`);
+      if (input.skipCliCheck === true) deps.warn?.(skippedCheckWarning(cli.guidance));
       else return { ok: false, message: cli.guidance };
     }
   }

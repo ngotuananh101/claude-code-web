@@ -6,6 +6,7 @@ import {
   installGuidance,
   parseCliVersion,
   resolveClaudeCli,
+  skippedCheckWarning,
 } from "./claude-cli.ts";
 
 const MIN = "2.1.309";
@@ -160,6 +161,35 @@ describe("resolveClaudeCli", () => {
     expect(result).toMatchObject({ ok: true, path: "C:\\Users\\op\\.local\\bin\\claude.exe" });
   });
 
+  test("an MSYS HOME still finds the native install under the profile", () => {
+    // Git Bash exports HOME=/c/Users/op; win32.join would produce
+    // "\c\Users\op\.local\bin\claude.exe", so the native binary is never found
+    // and a host that can run is refused.
+    const native = "C:\\Users\\op\\.local\\bin\\claude.exe";
+    const result = resolveClaudeCli(
+      input({
+        platform: "win32",
+        home: "/c/Users/op",
+        which: () => "C:\\Users\\op\\AppData\\Roaming\\npm\\claude.cmd",
+        exists: (p) => p === native,
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, path: native });
+  });
+
+  test("USERPROFILE wins over an MSYS HOME", () => {
+    const native = "C:\\Users\\op\\.local\\bin\\claude.exe";
+    const result = resolveClaudeCli(
+      input({
+        platform: "win32",
+        home: "/c/Users/op",
+        env: { USERPROFILE: "C:\\Users\\op" },
+        exists: (p) => p === native,
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, path: native });
+  });
+
   test("nothing found is a missing CLI with install guidance", () => {
     const result = resolveClaudeCli(input());
     expect(result.ok).toBe(false);
@@ -229,6 +259,28 @@ describe("resolveClaudeCli", () => {
     expect(result.path).toBe("/usr/bin/claude");
   });
 
+  test("a wrapper on PATH plus an unspawnable native binary names the wrapper", () => {
+    // Uninstalling the native build leaves claude.exe behind; the probe then
+    // reports no version. Plain "run claude update" sends the operator after
+    // the wrong problem.
+    const stale = "C:\\Users\\op\\.local\\bin\\claude.exe";
+    const result = resolveClaudeCli(
+      input({
+        platform: "win32",
+        home: "C:\\Users\\op",
+        which: () => "C:\\Users\\op\\AppData\\Roaming\\npm\\claude.cmd",
+        exists: (p) => p === stale,
+        versionOf: () => undefined,
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("too-old");
+    expect(result.path).toBe(stale);
+    expect(result.guidance).toContain("also on PATH");
+    expect(result.guidance).toContain("claude update");
+  });
+
   test("a hung or failed version probe is a failure, not a hang", () => {
     const result = resolveClaudeCli(
       input({ which: () => "/usr/bin/claude", versionOf: () => undefined }),
@@ -255,12 +307,46 @@ describe("installGuidance", () => {
     expect(installGuidance(MIN, "too-old")).toContain("claude update");
   });
 
+  test("npm is not offered on Windows, where it only leaves a wrapper behind", () => {
+    // Following the npm line on Windows produces claude.cmd, which the next
+    // run refuses as shim-found — the guidance would create its own problem.
+    expect(installGuidance(MIN, "missing", { platform: "win32" })).not.toContain(
+      "npm install -g @anthropic-ai/claude-code",
+    );
+    expect(installGuidance(MIN, "missing", { platform: "linux" })).toContain(
+      "npm install -g @anthropic-ai/claude-code",
+    );
+    // No platform known (a bare call) keeps the full list.
+    expect(installGuidance(MIN, "missing")).toContain("npm install -g @anthropic-ai/claude-code");
+  });
+
+  test("shim-found guidance explains the wrapper and points at the native build", () => {
+    const text = installGuidance(MIN, "shim-found", { platform: "win32" });
+    expect(text).toContain("claude.exe");
+    expect(text).toContain("https://claude.ai/install.ps1");
+    expect(text).not.toContain("Ensure CC_WEB_CLAUDE_BIN");
+  });
+
   test("every refusal names the hatch that gets past it", () => {
     for (const reason of ["missing", "override-invalid", "too-old", "shim-found"] as const) {
       const text = installGuidance(MIN, reason);
       expect(text).toContain("--skip-cli-check");
       expect(text).toContain("CC_WEB_SKIP_CLI_CHECK=1");
     }
+  });
+});
+
+describe("skippedCheckWarning", () => {
+  test("keeps the diagnosis but drops the hatch the run already used", () => {
+    const warning = skippedCheckWarning(installGuidance(MIN, "missing"));
+    expect(warning.startsWith("warning: ")).toBe(true);
+    expect(warning).toContain("was not found on PATH");
+    expect(warning).not.toContain("To proceed anyway");
+    expect(warning).not.toContain("--skip-cli-check");
+  });
+
+  test("a guidance with no hatch line is passed through whole", () => {
+    expect(skippedCheckWarning("install claude first")).toBe("warning: install claude first");
   });
 });
 

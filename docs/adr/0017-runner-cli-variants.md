@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-11-12
-- Refines: ARCHITECTURE.md §7.1, §20.3; ADR-003
+- Refines: ARCHITECTURE.md §7.1, §20.3; ARCHITECTURE.md §24.1 ADR-003
 
 ## Context
 
@@ -43,9 +43,10 @@ When running the slim variant, the runner resolves the host CLI in strict
 order:
 
 1. `CC_WEB_CLAUDE_BIN` environment variable (an absolute path or bare command
-   name). If set, this path is checked; if not found or not executable, the
-   resolver immediately fails with an error and never falls through to subsequent
-   steps (preventing accidental fallback caused by typos).
+   name). If set, this path is checked; if it is missing or a script shim, the
+   resolver immediately fails with `override-invalid` and never falls through
+   to subsequent steps (preventing accidental fallback caused by typos). A
+   binary that exists but cannot report a version fails as `too-old`.
 2. `Bun.which("claude")` on system `PATH`. A Windows `.cmd`, `.ps1`, or `.bat`
    wrapper (what `npm install -g @anthropic-ai/claude-code` creates) is
    recorded and skipped, not accepted: the SDK spawns the CLI as a native
@@ -55,7 +56,12 @@ order:
    - Linux and macOS: `~/.local/bin/claude`, `~/.claude/local/claude`,
      `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`.
    - Windows: `%USERPROFILE%\.local\bin\claude.exe`,
-     `%LOCALAPPDATA%\Programs\claude\claude.exe`.
+     `%LOCALAPPDATA%\Programs\claude\claude.exe`. `USERPROFILE` is preferred
+     over `HOME` because Git Bash exports an MSYS path (`/c/Users/…`) that a
+     Windows join cannot resolve; such a value is converted first.
+
+The `missing` guidance does not offer `npm install -g` on Windows, where it
+leaves exactly the script wrapper this resolver refuses.
 
 Bundled builds skip host resolution entirely, extract their embedded asset, and
 report `cli embedded`.
@@ -91,9 +97,10 @@ enforce the CLI check:
 - `service print` and `service uninstall` never check for a CLI, preserving
   side-effect-free unit generation and uninstallation.
 - Passing `--skip-cli-check` or setting `CC_WEB_SKIP_CLI_CHECK=1` downgrades
-  missing or outdated CLI refusals to a `warning:` on stderr (saying what was
-  skipped), allowing operators to set up the runner prior to installing Claude
-  Code or knowingly test unsupported versions.
+  every refusal (`missing`, `too-old`, `override-invalid`, `shim-found`) to a
+  `warning:` on stderr, allowing operators to set up the runner prior to
+  installing Claude Code or knowingly test unsupported versions. The warning
+  omits the "to proceed anyway" line — the run already proceeded.
 
 The check reads the environment of the **invoking shell**, not the service
 environment file. `CC_WEB_CLAUDE_BIN` must therefore be exported before

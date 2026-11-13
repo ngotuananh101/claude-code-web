@@ -56,11 +56,18 @@ export function compareVersions(a: string, b: string): number {
  *
  * One shared body with a per-reason first line, and every text ends with the
  * skip hatch: the refusal is useless to an operator who cannot get past it.
+ *
+ * `platform` matters: on Windows, `npm install -g` lays down a `claude.cmd`
+ * wrapper the SDK cannot spawn, so offering npm there produces the very
+ * `shim-found` refusal this text is meant to prevent. `sawShim` lets a
+ * found-but-unusable native binary say that a wrapper was also on PATH.
  */
 export function installGuidance(
   minimum: string,
   reason: "missing" | "override-invalid" | "too-old" | "shim-found",
+  options: { platform?: string; sawShim?: boolean } = {},
 ): string {
+  const onWindows = options.platform === "win32";
   const head =
     reason === "missing"
       ? `Claude Code CLI (version >= ${minimum}) was not found on PATH or standard install locations.`
@@ -76,8 +83,10 @@ export function installGuidance(
       "Install Claude Code using one of the following methods:",
       "  - macOS / Linux:  curl -fsSL https://claude.ai/install.sh | bash",
       "  - Windows:        irm https://claude.ai/install.ps1 | iex",
-      "  - npm:            npm install -g @anthropic-ai/claude-code",
     );
+    // npm on Windows only leaves a .cmd wrapper behind, which the next run
+    // refuses as shim-found — do not send an operator down that path.
+    if (!onWindows) body.push("  - npm:            npm install -g @anthropic-ai/claude-code");
   }
   if (reason === "override-invalid") {
     body.push(
@@ -94,7 +103,14 @@ export function installGuidance(
     );
   }
   if (reason === "too-old") {
-    body.push(`Please run 'claude update' or reinstall Claude Code to upgrade to >= ${minimum}.`);
+    // A leftover binary from an uninstalled install (or a probe that timed
+    // out) lands here as well; `claude update` cannot fix a broken file.
+    body.push(
+      options.sawShim === true
+        ? "A script wrapper for Claude Code is also on PATH; make sure this file is a working native binary."
+        : "Make sure this file actually runs: `claude --version` must print a version.",
+      `Please run 'claude update' or reinstall Claude Code to upgrade to >= ${minimum}.`,
+    );
   }
   if (reason === "missing") {
     body.push(
@@ -107,6 +123,39 @@ export function installGuidance(
 
 function isShim(filePath: string): boolean {
   return /\.(cmd|ps1|bat)$/i.test(filePath);
+}
+
+/**
+ * The one-line warning a skipped check prints. Guidance is a refusal — it ends
+ * by naming the hatch, which a run that already took the hatch does not need;
+ * keeping that line makes the notice read as a second refusal.
+ */
+export function skippedCheckWarning(guidance: string): string {
+  const lines = guidance.split("\n");
+  if (lines.at(-1)?.startsWith("To proceed anyway:")) lines.pop();
+  return `warning: ${lines.join("\n")}`;
+}
+
+/**
+ * `C:\Users\op` from an MSYS/Git-Bash `/c/Users/op` or WSL-shaped
+ * `/mnt/c/Users/op`. Undefined when the path is not in either form.
+ *
+ * Git Bash exports `HOME=/c/Users/op`, and `win32.join` turns that into
+ * `\c\Users\op\…`, so the fallback binary under the profile is never found —
+ * a host with a perfectly good native `claude.exe` would be refused.
+ */
+function msysToWindows(home: string): string | undefined {
+  const match = /\/(?:mnt\/)?([a-zA-Z])(\/.*)?$/.exec(home);
+  if (match === null) return undefined;
+  const drive = `${match[1]!.toUpperCase()}:`;
+  const rest = (match[2] ?? "").replaceAll("/", "\\");
+  return `${drive}${rest}`;
+}
+
+/** The home directory a Windows install actually lives under. */
+function windowsHome(input: ClaudeCliInput): string {
+  const raw = input.env["USERPROFILE"] ?? input.home;
+  return msysToWindows(raw) ?? raw;
 }
 
 /**
@@ -165,20 +214,21 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
 
   if (!chosenPath) {
     const p = input.platform === "win32" ? win32 : posix;
+    const home = input.platform === "win32" ? windowsHome(input) : input.home;
     const fallbacks: string[] =
       input.platform === "win32"
         ? [
-            p.join(input.home, ".local", "bin", "claude.exe"),
+            p.join(home, ".local", "bin", "claude.exe"),
             p.join(
-              input.env["LOCALAPPDATA"] ?? p.join(input.home, "AppData", "Local"),
+              input.env["LOCALAPPDATA"] ?? p.join(home, "AppData", "Local"),
               "Programs",
               "claude",
               "claude.exe",
             ),
           ]
         : [
-            p.join(input.home, ".local", "bin", "claude"),
-            p.join(input.home, ".claude", "local", "claude"),
+            p.join(home, ".local", "bin", "claude"),
+            p.join(home, ".claude", "local", "claude"),
             "/usr/local/bin/claude",
             "/opt/homebrew/bin/claude",
             "/usr/bin/claude",
@@ -197,22 +247,29 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
       return {
         ok: false,
         reason: "shim-found",
-        guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "shim-found"),
+        guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "shim-found", {
+          platform: input.platform,
+        }),
       };
     }
     return {
       ok: false,
       reason: "missing",
-      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "missing"),
+      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "missing", { platform: input.platform }),
     };
   }
 
   const rawVersion = input.versionOf(chosenPath);
   if (!rawVersion) {
+    // No version at all: a leftover file, a hung probe, or a binary that is
+    // not really a CLI. Name the wrapper if one was also on PATH — otherwise
+    // "run claude update" sends the operator after the wrong problem.
     return {
       ok: false,
       reason: "too-old",
-      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old"),
+      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old", {
+        sawShim: sawShim !== undefined,
+      }),
       path: chosenPath,
     };
   }
@@ -222,7 +279,9 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
     return {
       ok: false,
       reason: "too-old",
-      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old"),
+      guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "too-old", {
+        sawShim: sawShim !== undefined,
+      }),
       path: chosenPath,
     };
   }
