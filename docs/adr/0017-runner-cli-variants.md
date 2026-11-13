@@ -124,8 +124,9 @@ artifacts retain the `.exe` extension).
 
 - **Binary size**: Slim runner executables avoid embedding ~293 MB of platform
   assets, drastically reducing artifact download time and bandwidth usage.
-  Measured on linux-x64: slim 111,003,824 B (106 MiB; ~50–52 MB compressed),
-  bundled 404,474,032 B.
+  Measured on linux-x64 (2026-11-13): slim 111,007,920 B (106 MiB; ~50–52 MB
+  compressed), bundled 404,478,128 B. Sizes drift with the code; the constant
+  is the ~293 MB the embedded CLI contributes.
 - **Upgrading an existing runner is a breaking change for hosts without a CLI.**
   The artifact published under the old name (`cc-web-runner-<os>-<arch>`) is
   now slim. Replacing a bundled binary in place without installing Claude Code

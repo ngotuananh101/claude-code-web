@@ -217,9 +217,10 @@ bug from the browser: the socket never opens while HTTP calls work.
 
 The runner comes in two build variants:
 - **slim (default)**: uses the host's existing `claude` CLI. The artifact is
-  111,003,824 B on linux-x64 (~106 MiB; ~50–52 MB gzipped or zstd-compressed) —
-  ~293 MB (293,469,552 B, what the SDK's platform package weighs) smaller than
-  the bundled variant.
+  111,007,920 B on linux-x64 (~106 MiB; ~50–52 MB gzipped or zstd-compressed;
+  measured 2026-11-13) — ~293 MB (293,469,552 B, what the SDK's platform
+  package weighs) smaller than the bundled variant. Size moves with the code;
+  the ~293 MB gap is what the variant choice buys.
 - **bundled (`--with-cli`)**: embeds the Agent SDK's platform binary (~293 MB larger) for self-contained or offline hosts.
 
 ```sh
