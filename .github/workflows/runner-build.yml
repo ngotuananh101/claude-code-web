@@ -27,6 +27,10 @@ on:
       # The job runs these, and installs from the lockfile: an SDK bump or a
       # build-script change must republish the artifacts.
       - "scripts/**"
+      # `bun build` resolves `@cc-web/*` through the `paths` map in these;
+      # moving a workspace package changes what the binary bundles.
+      - "tsconfig.base.json"
+      - "tsconfig.json"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/runner-build.yml"
