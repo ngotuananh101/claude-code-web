@@ -217,9 +217,10 @@ bug from the browser: the socket never opens while HTTP calls work.
 
 The runner comes in two build variants:
 - **slim (default)**: uses the host's existing `claude` CLI. The artifact is
-  ~106 MB uncompressed (measured 111,003,824 B on linux-x64; ~50–52 MB gzipped
-  or zstd-compressed) — that is ~293 MB smaller than the bundled variant.
-- **bundled (`--with-cli`)**: embeds the Agent SDK's platform binary (~280 MB larger) for self-contained or offline hosts.
+  111,003,824 B on linux-x64 (~106 MiB; ~50–52 MB gzipped or zstd-compressed) —
+  ~293 MB (293,469,552 B, what the SDK's platform package weighs) smaller than
+  the bundled variant.
+- **bundled (`--with-cli`)**: embeds the Agent SDK's platform binary (~293 MB larger) for self-contained or offline hosts.
 
 ```sh
 bun run build:runner                       # produces dist/cc-web-runner (slim)
@@ -232,6 +233,33 @@ Pre-built binaries from GitHub Releases follow the naming scheme:
 
 Eight artifacts are published across four targets: `linux-x64`, `linux-arm64`, `windows-x64`, and `windows-arm64`.
 
+#### Upgrading an existing runner: slim is not the old binary
+
+**The default changed.** Before this release every runner artifact was
+self-contained: it carried its own Claude Code, so the host needed nothing
+installed. The slim artifact now published under the same name
+(`cc-web-runner-<os>-<arch>`) does not, and `connect` exits 1 on a host with no
+usable `claude`. A systemd unit runs with `Restart=on-failure`, so upgrading in
+place without a CLI produces a **restart loop**, not a clear error in a log
+somebody reads.
+
+Pick one before replacing the binary:
+
+```sh
+# A. Keep the self-contained behaviour — take the bundled artifact instead.
+#    Same name as before plus `-bundled`; nothing else changes.
+#    cc-web-runner-bundled-<os>-<arch>
+
+# B. Move to slim — install Claude Code on the host first, then upgrade.
+curl -fsSL https://claude.ai/install.sh | bash     # macOS / Linux
+claude --version                                   # must be >= 2.1.309, and log in once
+```
+
+`runner --version` names which one you have: `cli external` is slim,
+`cli embedded` is bundled. To upgrade to the slim artifact before installing a
+CLI, add `--skip-cli-check` to `service install`; the env file below does not
+cover the check itself (see §2).
+
 ### 2. Prerequisites for slim runners
 
 A slim runner requires Claude Code installed on the host (minimum version `2.1.309`):
@@ -241,13 +269,19 @@ A slim runner requires Claude Code installed on the host (minimum version `2.1.3
 curl -fsSL https://claude.ai/install.sh | bash
 # Windows PowerShell:
 # irm https://claude.ai/install.ps1 | iex
-# Or npm:
+# Or npm (on Windows this alone is not enough — see below):
 # npm install -g @anthropic-ai/claude-code
 ```
 
 Run `claude` once and log in before starting the runner.
 
-When running as a systemd service, systemd's default `PATH` does not include `~/.local/bin`. The runner's built-in resolver checks standard fallback locations (`~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`) automatically. If Claude Code is installed in a non-standard path, set `CC_WEB_CLAUDE_BIN=/path/to/claude` in `/etc/cc-web-runner.env`.
+On Windows, prefer the PowerShell installer. `npm install -g` creates a
+`claude.cmd` wrapper, and the SDK spawns the CLI as a native binary; the runner
+rejects the wrapper. It still looks for a native `claude.exe` in the standard
+locations, so a host carrying both works — a host with only the npm wrapper is
+refused with guidance to install the native build.
+
+When running as a systemd service, systemd's default `PATH` does not include `~/.local/bin`. The runner's built-in resolver checks standard fallback locations (`~/.local/bin/claude`, `~/.claude/local/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/bin/claude`) automatically. If Claude Code is installed in a non-standard path, pass `CC_WEB_CLAUDE_BIN=/path/to/claude` to the command that runs the check (`setup`, `connect`, `service install`) — exported in the shell, or with `--skip-cli-check` when you would rather record the path in the env file only.
 
 ### 3. Setup and connect
 
@@ -275,10 +309,16 @@ a custom CLI location):
 
 ```sh
 echo 'CC_WEB_RUNNER_DEFAULT_WORKSPACE=/path/to/workspace' | sudo tee /etc/cc-web-runner.env
-# Optional custom CLI path:
+# Optional custom CLI path. The service reads this file at start, but the
+# CLI check that `service install` runs reads the *installing shell* — so
+# export it here too, or the install is refused before the unit is written.
 # echo 'CC_WEB_CLAUDE_BIN=/path/to/claude' | sudo tee -a /etc/cc-web-runner.env
+# export CC_WEB_CLAUDE_BIN=/path/to/claude
+
 CC_WEB_RUNNER_ENV_FILE=/etc/cc-web-runner.env ./dist/cc-web-runner service install
-sudo systemctl restart cc-web-runner.service
+# `service install` without --scope/--user installs a USER unit, so restart it
+# as that user. (`sudo` would be a SYSTEM unit and find nothing to restart.)
+systemctl --user restart cc-web-runner.service
 ```
 
 Verify the server received the declaration:

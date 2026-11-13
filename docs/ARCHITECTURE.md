@@ -48,7 +48,7 @@ Xây một ứng dụng web chat-centric để điều khiển Claude coding age
 | Editor / diff | Monaco Editor 0.57.0 — `create` / `createDiffEditor` trong review dialog |
 | Backend | Bun + Hono |
 | Runner | Bun, service riêng, dùng Claude Agent SDK TypeScript |
-| Claude executable | Binary đi kèm SDK; không bắt buộc CLI global |
+| Claude executable | Slim (mặc định) dùng CLI `claude` của host; bundled (`--with-cli`) nhúng binary của SDK |
 | Config | Kế thừa config có sẵn trên từng Runner |
 | Overrides | Tường minh, theo session/profile, không sửa file gốc mặc định |
 | Kết nối | Runner chủ động mở outbound WSS đến Control Server |
@@ -134,7 +134,7 @@ Runner A                    Runner B ... N
 ├── Process supervisor      ├── Process supervisor
 └── Run worker processes    └── Run worker processes
     └── Claude Agent SDK        └── Claude Agent SDK
-        └── Bundled CLI             └── Bundled CLI
+        └── Claude Code CLI            └── Claude Code CLI
             ├── Config A                ├── Config B
             ├── Transcripts             ├── Transcripts
             └── Workspace A             └── Workspace B
@@ -1142,9 +1142,9 @@ Không cần inbound port trên máy Runner cho control protocol. Model/provider
 - Caddy/proxy WebSocket timeouts và idle behavior phải kiểm thử.
 - Docker tùy chọn: mount đúng config/data, UID/GID và paths; host helpers không tự có trong image.
 
-Connector runner được compile thành single executable (`bun run build:runner`, smoke bởi `scripts/integration/runner-binary.ts`): `setup`/`connect`/`service` chạy trên binary compiled. Build mặc định là **slim** (không nhúng CLI; sử dụng `claude` của host). Flag `--with-cli` kích hoạt biến thể **bundled** (nhúng CLI của SDK, tăng thêm ~280 MB — dung lượng này nay là opt-in).
+Connector runner được compile thành single executable (`bun run build:runner`, smoke bởi `scripts/integration/runner-binary.ts`): `setup`/`connect`/`service` chạy trên binary compiled. Build mặc định là **slim** (không nhúng CLI; sử dụng `claude` của host) — đo trên linux-x64: 111,003,824 B (106 MiB; ~50–52 MB sau nén). Flag `--with-cli` kích hoạt biến thể **bundled** (nhúng CLI của SDK, 404,474,032 B — ~293 MB từ platform package — dung lượng này nay là opt-in).
 
-Với biến thể **slim**, runner từ chối các lệnh `setup`, `connect`/`run`, và `service install` (exit 1 kèm hướng dẫn cài đặt) nếu host thiếu Claude Code hoặc CLI cũ hơn `MIN_CLAUDE_CLI_VERSION` (hướng dẫn chạy `claude update`). Cờ `--skip-cli-check` (hoặc biến môi trường `CC_WEB_SKIP_CLI_CHECK=1`) là escape hatch chuyển từ chối thành cảnh báo (`warning:`). `service print` và `service uninstall` không bao giờ kiểm tra CLI. Ma trận release (`runner-build.yml`) xuất bản 8 artifacts: `cc-web-runner-<os>-<arch>` (slim) và `cc-web-runner-bundled-<os>-<arch>` cho 4 platforms: linux-x64, linux-arm64, windows-x64, windows-arm64 (Windows giữ đuôi `.exe`).
+Với biến thể **slim**, runner từ chối các lệnh `setup`, `connect`/`run`, và `service install` (exit 1 kèm hướng dẫn cài đặt) nếu host thiếu Claude Code hoặc CLI cũ hơn `MIN_CLAUDE_CLI_VERSION` (hướng dẫn chạy `claude update`). Trên Windows, wrapper `.cmd`/`.ps1`/`.bat` do `npm install -g` tạo ra bị từ chối riêng (`shim-found`) vì SDK spawn CLI như native binary; nếu host có thêm `claude.exe` native thì resolver dùng bản native. Cờ `--skip-cli-check` (hoặc biến môi trường `CC_WEB_SKIP_CLI_CHECK=1`) là escape hatch chuyển từ chối thành cảnh báo (`warning:` nêu rõ đã bỏ qua cái gì). `service print` và `service uninstall` không bao giờ kiểm tra CLI. Phép kiểm tra đọc môi trường của **shell gọi lệnh**, không đọc env file của service: `CC_WEB_CLAUDE_BIN` phải được export trước `setup`/`connect`/`service install`. Ma trận release (`runner-build.yml`) xuất bản 8 artifacts: `cc-web-runner-<os>-<arch>` (slim) và `cc-web-runner-bundled-<os>-<arch>` cho 4 platforms: linux-x64, linux-arm64, windows-x64, windows-arm64 (Windows giữ đuôi `.exe`). Vì tên artifact slim trùng tên cũ, nâng cấp tại chỗ một host không có CLI sẽ làm `connect` exit 1 và unit `Restart=on-failure` biến nó thành restart loop — deploy cần chọn bundled hoặc cài CLI trước (xem `docs/DEPLOYMENT.md`).
 
 Với biến thể **bundled**, chạy agent thật từ binary compiled đã được verify (2026-10-25): `@anthropic-ai/claude-agent-sdk` ship CLI native theo platform package, được embed vào binary qua file asset (`with { type: "file" }`; shim sinh theo `--target` bởi `scripts/build-runner.ts`), extract ra temp root per-user 0700 bằng `extractFromBunfs` của SDK và truyền vào SDK qua `pathToClaudeCodeExecutable` (probe `scripts/integration/runner-agent-e2e.ts` verify trực tiếp biến thể này bằng `--with-cli`). Cross-compile bundled cần platform package của target trên đĩa trước build. `bun install --os/--cpu` KHÔNG relink optional dependency mà lockfile đã resolve (bun 1.4.3 no-op cả có lẫn không có `--frozen-lockfile` — thất bại thật trên CI run đầu tiên), nên `runner-build.yml` dùng `scripts/claude-target-asset.ts` đặt thẳng package vào `packages/agent-adapter/node_modules/`: fetch tarball từ npm registry đúng version SDK đã cài, verify sha512 theo `dist.integrity`, idempotent (package đúng version sẵn có được giữ lại). [^https://platform.claude.com/docs/en/agent-sdk/typescript]
 
@@ -1264,7 +1264,7 @@ Cần per-tenant OS/container/VM boundary phù hợp, credentials ngoài agent b
 
 Pin Bun/SDK và test trên OS target:
 
-- Bundled CLI resolve/launch không cần global CLI.
+- Bundled CLI resolve/launch không cần global CLI; slim resolve/launch dùng CLI của host (kể cả khi service manager không đưa `~/.local/bin` vào `PATH`) và từ chối đúng cách khi thiếu.
 - User/project/local config inheritance.
 - Preset + CLAUDE.md, hooks và MCP thực tế cần dùng.
 - Provider auth trong service environment.
@@ -1356,7 +1356,7 @@ Không ước lượng thời gian hoàn thành khi chưa có Phase 0 và scope 
 | --- | --- | --- |
 | ADR-001 | Web/Control/Runner tách biệt | Deploy cùng hoặc khác máy không đổi protocol |
 | ADR-002 | Runner là service độc lập | Server deploy không buộc agent chết |
-| ADR-003 | Bundled Claude Code | Không phụ thuộc CLI global; pin SDK/native binary |
+| ADR-003 | Bundled Claude Code (được ADR-017 tinh chỉnh 2026-11-12: bundled nay là opt-in) | Không phụ thuộc CLI global khi chọn bundled; pin SDK/native binary |
 | ADR-004 | Config kế thừa tại Runner | Không centralize raw config/credentials |
 | ADR-005 | Explicit overrides | Inherit không bị web defaults che |
 | ADR-006 | Stateful session pin | Không load-balance resume tùy ý |

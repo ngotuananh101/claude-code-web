@@ -46,8 +46,10 @@ order:
    name). If set, this path is checked; if not found or not executable, the
    resolver immediately fails with an error and never falls through to subsequent
    steps (preventing accidental fallback caused by typos).
-2. `Bun.which("claude")` on system `PATH` (explicitly rejecting Windows `.cmd`,
-   `.ps1`, and `.bat` wrapper shims).
+2. `Bun.which("claude")` on system `PATH`. A Windows `.cmd`, `.ps1`, or `.bat`
+   wrapper (what `npm install -g @anthropic-ai/claude-code` creates) is
+   recorded and skipped, not accepted: the SDK spawns the CLI as a native
+   binary and cannot execute a script shim. Resolution continues to step 3.
 3. Well-known standard installation directories. This covers service managers
    like systemd where the default `PATH` excludes `~/.local/bin`:
    - Linux and macOS: `~/.local/bin/claude`, `~/.claude/local/claude`,
@@ -77,7 +79,11 @@ enforce the CLI check:
   command exits 1 with platform-specific installation instructions:
   - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
   - Windows PowerShell: `irm https://claude.ai/install.ps1 | iex`
-  - npm: `npm install -g @anthropic-ai/claude-code`
+  - npm: `npm install -g @anthropic-ai/claude-code` — with a caveat: on Windows
+    npm creates a `claude.cmd` wrapper, which the SDK cannot spawn. A host whose
+    only `claude` is that wrapper is refused with a distinct `shim-found`
+    reason and guidance to install the native build; a host carrying both the
+    wrapper and a native `claude.exe` resolves the native one.
 - `runner setup` checks before saving `identity.json`, leaving no half-configured
   state on failure.
 - `runner service install` checks before writing systemd unit or Windows task
@@ -85,9 +91,15 @@ enforce the CLI check:
 - `service print` and `service uninstall` never check for a CLI, preserving
   side-effect-free unit generation and uninstallation.
 - Passing `--skip-cli-check` or setting `CC_WEB_SKIP_CLI_CHECK=1` downgrades
-  missing or outdated CLI refusals to a `warning:` on stderr, allowing operators
-  to set up the runner prior to installing Claude Code or knowingly test
-  unsupported versions.
+  missing or outdated CLI refusals to a `warning:` on stderr (saying what was
+  skipped), allowing operators to set up the runner prior to installing Claude
+  Code or knowingly test unsupported versions.
+
+The check reads the environment of the **invoking shell**, not the service
+environment file. `CC_WEB_CLAUDE_BIN` must therefore be exported before
+`setup` / `connect` / `service install`, or the check is refused before the
+unit is ever written; recording it in `/etc/cc-web-runner.env` alone only
+covers the daemon, not the check.
 
 ### Diagnostics and release matrix
 
@@ -105,6 +117,16 @@ artifacts retain the `.exe` extension).
 
 - **Binary size**: Slim runner executables avoid embedding ~293 MB of platform
   assets, drastically reducing artifact download time and bandwidth usage.
+  Measured on linux-x64: slim 111,003,824 B (106 MiB; ~50–52 MB compressed),
+  bundled 404,474,032 B.
+- **Upgrading an existing runner is a breaking change for hosts without a CLI.**
+  The artifact published under the old name (`cc-web-runner-<os>-<arch>`) is
+  now slim. Replacing a bundled binary in place without installing Claude Code
+  makes `connect` exit 1, and a systemd unit with `Restart=on-failure` turns
+  that into a restart loop rather than a single visible error. Operators take
+  `cc-web-runner-bundled-<os>-<arch>` to keep the old behaviour, or install a
+  CLI (`>= 2.1.309`) before swapping. The environment file trick does not help
+  the check itself — see Refusal semantics.
 - **Host prerequisites**: Hosts running slim binaries must install and update
   Claude Code independently (`claude update`). Bundled binaries remain available
   for self-contained or offline deployments.
