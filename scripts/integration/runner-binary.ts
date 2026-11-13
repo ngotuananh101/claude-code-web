@@ -139,6 +139,9 @@ if (build.exitCode === 0) {
       };
       // Unset, not empty: an empty override is itself an invalid override.
       delete env["CC_WEB_CLAUDE_BIN"];
+      // And unset the hatch too: inherited from the operator's shell it would
+      // turn the refusal into a warning and write an identity after all.
+      delete env["CC_WEB_SKIP_CLI_CHECK"];
       const refused = Bun.spawnSync(
         [binary, "setup", "--server", "http://localhost:8787", "--runner-id", "no-cli"],
         {

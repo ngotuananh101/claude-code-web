@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeAssetTarget } from "../packages/agent-adapter/src/claude-asset-targets.ts";
-import { generateShim } from "./claude-asset.ts";
+import { generateShim, parseTargetArg } from "./claude-asset.ts";
 
 // Every test generates into its own temp file: writing the real shim here would
 // change the build variant every later test in the process imports.
@@ -47,5 +47,25 @@ describe("generateShim", () => {
       await generateShim("host", undefined, outPath);
       expect(readFileSync(outPath, "utf8")).toContain('kind: "embedded"');
     });
+  });
+});
+
+describe("parseTargetArg", () => {
+  test("no flag means the host target", () => {
+    expect(parseTargetArg([])).toBe("host");
+  });
+
+  test("both spellings of the flag are read", () => {
+    expect(parseTargetArg(["--target", "bun-windows-x64"])).toBe("bun-windows-x64");
+    expect(parseTargetArg(["--target=bun-windows-x64"])).toBe("bun-windows-x64");
+  });
+
+  test("a missing value is refused rather than defaulting to host", () => {
+    // `--target --foo` used to take "--foo" as the target and throw from the
+    // target map; an empty value used to fall back to host and embed the WRONG
+    // platform's binary into a cross-compiled release artifact.
+    expect(() => parseTargetArg(["--target="])).toThrow("requires a value");
+    expect(() => parseTargetArg(["--target"])).toThrow("requires a value");
+    expect(() => parseTargetArg(["--target", "--foo"])).toThrow("requires a value");
   });
 });

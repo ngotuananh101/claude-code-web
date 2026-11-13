@@ -148,7 +148,7 @@ async function main(): Promise<void> {
     return;
   }
   if (decision === "stale") console.log(`replacing stale ${asset.pkg} with ${version}`);
-  console.log(`fetching ${asset.pkg}@${version} (~280MB, the SDK's native CLI)`);
+  console.log(`fetching ${asset.pkg}@${version} (~293MB, the SDK's native CLI)`);
   await placePackage(asset.pkg, asset.binary, version);
   console.log(`${asset.pkg}@${version} placed for target ${target}`);
 }

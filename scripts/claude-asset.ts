@@ -54,16 +54,25 @@ export const asset = { kind: "embedded", binPath } as const;
   );
 }
 
-if (import.meta.main) {
-  const argv = process.argv.slice(2);
+/** The `--target` of this CLI, or `"host"` when it is not given at all. */
+export function parseTargetArg(argv: readonly string[]): string {
+  // `--target=x` is accepted as one word by build:runner; this CLI must not
+  // silently fall back to "host" when someone uses the same spelling here.
+  const inline = argv.find((a) => a.startsWith("--target="));
   const flagIndex = argv.indexOf("--target");
-  const target =
-    flagIndex === -1
-      ? "host"
-      : (argv[flagIndex + 1] ??
-        (() => {
-          throw new Error("--target requires a value, e.g. --target bun-linux-x64");
-        })());
+  const target = inline?.slice("--target=".length) ?? argv[flagIndex + 1];
+  if (flagIndex === -1 && inline === undefined) return "host";
+  // Empty, or followed by another flag: both mean the value is missing, and
+  // neither may fall through to the host default — a cross-compile would then
+  // silently embed the wrong platform's binary.
+  if (target === undefined || target.trim() === "" || target.startsWith("--")) {
+    throw new Error("--target requires a value, e.g. --target bun-linux-x64");
+  }
+  return target;
+}
+
+if (import.meta.main) {
+  const target = parseTargetArg(process.argv.slice(2));
   await generateShim(target);
   console.log(`claude-asset shim generated for ${target}`);
 }

@@ -78,4 +78,14 @@ describe("variant selection", () => {
     // pinned, --with-cli=true silently overwrote `outfile` with "true".
     expect(() => parseArgs(["--with-cli=true"])).toThrow("unknown build:runner flag");
   });
+
+  test("a flag with no value does not swallow the next flag", () => {
+    // `--outfile --with-cli` used to take "--with-cli" as the outfile and leave
+    // the variant at slim: a silent wrong-variant build into a file named
+    // `--with-cli`.
+    expect(() => parseArgs(["--outfile", "--with-cli"])).toThrow("requires a non-empty value");
+    expect(() => parseArgs(["--outfile"])).toThrow("requires a non-empty value");
+    expect(() => parseArgs(["--outfile="])).toThrow("requires a non-empty value");
+    expect(() => parseArgs(["--target="])).toThrow("requires a non-empty value");
+  });
 });

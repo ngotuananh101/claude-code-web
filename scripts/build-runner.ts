@@ -47,8 +47,14 @@ export function parseArgs(argv: string[]): BuildArgs {
     const flag = known.find((f) => token === f || token.startsWith(`${f}=`));
     if (flag === undefined) throw new Error(`unknown build:runner flag: ${token}`);
     const inline = token === flag ? undefined : token.slice(flag.length + 1);
-    const value = inline ?? argv[i + 1];
-    if (value === undefined) throw new Error(`${flag} requires a value`);
+    // A bare flag followed by another flag (or nothing) has no value: taking
+    // `argv[i + 1]` blindly swallows the next flag, so `--outfile --with-cli`
+    // silently built SLIM into a file named `--with-cli`.
+    const next = argv[i + 1];
+    const value = inline ?? (next === undefined || next.startsWith("--") ? undefined : next);
+    if (value === undefined || value.trim() === "") {
+      throw new Error(`${flag} requires a non-empty value`);
+    }
     if (flag === "--define") args.defines.push(value);
     else args[flag === "--target" ? "target" : "outfile"] = value;
     if (inline === undefined) i++;
@@ -59,23 +65,31 @@ export function parseArgs(argv: string[]): BuildArgs {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   // The shim must name the target's platform binary before the bundler reads
-  // it — this is the whole point of the script.
+  // it — this is the whole point of the script. It is regenerated for the host
+  // on the way out: leaving a cross-compile target's shim on disk breaks every
+  // later `bun test` (the target's package is not installed on this host).
   await generateShim(args.target, args.variant);
 
-  const spawned = Bun.spawnSync(
-    [
-      "bun",
-      "build",
-      "--compile",
-      ...(args.target === "host" ? [] : ["--target", args.target]),
-      "--outfile",
-      args.outfile,
-      ...args.defines.flatMap((d) => ["--define", d]),
-      ENTRY,
-    ],
-    { stdout: "inherit", stderr: "inherit" },
-  );
-  process.exit(spawned.exitCode ?? 1);
+  try {
+    const spawned = Bun.spawnSync(
+      [
+        "bun",
+        "build",
+        "--compile",
+        ...(args.target === "host" ? [] : ["--target", args.target]),
+        "--outfile",
+        args.outfile,
+        ...args.defines.flatMap((d) => ["--define", d]),
+        ENTRY,
+      ],
+      { stdout: "inherit", stderr: "inherit" },
+    );
+    process.exitCode = spawned.exitCode ?? 1;
+  } finally {
+    // `host` must be regenerated through generateShim so the restore is a valid
+    // shim, not a stale copy of another target's specifier.
+    await generateShim("host", "bundled");
+  }
 }
 
 if (import.meta.main) await main();

@@ -24,6 +24,11 @@ on:
     paths:
       - "apps/runner/**"
       - "packages/**"
+      # The job runs these, and installs from the lockfile: an SDK bump or a
+      # build-script change must republish the artifacts.
+      - "scripts/**"
+      - "package.json"
+      - "bun.lock"
       - ".github/workflows/runner-build.yml"
 
 concurrency:

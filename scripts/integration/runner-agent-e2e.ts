@@ -176,7 +176,7 @@ try {
     build.exitCode === 0,
     build.exitCode === 0 ? `built ${binary}` : new TextDecoder().decode(build.stderr).slice(0, 300),
   );
-  if (build.exitCode !== 0) process.exit(1);
+  if (build.exitCode !== 0) throw new Error("build:runner --with-cli failed");
 
   // --- 2. the control server ---
   await Bun.$`mkdir -p ${runnerHome} ${workspaceHost}`.quiet();
