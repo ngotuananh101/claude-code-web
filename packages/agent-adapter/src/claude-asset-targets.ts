@@ -15,6 +15,11 @@ const TARGET_ASSETS: Record<string, ClaudeAsset> = {
   "bun-linux-arm64": { pkg: "@anthropic-ai/claude-agent-sdk-linux-arm64", binary: "claude" },
   "bun-windows-x64": { pkg: "@anthropic-ai/claude-agent-sdk-win32-x64", binary: "claude.exe" },
   "bun-windows-arm64": { pkg: "@anthropic-ai/claude-agent-sdk-win32-arm64", binary: "claude.exe" },
+  // Not in the release matrix, but `host` resolves through this map: without
+  // these two, `bun install`'s postinstall (which generates the shim for the
+  // host) throws on a macOS checkout, and so does every local `build:runner`.
+  "bun-darwin-arm64": { pkg: "@anthropic-ai/claude-agent-sdk-darwin-arm64", binary: "claude" },
+  "bun-darwin-x64": { pkg: "@anthropic-ai/claude-agent-sdk-darwin-x64", binary: "claude" },
 };
 
 /**
