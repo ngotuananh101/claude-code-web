@@ -68,4 +68,15 @@ describe("parseTargetArg", () => {
     expect(() => parseTargetArg(["--target"])).toThrow("requires a value");
     expect(() => parseTargetArg(["--target", "--foo"])).toThrow("requires a value");
   });
+
+  test("an unknown flag is refused instead of silently writing the host shim", () => {
+    // A typo ("--targt=…") was ignored and the host shim rewritten: the run
+    // reported success while naming the wrong platform.
+    expect(() => parseTargetArg(["--targt=bun-windows-x64"])).toThrow("unknown claude-asset flag");
+    expect(() => parseTargetArg(["-t", "bun-windows-x64"])).toThrow("unknown claude-asset flag");
+    expect(() => parseTargetArg(["--target", "bun-windows-x64", "--with-cli"])).toThrow(
+      "unknown claude-asset flag",
+    );
+    expect(() => parseTargetArg(["bun-windows-x64"])).toThrow("unknown claude-asset flag");
+  });
 });

@@ -65,4 +65,12 @@ describe("parseArgs", () => {
   test("an unknown flag is refused", () => {
     expect(() => parseArgs(["--frobnicate"])).toThrow();
   });
+
+  test("a flag with no value does not swallow the next flag", () => {
+    // `--target --with-cli` used to take "--with-cli" as the target and report
+    // "no package mapped for target --with-cli" instead of the real mistake.
+    expect(() => parseArgs(["--target", "--with-cli"])).toThrow("requires a value");
+    expect(() => parseArgs(["--target="])).toThrow("requires a value");
+    expect(() => parseArgs(["--target", " "])).toThrow("requires a value");
+  });
 });

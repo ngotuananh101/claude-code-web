@@ -36,7 +36,12 @@ export function parseArgs(argv: string[]): { target: string } {
     const flag = known.find((f) => token === f || token.startsWith(`${f}=`));
     if (flag === undefined) throw new Error(`unknown claude-target-asset flag: ${token}`);
     const value = token === flag ? argv[i + 1] : token.slice(flag.length + 1);
-    if (value === undefined || value === "") throw new Error(`${flag} requires a value`);
+    // A bare flag followed by another flag has no value: taking argv[i + 1]
+    // blindly reports "no package mapped for target --with-cli" instead of the
+    // real mistake. Same rule as build:runner's parser.
+    if (value === undefined || value.trim() === "" || value.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
     target = value;
     if (token === flag) i++;
   }
