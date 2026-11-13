@@ -85,6 +85,12 @@ export type SetupDeps = {
    * working unchanged.
    */
   resolveCli?: () => ClaudeCliResolution;
+  /**
+   * Where a skipped check reports itself. Setup writes no stderr of its own, so
+   * the caller injects the stream; absent means "stay silent", which keeps
+   * tests and non-CLI callers quiet.
+   */
+  warn?: (line: string) => void;
 };
 
 export type SetupResult = { ok: true; controlUrl: string } | { ok: false; message: string };
@@ -111,9 +117,14 @@ export async function runSetup(input: SetupInput, deps: SetupDeps): Promise<Setu
     };
   }
 
-  if (deps.resolveCli !== undefined && input.skipCliCheck !== true) {
+  if (deps.resolveCli !== undefined) {
+    // A skipped check still resolves, so the operator sees what was skipped:
+    // "we wrote the identity anyway" with no warning reads as success.
     const cli = deps.resolveCli();
-    if (!cli.ok) return { ok: false, message: cli.guidance };
+    if (!cli.ok) {
+      if (input.skipCliCheck === true) deps.warn?.(`warning: ${cli.guidance}`);
+      else return { ok: false, message: cli.guidance };
+    }
   }
 
   await deps.saveIdentity(input.identityDir, {

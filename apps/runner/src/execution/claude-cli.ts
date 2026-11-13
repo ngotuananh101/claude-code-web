@@ -8,7 +8,7 @@ export type ClaudeCliResolution =
   | { ok: true; mode: "embedded" | "external"; path: string; version?: string }
   | {
       ok: false;
-      reason: "missing" | "override-invalid" | "too-old";
+      reason: "missing" | "override-invalid" | "too-old" | "shim-found";
       guidance: string;
       /** Set for "too-old": the CLI was found, just below the floor. */
       path?: string;
@@ -59,14 +59,16 @@ export function compareVersions(a: string, b: string): number {
  */
 export function installGuidance(
   minimum: string,
-  reason: "missing" | "override-invalid" | "too-old",
+  reason: "missing" | "override-invalid" | "too-old" | "shim-found",
 ): string {
   const head =
     reason === "missing"
       ? `Claude Code CLI (version >= ${minimum}) was not found on PATH or standard install locations.`
       : reason === "override-invalid"
         ? "The configured Claude Code CLI executable is invalid or not spawnable."
-        : `Claude Code CLI is older than the required minimum version (${minimum}) or failed to report its version.`;
+        : reason === "shim-found"
+          ? `Only script shims for Claude Code were found (version >= ${minimum} required), and the SDK cannot spawn those as a native binary.`
+          : `Claude Code CLI is older than the required minimum version (${minimum}) or failed to report its version.`;
 
   const body: string[] = [];
   if (reason === "missing") {
@@ -81,6 +83,14 @@ export function installGuidance(
     body.push(
       "Ensure CC_WEB_CLAUDE_BIN points to an existing, executable binary.",
       "On Windows, .cmd, .bat, or .ps1 script shims are not supported directly; point directly to claude.exe instead.",
+    );
+  }
+  if (reason === "shim-found") {
+    body.push(
+      "An npm global install creates a .cmd/.ps1 wrapper, which is not a native executable.",
+      "Install the native build so a claude.exe exists:",
+      "  - Windows:        irm https://claude.ai/install.ps1 | iex",
+      "Or point CC_WEB_CLAUDE_BIN at a native claude.exe directly.",
     );
   }
   if (reason === "too-old") {
@@ -109,6 +119,11 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
   }
 
   let chosenPath: string | undefined;
+  // A PATH wrapper seen on the way. It is a fall-through, not a hard failure:
+  // `npm install -g` lays a .cmd/.ps1 wrapper on PATH, and the native installer
+  // the guidance recommends puts a real claude.exe in a standard directory. A
+  // host with both can run; only a host with the shim alone is refused.
+  let sawShim: string | undefined;
 
   const override = input.env["CC_WEB_CLAUDE_BIN"];
   if (override !== undefined) {
@@ -143,14 +158,8 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
   if (!chosenPath) {
     const fromWhich = input.which("claude");
     if (fromWhich !== undefined) {
-      if (isShim(fromWhich)) {
-        return {
-          ok: false,
-          reason: "override-invalid",
-          guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "override-invalid"),
-        };
-      }
-      chosenPath = fromWhich;
+      if (isShim(fromWhich)) sawShim = fromWhich;
+      else chosenPath = fromWhich;
     }
   }
 
@@ -184,6 +193,13 @@ export function resolveClaudeCli(input: ClaudeCliInput): ClaudeCliResolution {
   }
 
   if (!chosenPath) {
+    if (sawShim !== undefined) {
+      return {
+        ok: false,
+        reason: "shim-found",
+        guidance: installGuidance(MIN_CLAUDE_CLI_VERSION, "shim-found"),
+      };
+    }
     return {
       ok: false,
       reason: "missing",

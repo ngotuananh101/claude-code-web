@@ -414,7 +414,12 @@ switch (command) {
       {
         saveIdentity,
         // A bundled build carries its own CLI; only slim builds depend on the host.
-        ...(claudeCliKind() === "external" ? { resolveCli: () => hostClaudeCli() } : {}),
+        ...(claudeCliKind() === "external"
+          ? {
+              resolveCli: () => hostClaudeCli(),
+              warn: (line: string) => process.stderr.write(`${line}\n`),
+            }
+          : {}),
       },
     );
 

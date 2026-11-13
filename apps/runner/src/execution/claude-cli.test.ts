@@ -168,15 +168,33 @@ describe("resolveClaudeCli", () => {
     expect(result.guidance).toContain("https://claude.ai/install.sh");
   });
 
-  test("a .cmd/.ps1 shim is refused as spawnable", () => {
+  test("a PATH shim alone is refused, naming the shim rather than the override", () => {
     // The SDK spawns the path as a native binary; an npm shim is a batch file.
+    // No override was set, so the guidance must not talk about CC_WEB_CLAUDE_BIN.
     const result = resolveClaudeCli(
       input({ platform: "win32", which: () => "C:\\Users\\op\\AppData\\Roaming\\npm\\claude.cmd" }),
     );
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toBe("override-invalid");
+    expect(result.reason).toBe("shim-found");
     expect(result.guidance).toContain("claude.exe");
+    expect(result.guidance).not.toContain("Ensure CC_WEB_CLAUDE_BIN");
+  });
+
+  test("a PATH shim falls through to the native install in a standard location", () => {
+    // `npm install -g` puts a .cmd on PATH; the install command we print also
+    // lays down a native claude.exe. Refusing on the shim alone would reject a
+    // host that is perfectly able to run.
+    const native = "C:\\Users\\op\\.local\\bin\\claude.exe";
+    const result = resolveClaudeCli(
+      input({
+        platform: "win32",
+        home: "C:\\Users\\op",
+        which: () => "C:\\Users\\op\\AppData\\Roaming\\npm\\claude.cmd",
+        exists: (p) => p === native,
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, path: native });
   });
 
   test("shims with varying casing like .BAT are refused", () => {
@@ -185,7 +203,7 @@ describe("resolveClaudeCli", () => {
     );
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toBe("override-invalid");
+    expect(result.reason).toBe("shim-found");
     expect(result.guidance).toContain("claude.exe");
   });
 
@@ -238,7 +256,7 @@ describe("installGuidance", () => {
   });
 
   test("every refusal names the hatch that gets past it", () => {
-    for (const reason of ["missing", "override-invalid", "too-old"] as const) {
+    for (const reason of ["missing", "override-invalid", "too-old", "shim-found"] as const) {
       const text = installGuidance(MIN, reason);
       expect(text).toContain("--skip-cli-check");
       expect(text).toContain("CC_WEB_SKIP_CLI_CHECK=1");
@@ -257,7 +275,7 @@ describe("hostClaudeCli", () => {
       expect(typeof result.path).toBe("string");
       return;
     }
-    expect(["missing", "override-invalid", "too-old"]).toContain(result.reason);
+    expect(["missing", "override-invalid", "too-old", "shim-found"]).toContain(result.reason);
     expect(typeof result.guidance).toBe("string");
   });
 });

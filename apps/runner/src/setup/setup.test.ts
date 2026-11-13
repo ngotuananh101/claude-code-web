@@ -197,6 +197,34 @@ describe("the Claude Code CLI gate", () => {
     expect(saved).toBe(1);
   });
 
+  test("--skip-cli-check reports what it skipped instead of passing silently", async () => {
+    const warnings: string[] = [];
+    const result = await runSetup(
+      { ...base, skipCliCheck: true },
+      {
+        saveIdentity: () => {},
+        resolveCli: () => ({ ok: false, reason: "missing", guidance: "install claude first" }),
+        warn: (line) => warnings.push(line),
+      },
+    );
+    // §6.3: the hatch downgrades the refusal to a warning, never to silence.
+    expect(result).toMatchObject({ ok: true });
+    expect(warnings).toEqual(["warning: install claude first"]);
+  });
+
+  test("a skipped check that actually passes stays silent", async () => {
+    const warnings: string[] = [];
+    await runSetup(
+      { ...base, skipCliCheck: true },
+      {
+        saveIdentity: () => {},
+        resolveCli: () => ({ ok: true, mode: "external", path: "/usr/bin/claude" }),
+        warn: (line) => warnings.push(line),
+      },
+    );
+    expect(warnings).toEqual([]);
+  });
+
   test("a usable CLI changes nothing", async () => {
     let saved = 0;
     const result = await runSetup(
