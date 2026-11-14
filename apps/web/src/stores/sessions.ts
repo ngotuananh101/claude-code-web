@@ -1,5 +1,5 @@
 import type { BrowserReplayEvent } from "@cc-web/protocol";
-import { reactive } from "vue";
+import { markRaw, reactive } from "vue";
 import { clearComposerSettings } from "../features/composer/composer-storage.ts";
 import { authFetch } from "../services/auth-api.ts";
 import {
@@ -61,6 +61,16 @@ export const sessions = reactive<SessionsStore>({
 let machine: ReturnType<typeof createSessionStream> | null = null;
 let unsubscribeFrames: (() => void) | null = null;
 let replayFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let liveFlushTimer: ReturnType<typeof setTimeout> | null = null;
+// A fixed window, not a debounce: continuous traffic must still reach the UI.
+const LIVE_FLUSH_MS = 50;
+
+function clearFlushTimers(): void {
+  if (replayFlushTimer !== null) clearTimeout(replayFlushTimer);
+  if (liveFlushTimer !== null) clearTimeout(liveFlushTimer);
+  replayFlushTimer = null;
+  liveFlushTimer = null;
+}
 
 /** Reads the owner's session list. False means the cookie is no good. */
 export async function loadSessions(): Promise<boolean> {
@@ -92,11 +102,7 @@ export async function loadAccount(): Promise<void> {
  * mid-stream costs only the events past `through`.
  */
 export function openSession(sessionId: string): void {
-  if (replayFlushTimer !== null) {
-    clearTimeout(replayFlushTimer);
-    replayFlushTimer = null;
-  }
-  unsubscribeFrames?.();
+  closeSession();
   sessions.activeId = sessionId;
   machine = createSessionStream({
     sessionId,
@@ -106,30 +112,32 @@ export function openSession(sessionId: string): void {
 
   unsubscribeFrames = socket.onFrame((frame) => {
     if (frame.type !== "session.events" && frame.type !== "session.resync_required") return;
-    machine?.apply(frame as Parameters<typeof machine.apply>[0]);
+    if (frame["sessionId"] !== sessionId) return;
+    const changed = machine?.apply(frame as Parameters<NonNullable<typeof machine>["apply"]>[0]);
 
-    // Bounded replay frames (§12.6) arrive in batches of up to 200 events with live:false.
-    // When a long session is opened, streaming intermediate batches mounts Turn 0 and
-    // renders past history incrementally from the top down, only to truncate to 20 turns
-    // once the tail finishes. Defer mirroring until replay completes (events.length < 200
-    // or live:true), with a short debounce timer fallback if the stream stalls.
+    // Finish pending replay even if its final frame is empty or deduplicated.
     const isEvents = frame.type === "session.events";
     const events = isEvents && Array.isArray(frame["events"]) ? frame["events"] : [];
     const isIntermediateReplay = isEvents && frame["live"] !== true && events.length >= 200;
+    if (!changed && !(replayFlushTimer !== null && !isIntermediateReplay)) return;
 
     if (isIntermediateReplay) {
-      if (replayFlushTimer !== null) {
-        clearTimeout(replayFlushTimer);
-      }
+      if (replayFlushTimer !== null) clearTimeout(replayFlushTimer);
       replayFlushTimer = setTimeout(() => {
-        replayFlushTimer = null;
+        clearFlushTimers();
         mirror();
       }, 200);
-    } else {
-      if (replayFlushTimer !== null) {
-        clearTimeout(replayFlushTimer);
-        replayFlushTimer = null;
+    } else if (isEvents && frame["live"] === true && !hasUrgentEvent(events)) {
+      if (replayFlushTimer !== null) clearTimeout(replayFlushTimer);
+      replayFlushTimer = null;
+      if (liveFlushTimer === null) {
+        liveFlushTimer = setTimeout(() => {
+          liveFlushTimer = null;
+          mirror();
+        }, LIVE_FLUSH_MS);
       }
+    } else {
+      clearFlushTimers();
       mirror();
     }
   });
@@ -139,10 +147,9 @@ export function openSession(sessionId: string): void {
 
 /** Detaches from the active session without touching the socket. */
 export function closeSession(): void {
-  if (replayFlushTimer !== null) {
-    clearTimeout(replayFlushTimer);
-    replayFlushTimer = null;
-  }
+  clearFlushTimers();
+  if (sessions.activeId !== null)
+    socket.send({ type: "unsubscribe", sessionId: sessions.activeId });
   unsubscribeFrames?.();
   unsubscribeFrames = null;
   machine = null;
@@ -170,13 +177,38 @@ export function updateSessionTitleInStore(sessionId: string, title: string): voi
   }
 }
 
+function hasUrgentEvent(events: Record<string, unknown>[]): boolean {
+  return events.some((event) => {
+    const type = event["type"];
+    return (
+      typeof type === "string" &&
+      (type.startsWith("approval.") ||
+        type.startsWith("question.") ||
+        type === "run.finished" ||
+        type === "run.failed" ||
+        type === "run.interrupted")
+    );
+  });
+}
+
 function mirror(): void {
-  // A fresh events array per frame, not just a fresh stream object: the
-  // machine mutates its array in place, and Vue's component props compare is
-  // shallow — a reused reference would leave the journal on its first (empty)
-  // render no matter what arrived.
-  if (machine !== null)
-    sessions.stream = { ...machine.state(), events: [...machine.state().events] };
+  if (machine === null) return;
+  const state = machine.state();
+  const previous = sessions.stream;
+  // Immutable snapshots stay raw: event objects never mutate after acceptance.
+  // Telemetry-only batches reuse the render projection so Vue's computed/prop
+  // boundary can leave chat and subagent derivations untouched.
+  const journalEvents =
+    previous !== null &&
+    previous.journalEvents.length === state.journalEvents.length &&
+    previous.journalEvents.at(-1) === state.journalEvents.at(-1)
+      ? previous.journalEvents
+      : markRaw([...state.journalEvents]);
+  sessions.stream = {
+    ...state,
+    events: markRaw([...state.events]),
+    journalEvents,
+  };
 }
 
 /**
@@ -207,7 +239,7 @@ export function startStore(): void {
       socket.send({
         type: "subscribe",
         sessionId: sessions.activeId,
-        afterSessionSequence: sessions.stream?.through ?? 0,
+        afterSessionSequence: machine?.state().through ?? sessions.stream?.through ?? 0,
       });
     }
     void loadSessions();

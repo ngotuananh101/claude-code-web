@@ -146,6 +146,48 @@ describe("the session stream state machine", () => {
     expect(sent).toEqual([]);
   });
 
+  test("thinking-token telemetry advances continuity without entering the render journal", () => {
+    const { stream, sent } = harness();
+    const progress = replayEvent(2, {
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens", estimated_tokens: 12 },
+    });
+    stream.apply(batch([replayEvent(1), progress, replayEvent(3)]));
+    expect(stream.state().through).toBe(3);
+    expect(stream.state().events.map((event) => event.sessionSequence)).toEqual([1, 2, 3]);
+    expect(stream.state().journalEvents?.map((event) => event.sessionSequence)).toEqual([1, 3]);
+    expect(sent).toEqual([]);
+
+    stream.apply(batch([progress, replayEvent(4)], true));
+    expect(stream.state().journalEvents?.map((event) => event.sessionSequence)).toEqual([1, 3, 4]);
+    stream.apply(resync(5));
+    expect(stream.state().journalEvents).toEqual([]);
+  });
+
+  test("unknown status frames stay in the render journal", () => {
+    const { stream } = harness();
+    stream.apply(batch([replayEvent(1, { type: "run.status", payload: { subtype: "future" } })]));
+    expect(stream.state().journalEvents?.map((event) => event.sessionSequence)).toEqual([1]);
+  });
+
+  test("foreign-session events and resync cannot alter continuity", () => {
+    const { stream, sent } = harness();
+    stream.apply({ ...batch([replayEvent(1)]), sessionId: "other" });
+    stream.apply({ ...resync(50), sessionId: "other" });
+    expect(stream.state().through).toBe(0);
+    expect(stream.state().events).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  test("duplicate and unchanged gap frames report no visible state change", () => {
+    const { stream, sent } = harness();
+    expect(stream.apply(batch([replayEvent(1)]))).toBe(true);
+    expect(stream.apply(batch([replayEvent(1)]))).toBe(false);
+    expect(stream.apply(batch([replayEvent(3)]))).toBe(false);
+    expect(sent).toEqual([{ type: "subscribe", afterSessionSequence: 1 }]);
+    expect(stream.apply(batch([], true))).toBe(true);
+  });
+
   test("resume after a drop dedups the overlap and stays one transcript", () => {
     const { stream, sent } = harness();
     stream.apply(batch([replayEvent(1), replayEvent(2), replayEvent(3)]));

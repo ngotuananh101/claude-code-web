@@ -110,6 +110,9 @@ const activeLive = computed(() =>
 
 /** Preloaded historical messages when resuming an existing session (§16.1, Task 13). */
 const historicalMessages = ref<SessionMessage[]>([]);
+// Telemetry still advances the complete journal's watermark, but its stable
+// render projection must not invalidate chat/subagent reducers (§16.2).
+const journalEvents = computed(() => sessions.stream?.journalEvents ?? []);
 
 /** The run this page started, until its terminal event clears it. */
 const startedRun = ref<{ sessionId: string; runId: string } | null>(null);
@@ -134,7 +137,7 @@ const liveRunId = computed(() => {
   if (startedRun.value !== null && startedRun.value.sessionId === currentSessionId) {
     return startedRun.value.runId;
   }
-  const events = sessions.stream?.events ?? [];
+  const events = journalEvents.value;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
     if (event.type === "run.started") return event.runId;
@@ -166,14 +169,10 @@ const liveRunId = computed(() => {
  * level signal decides liveness, so a missed `task.completed` cannot leave a
  * task stuck as running.
  */
-const backgroundTaskState = computed(() => taskStateFromEvents(sessions.stream?.events ?? []));
+const backgroundTaskState = computed(() => taskStateFromEvents(journalEvents.value));
 
 const subagentItems = computed(() =>
-  deriveSubagentItems(
-    historicalMessages.value,
-    sessions.stream?.events ?? [],
-    backgroundTaskState.value,
-  ),
+  deriveSubagentItems(historicalMessages.value, journalEvents.value, backgroundTaskState.value),
 );
 
 const subagentDialogOpen = ref(false);
@@ -194,13 +193,13 @@ function openSubagentsDialog(subagentId?: string, tab: SubagentDialogTab = "acti
 // A terminal event for the run this page started is the honest "it is over":
 // the composer's stop button disappears with it, not on a timer.
 watch(
-  () => sessions.stream?.events.length,
+  () => journalEvents.value.length,
   () => {
     const run = startedRun.value;
     if (run === null) return;
     const currentSessionId = active.value?.sessionId;
     if (run.sessionId !== currentSessionId) return;
-    const terminal = (sessions.stream?.events ?? []).some(
+    const terminal = journalEvents.value.some(
       (event) =>
         event.runId === run.runId &&
         (event.type === "run.finished" ||
@@ -227,13 +226,13 @@ watch(
     () => active.value?.sdkSessionId,
     () => active.value?.runnerId,
     () => active.value?.workspaceId,
-    () => sessions.stream?.events.length,
+    () => journalEvents.value.length,
   ],
   () => {
     const stream = sessions.stream;
     if (stream === null) return;
     // Find the first run.started event's resumeSessionId.
-    const started = stream.events.find((e) => e.type === "run.started");
+    const started = journalEvents.value.find((e) => e.type === "run.started");
     const resumeSessionId =
       started !== undefined
         ? ((started.payload ?? {}) as Record<string, unknown>)["resumeSessionId"]
@@ -376,7 +375,7 @@ async function refreshNow(): Promise<void> {
               v-if="sessions.stream !== null"
               :key="active.sessionId"
               class="z-10"
-              :events="sessions.stream.events"
+              :events="journalEvents"
               :needs-resync="sessions.stream.needsResync"
               :session-live="activeLive"
               :background-task-state="backgroundTaskState"
@@ -405,7 +404,7 @@ async function refreshNow(): Promise<void> {
               v-model:selected-id="selectedSubagentId"
               v-model:tab="subagentDialogTab"
               :subagents="subagentItems"
-              :events="sessions.stream?.events ?? []"
+              :events="journalEvents"
               :background-task-state="backgroundTaskState"
             />
           </div>

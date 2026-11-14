@@ -33,7 +33,10 @@ export type SubscribeFrame = {
 export type SessionStreamState = {
   /** Highest contiguous session_sequence held. Next event must be through+1. */
   through: number;
+  /** Complete accepted journal, including progress telemetry. */
   events: BrowserReplayEvent[];
+  /** Render projection: excludes only non-content thinking-token estimates. */
+  journalEvents: BrowserReplayEvent[];
   /** Live-ness of the last frame seen; null before the first one. */
   live: boolean | null;
   /** Retention deleted this client's history and the rewind is not done yet. */
@@ -45,11 +48,19 @@ export type SessionStreamOptions = {
   send: (frame: SubscribeFrame) => void;
 };
 
+function isThinkingTokenEstimate(event: BrowserReplayEvent): boolean {
+  if (event.type !== "run.status" || typeof event.payload !== "object" || event.payload === null)
+    return false;
+  const payload = event.payload as Record<string, unknown>;
+  return payload["type"] === "system" && payload["subtype"] === "thinking_tokens";
+}
+
 export function createSessionStream(options: SessionStreamOptions): {
-  apply: (frame: SessionEventsFrame | SessionResyncFrame) => void;
+  apply: (frame: SessionEventsFrame | SessionResyncFrame) => boolean;
   state: () => SessionStreamState;
 } {
   const events: BrowserReplayEvent[] = [];
+  const journalEvents: BrowserReplayEvent[] = [];
   let through = 0;
   let live: boolean | null = null;
   let needsResync = false;
@@ -63,23 +74,30 @@ export function createSessionStream(options: SessionStreamOptions): {
     options.send({ type: "subscribe", sessionId: options.sessionId, afterSessionSequence: after });
   }
 
-  function apply(frame: SessionEventsFrame | SessionResyncFrame): void {
+  function apply(frame: SessionEventsFrame | SessionResyncFrame): boolean {
+    if (frame.sessionId !== options.sessionId) return false;
     if (frame.type === "session.resync_required") {
       // Everything the client holds is outside the journal now. fromSequence
       // is the earliest surviving event; subscribing from through = from - 1
       // has the server serve that boundary event too.
       events.length = 0;
+      journalEvents.length = 0;
       through = frame.fromSequence - 1;
       needsResync = true;
       subscribe(through);
-      return;
+      return true;
     }
 
+    let changed = live !== frame.live;
     live = frame.live;
     for (const event of frame.events) {
       if (event.sessionSequence <= through) continue;
       if (event.sessionSequence === through + 1) {
         events.push(event);
+        // Progress estimates do not alter chat or subagent content. Keep them
+        // in the complete journal and advance continuity before projecting.
+        if (!isThinkingTokenEstimate(event)) journalEvents.push(event);
+        changed = true;
         through = event.sessionSequence;
         needsResync = false;
         awaitingReplay = false;
@@ -90,10 +108,11 @@ export function createSessionStream(options: SessionStreamOptions): {
       if (!awaitingReplay) subscribe(through);
       break;
     }
+    return changed;
   }
 
   function state(): SessionStreamState {
-    return { through, events, live, needsResync };
+    return { through, events, journalEvents, live, needsResync };
   }
 
   return { apply, state };
