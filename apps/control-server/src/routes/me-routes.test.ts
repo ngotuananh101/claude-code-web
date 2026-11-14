@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
+import { decodeJwt } from "jose";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
 import { createServer, type RunnerCredentialCheck, type ServerHandle } from "../server.ts";
+import { readCookie } from "./auth-routes.ts";
 
 /**
  * The signed-in account's own name over HTTP (§16.2's rail footer). The rail
@@ -466,6 +468,114 @@ describe("me route", () => {
       });
 
       expect(response.status).toBe(403);
+    });
+
+    test("password replacement preserves remembered, session, and legacy cookie policies while revoking old tokens", async () => {
+      const remembered = await start();
+      const oldRememberedAccess = await remembered.auth.issueAccessToken("user-1", true);
+      const conflictingSessionRefresh = await remembered.auth.issueRefreshToken("user-1", false);
+
+      const rememberedRes = await fetch(`${remembered.url}/api/me`, {
+        method: "PATCH",
+        headers: {
+          Origin: origin,
+          Cookie: `cc_session=${oldRememberedAccess}; cc_refresh=${conflictingSessionRefresh}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          currentPassword: "password123",
+          newPassword: "newpassword456",
+          rememberMe: false,
+        }),
+      });
+      expect(rememberedRes.status).toBe(200);
+      expect(rememberedRes.headers.get("cache-control")).toBe("no-store");
+      const rememberedCookies = rememberedRes.headers.getSetCookie();
+      expect(
+        rememberedCookies.some((c) => c.includes("cc_session=") && c.includes("Max-Age=900")),
+      ).toBe(true);
+      expect(
+        rememberedCookies.some((c) => c.includes("cc_refresh=") && c.includes("Max-Age=2592000")),
+      ).toBe(true);
+      const rememberedHeader = rememberedCookies.map((c) => c.split(";")[0]!).join("; ");
+      const newRememberedAccess = readCookie(rememberedHeader, "cc_session");
+      const newRememberedRefresh = readCookie(rememberedHeader, "cc_refresh");
+      expect(await remembered.auth.authenticate(oldRememberedAccess)).toEqual({
+        ok: false,
+        reason: "revoked",
+      });
+      expect(await remembered.auth.authenticate(newRememberedAccess)).toEqual({
+        ok: true,
+        userId: "user-1",
+        rememberMe: true,
+      });
+      const rememberedRefreshClaims = decodeJwt(newRememberedRefresh!);
+      expect((rememberedRefreshClaims.exp ?? 0) - (rememberedRefreshClaims.iat ?? 0)).toBe(
+        2_592_000,
+      );
+      handle?.stop();
+
+      const sessionOnly = await start();
+      const oldSessionAccess = await sessionOnly.auth.issueAccessToken("user-1", false);
+      const conflictingRememberedRefresh = await sessionOnly.auth.issueRefreshToken("user-1", true);
+
+      const sessionRes = await fetch(`${sessionOnly.url}/api/me`, {
+        method: "PATCH",
+        headers: {
+          Origin: origin,
+          Cookie: `cc_session=${oldSessionAccess}; cc_refresh=${conflictingRememberedRefresh}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          currentPassword: "password123",
+          newPassword: "newpassword456",
+          rememberMe: true,
+        }),
+      });
+      expect(sessionRes.status).toBe(200);
+      const sessionCookies = sessionRes.headers.getSetCookie();
+      expect(sessionCookies).toHaveLength(2);
+      for (const c of sessionCookies) {
+        expect(c).not.toContain("Max-Age");
+        expect(c).not.toContain("Expires");
+      }
+      const sessionHeader = sessionCookies.map((c) => c.split(";")[0]!).join("; ");
+      const newSessionAccess = readCookie(sessionHeader, "cc_session");
+      const newSessionRefresh = readCookie(sessionHeader, "cc_refresh");
+      expect(await sessionOnly.auth.authenticate(oldSessionAccess)).toEqual({
+        ok: false,
+        reason: "revoked",
+      });
+      expect(await sessionOnly.auth.authenticate(newSessionAccess)).toEqual({
+        ok: true,
+        userId: "user-1",
+        rememberMe: false,
+      });
+      const sessionRefreshClaims = decodeJwt(newSessionRefresh!);
+      expect((sessionRefreshClaims.exp ?? 0) - (sessionRefreshClaims.iat ?? 0)).toBe(604_800);
+      handle?.stop();
+
+      const legacy = await start();
+      const legacyRes = await fetch(`${legacy.url}/api/me`, {
+        method: "PATCH",
+        headers: {
+          Origin: origin,
+          Cookie: legacy.cookie,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          currentPassword: "password123",
+          newPassword: "newpassword456",
+        }),
+      });
+      expect(legacyRes.status).toBe(200);
+      const legacyCookies = legacyRes.headers.getSetCookie();
+      expect(
+        legacyCookies.some((c) => c.includes("cc_session=") && c.includes("Max-Age=900")),
+      ).toBe(true);
+      expect(
+        legacyCookies.some((c) => c.includes("cc_refresh=") && c.includes("Max-Age=604800")),
+      ).toBe(true);
     });
   });
 });

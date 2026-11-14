@@ -862,6 +862,7 @@ export const en: TranslationDictionary = {
     tagline: "Follow your coding agent's sessions, straight from the journal.",
     username: "Username",
     password: "Password",
+    rememberMe: "Remember me for 30 days",
     continue: "Continue",
     setupTitle: "System setup",
     setupSubtitle: "Create the first administrator account for cc-web.",

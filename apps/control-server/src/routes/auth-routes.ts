@@ -1,3 +1,8 @@
+import {
+  ACCESS_TTL_SECONDS,
+  REFRESH_TTL_SECONDS,
+  REMEMBERED_REFRESH_TTL_SECONDS,
+} from "../auth/session-policy.ts";
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
 
@@ -9,10 +14,9 @@ import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
  * a session, and the check must not depend on the password being wrong.
  */
 
+export { ACCESS_TTL_SECONDS, REFRESH_TTL_SECONDS, REMEMBERED_REFRESH_TTL_SECONDS };
 export const COOKIE_NAME = "cc_session";
 export const REFRESH_COOKIE_NAME = "cc_refresh";
-export const ACCESS_TTL_SECONDS = 15 * 60;
-export const REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function readCookie(cookie: string | undefined, name: string): string | undefined {
   if (cookie === undefined) return undefined;
@@ -44,6 +48,36 @@ export function cookieSecureFlag(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
   if (forwarded === "https") return "; Secure";
   return new URL(request.url).protocol === "https:" ? "; Secure" : "";
+}
+
+/**
+ * Writes both session cookies with one shared policy:
+ * - `rememberMe === false`: browser-session cookies (omit `Max-Age`/`Expires`).
+ * - `rememberMe === true`: persistent cookies with a 30-day refresh lifetime.
+ * - `rememberMe === undefined`: legacy/setup persistent cookies with a 7-day refresh lifetime.
+ */
+export function appendAuthCookies(
+  request: Request,
+  headers: Headers,
+  accessToken: string,
+  refreshToken: string,
+  rememberMe?: boolean,
+): void {
+  const secure = cookieSecureFlag(request);
+  const accessMaxAge = rememberMe === false ? "" : `; Max-Age=${ACCESS_TTL_SECONDS}`;
+  const refreshMaxAge =
+    rememberMe === false
+      ? ""
+      : `; Max-Age=${rememberMe === true ? REMEMBERED_REFRESH_TTL_SECONDS : REFRESH_TTL_SECONDS}`;
+
+  headers.append(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${accessToken}; HttpOnly; SameSite=Lax; Path=/${accessMaxAge}${secure}`,
+  );
+  headers.append(
+    "Set-Cookie",
+    `${REFRESH_COOKIE_NAME}=${refreshToken}; HttpOnly; SameSite=Lax; Path=/${refreshMaxAge}${secure}`,
+  );
 }
 
 /**
@@ -158,19 +192,11 @@ export async function handleSetup(
 
   const token = await options.auth.issueAccessToken(id);
   const refreshToken = await options.auth.issueRefreshToken(id);
-  const secure = cookieSecureFlag(request);
 
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
   headers.set("Cache-Control", "no-store");
-  headers.append(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-  );
-  headers.append(
-    "Set-Cookie",
-    `${REFRESH_COOKIE_NAME}=${refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
-  );
+  appendAuthCookies(request, headers, token, refreshToken);
 
   return new Response(JSON.stringify({ ok: true, user: { id, username: trimmedUsername } }), {
     status: 201,
@@ -195,12 +221,22 @@ export async function handleLogin(
     return new Response("bad request", { status: 400 });
   }
 
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return new Response("bad request", { status: 400 });
+  }
+
   const record = body as Record<string, unknown>;
   const username = record["username"];
   const password = record["password"];
-  if (typeof username !== "string" || typeof password !== "string") {
+  const rememberMeRaw = record["rememberMe"];
+  if (
+    typeof username !== "string" ||
+    typeof password !== "string" ||
+    (rememberMeRaw !== undefined && typeof rememberMeRaw !== "boolean")
+  ) {
     return new Response("bad request", { status: 400 });
   }
+  const rememberMe = rememberMeRaw === true;
 
   const row = options.db
     .query("SELECT id, password_hash FROM users WHERE username = ?")
@@ -214,26 +250,13 @@ export async function handleLogin(
     return new Response("unauthorized", { status: 401 });
   }
 
-  const token = await options.auth.issueAccessToken(row.id);
-  const refreshToken = await options.auth.issueRefreshToken(row.id);
-
-  // Secure flag via cookieSecureFlag: https URL, X-Forwarded-Proto
-  // from a TLS proxy, or the CC_WEB_SECURE_COOKIES override. On a
-  // plain-http origin a Secure cookie is dropped by the browser, which
-  // would turn every login into a silent no-op — that is why the
-  // override exists instead of forcing Secure unconditionally.
-  const secure = cookieSecureFlag(request);
+  const token = await options.auth.issueAccessToken(row.id, rememberMe);
+  const refreshToken = await options.auth.issueRefreshToken(row.id, rememberMe);
 
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
-  headers.append(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-  );
-  headers.append(
-    "Set-Cookie",
-    `${REFRESH_COOKIE_NAME}=${refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
-  );
+  headers.set("Cache-Control", "no-store");
+  appendAuthCookies(request, headers, token, refreshToken, rememberMe);
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
@@ -266,17 +289,10 @@ export async function handleRefresh(
     return new Response("unauthorized", { status: 401 });
   }
 
-  const secure = cookieSecureFlag(request);
   const headers = new Headers();
   headers.set("Content-Type", "application/json");
-  headers.append(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${result.accessToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-  );
-  headers.append(
-    "Set-Cookie",
-    `${REFRESH_COOKIE_NAME}=${result.refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
-  );
+  headers.set("Cache-Control", "no-store");
+  appendAuthCookies(request, headers, result.accessToken, result.refreshToken, result.rememberMe);
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,

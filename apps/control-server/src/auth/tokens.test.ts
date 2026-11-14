@@ -109,4 +109,69 @@ describe("token signing", () => {
     // beats failing silently forever.
     expect(() => createSigner(new Uint8Array(4))).toThrow(/secret/i);
   });
+
+  test("a token can carry and verify a boolean rememberMe claim", async () => {
+    const tokens = signer();
+
+    const remembered = await tokens.sign(
+      { sub: "user-1", tokenVersion: 2, type: "refresh", rememberMe: true },
+      60,
+    );
+    const verifiedTrue = await tokens.verify(remembered);
+    expect(verifiedTrue).toEqual({
+      ok: true,
+      claims: { sub: "user-1", tokenVersion: 2, type: "refresh", rememberMe: true },
+    });
+
+    const sessionOnly = await tokens.sign(
+      { sub: "user-1", tokenVersion: 2, type: "access", rememberMe: false },
+      60,
+    );
+    const verifiedFalse = await tokens.verify(sessionOnly);
+    expect(verifiedFalse).toEqual({
+      ok: true,
+      claims: { sub: "user-1", tokenVersion: 2, type: "access", rememberMe: false },
+    });
+  });
+
+  test("a token without rememberMe keeps the claim absent", async () => {
+    const tokens = signer();
+    const token = await tokens.sign({ sub: "user-1", tokenVersion: 2, type: "access" }, 60);
+
+    const verified = await tokens.verify(token);
+    expect(verified.ok).toBe(true);
+    if (verified.ok) {
+      expect("rememberMe" in verified.claims).toBe(false);
+    }
+  });
+
+  test("a signed non-boolean rememberMe claim is refused", async () => {
+    const tokens = signer();
+    const token = await tokens.sign(
+      { sub: "user-1", tokenVersion: 2, rememberMe: "true" as unknown as boolean },
+      60,
+    );
+
+    const verified = await tokens.verify(token);
+    expect(verified).toEqual({ ok: false, reason: "missing_claims" });
+  });
+
+  test("tampering with rememberMe invalidates the signature", async () => {
+    const tokens = signer();
+    const token = await tokens.sign(
+      { sub: "user-1", tokenVersion: 2, type: "refresh", rememberMe: false },
+      60,
+    );
+    const [header, payloadPart, signature] = token.split(".");
+    const decoded = JSON.parse(Buffer.from(payloadPart!, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    const forgedPayload = Buffer.from(JSON.stringify({ ...decoded, rememberMe: true })).toString(
+      "base64url",
+    );
+
+    const verified = await tokens.verify(`${header}.${forgedPayload}.${signature}`);
+    expect(verified).toEqual({ ok: false, reason: "invalid_signature" });
+  });
 });

@@ -860,6 +860,7 @@ export const vi: TranslationDictionary = {
     tagline: "Theo dõi phiên làm việc của coding agent, trực tiếp từ journal.",
     username: "Tên đăng nhập",
     password: "Mật khẩu",
+    rememberMe: "Ghi nhớ đăng nhập trong 30 ngày",
     continue: "Tiếp tục",
     setupTitle: "Thiết lập hệ thống",
     setupSubtitle: "Khởi tạo tài khoản quản trị đầu tiên cho hệ thống cc-web.",

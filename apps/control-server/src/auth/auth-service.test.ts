@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
+import { decodeJwt } from "jose";
 import { AuthService } from "./auth-service.ts";
 import { createSigner } from "./tokens.ts";
 
@@ -127,5 +128,97 @@ describe("owner authentication", () => {
     db.query("UPDATE users SET token_version = token_version + 1 WHERE id = ?").run("user-1");
 
     expect(await auth.verifyRefreshToken(refreshToken)).toEqual({ ok: false, reason: "revoked" });
+  });
+
+  test("rememberMe sets a 30-day refresh TTL while keeping the access token at 15 minutes", async () => {
+    const { db, auth } = service();
+    addUser(db);
+
+    const accessRemembered = await auth.issueAccessToken("user-1", true);
+    const refreshRemembered = await auth.issueRefreshToken("user-1", true);
+    const refreshSession = await auth.issueRefreshToken("user-1", false);
+    const refreshLegacy = await auth.issueRefreshToken("user-1");
+
+    const accessClaims = decodeJwt(accessRemembered);
+    const rememberedClaims = decodeJwt(refreshRemembered);
+    const sessionClaims = decodeJwt(refreshSession);
+    const legacyClaims = decodeJwt(refreshLegacy);
+
+    expect((accessClaims.exp ?? 0) - (accessClaims.iat ?? 0)).toBe(900);
+    expect((rememberedClaims.exp ?? 0) - (rememberedClaims.iat ?? 0)).toBe(2_592_000);
+    expect((sessionClaims.exp ?? 0) - (sessionClaims.iat ?? 0)).toBe(604_800);
+    expect((legacyClaims.exp ?? 0) - (legacyClaims.iat ?? 0)).toBe(604_800);
+
+    expect(await auth.authenticate(accessRemembered)).toEqual({
+      ok: true,
+      userId: "user-1",
+      rememberMe: true,
+    });
+    expect(await auth.verifyRefreshToken(refreshRemembered)).toEqual({
+      ok: true,
+      userId: "user-1",
+      rememberMe: true,
+    });
+    expect(await auth.verifyRefreshToken(refreshSession)).toEqual({
+      ok: true,
+      userId: "user-1",
+      rememberMe: false,
+    });
+  });
+
+  test("refresh preserves the signed rememberMe policy across true, false, and legacy tokens", async () => {
+    const { db, auth } = service();
+    addUser(db);
+
+    const rememberedRefresh = await auth.issueRefreshToken("user-1", true);
+    const rotatedRemembered = await auth.refresh(rememberedRefresh);
+    expect(rotatedRemembered.ok).toBe(true);
+    if (rotatedRemembered.ok) {
+      expect(rotatedRemembered.rememberMe).toBe(true);
+      expect(await auth.authenticate(rotatedRemembered.accessToken)).toEqual({
+        ok: true,
+        userId: "user-1",
+        rememberMe: true,
+      });
+      const claims = decodeJwt(rotatedRemembered.refreshToken);
+      expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(2_592_000);
+    }
+
+    const sessionRefresh = await auth.issueRefreshToken("user-1", false);
+    const rotatedSession = await auth.refresh(sessionRefresh);
+    expect(rotatedSession.ok).toBe(true);
+    if (rotatedSession.ok) {
+      expect(rotatedSession.rememberMe).toBe(false);
+      expect(await auth.authenticate(rotatedSession.accessToken)).toEqual({
+        ok: true,
+        userId: "user-1",
+        rememberMe: false,
+      });
+      const claims = decodeJwt(rotatedSession.refreshToken);
+      expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(604_800);
+    }
+
+    const legacyRefresh = await auth.issueRefreshToken("user-1");
+    const rotatedLegacy = await auth.refresh(legacyRefresh);
+    expect(rotatedLegacy.ok).toBe(true);
+    if (rotatedLegacy.ok) {
+      expect("rememberMe" in rotatedLegacy).toBe(false);
+      expect(await auth.authenticate(rotatedLegacy.accessToken)).toEqual({
+        ok: true,
+        userId: "user-1",
+      });
+      const claims = decodeJwt(rotatedLegacy.refreshToken);
+      expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(604_800);
+    }
+  });
+
+  test("bumping token version invalidates remembered refresh tokens during refresh", async () => {
+    const { db, auth } = service();
+    addUser(db);
+    const rememberedRefresh = await auth.issueRefreshToken("user-1", true);
+
+    auth.revokeAllSessions("user-1");
+
+    expect(await auth.refresh(rememberedRefresh)).toEqual({ ok: false, reason: "revoked" });
   });
 });

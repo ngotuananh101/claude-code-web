@@ -1,12 +1,6 @@
 import type { ServerOptions } from "../server.ts";
 import type { BrowserGateway } from "../websocket/browser/browser-gateway.ts";
-import {
-  ACCESS_TTL_SECONDS,
-  COOKIE_NAME,
-  cookieSecureFlag,
-  REFRESH_COOKIE_NAME,
-  REFRESH_TTL_SECONDS,
-} from "./auth-routes.ts";
+import { appendAuthCookies, COOKIE_NAME, readCookie } from "./auth-routes.ts";
 
 /**
  * The signed-in account's own name for the rail's footer (§16.2). The footer
@@ -191,27 +185,31 @@ export async function handleUpdateMe(
     }
 
     const newHash = await hashPassword(newPassword);
+    const currentAccessToken = readCookie(request.headers.get("cookie") ?? undefined, COOKIE_NAME);
+    const currentAuth = await options.auth.authenticate(currentAccessToken);
+    if (!currentAuth.ok || currentAuth.userId !== authorized.userId) {
+      return new Response("unauthorized", { status: 401 });
+    }
+
     options.db
       .query("UPDATE users SET password_hash = ? WHERE id = ?")
       .run(newHash, authorized.userId);
 
-    // Bump token_version and re-mint tokens
+    // Bump token_version and re-mint tokens with the authenticated session's signed policy.
     options.auth.revokeAllSessions(authorized.userId);
-    const newAccessToken = await options.auth.issueAccessToken(authorized.userId);
-    const newRefreshToken = await options.auth.issueRefreshToken(authorized.userId);
+    const newAccessToken = await options.auth.issueAccessToken(
+      authorized.userId,
+      currentAuth.rememberMe,
+    );
+    const newRefreshToken = await options.auth.issueRefreshToken(
+      authorized.userId,
+      currentAuth.rememberMe,
+    );
 
-    const secure = cookieSecureFlag(request);
     const headers = new Headers();
     headers.set("Content-Type", "application/json");
-
-    headers.append(
-      "Set-Cookie",
-      `${COOKIE_NAME}=${newAccessToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ACCESS_TTL_SECONDS}${secure}`,
-    );
-    headers.append(
-      "Set-Cookie",
-      `${REFRESH_COOKIE_NAME}=${newRefreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${REFRESH_TTL_SECONDS}${secure}`,
-    );
+    headers.set("Cache-Control", "no-store");
+    appendAuthCookies(request, headers, newAccessToken, newRefreshToken, currentAuth.rememberMe);
 
     const row = options.db
       .query("SELECT username, avatar FROM users WHERE id = ?")

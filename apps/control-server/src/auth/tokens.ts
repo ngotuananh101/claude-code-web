@@ -23,6 +23,8 @@ export type TokenClaims = {
   /** The user's version at issuance; a mismatch with the DB means revoked. */
   tokenVersion: number;
   type?: "access" | "refresh";
+  /** Signed login-persistence policy when explicitly chosen at issuance. */
+  rememberMe?: boolean;
 };
 
 export type VerifyResult =
@@ -52,6 +54,9 @@ export function createSigner(secret: Uint8Array): Signer {
       if (claims.type !== undefined) {
         payload["type"] = claims.type;
       }
+      if (claims.rememberMe !== undefined) {
+        payload["rememberMe"] = claims.rememberMe;
+      }
       return new SignJWT(payload)
         .setProtectedHeader({ alg: ALGORITHM })
         .setSubject(claims.sub)
@@ -76,11 +81,16 @@ export function createSigner(secret: Uint8Array): Signer {
           // lacking one could never be invalidated.
           return { ok: false, reason: "missing_claims" };
         }
+        if (payload["rememberMe"] !== undefined && typeof payload["rememberMe"] !== "boolean") {
+          return { ok: false, reason: "missing_claims" };
+        }
 
         const type =
           payload["type"] === "access" || payload["type"] === "refresh"
             ? (payload["type"] as "access" | "refresh")
             : undefined;
+        const rememberMe =
+          typeof payload["rememberMe"] === "boolean" ? payload["rememberMe"] : undefined;
 
         return {
           ok: true,
@@ -88,6 +98,7 @@ export function createSigner(secret: Uint8Array): Signer {
             sub: payload.sub,
             tokenVersion: payload["tokenVersion"],
             ...(type !== undefined ? { type } : {}),
+            ...(rememberMe !== undefined ? { rememberMe } : {}),
           },
         };
       } catch (error) {

@@ -10,6 +10,11 @@
  */
 
 import type { Database } from "bun:sqlite";
+import {
+  ACCESS_TTL_SECONDS,
+  REFRESH_TTL_SECONDS,
+  REMEMBERED_REFRESH_TTL_SECONDS,
+} from "./session-policy.ts";
 import type { Signer } from "./tokens.ts";
 
 export type AuthOptions = {
@@ -22,7 +27,7 @@ export type AuthOptions = {
 };
 
 export type AuthenticateResult =
-  | { ok: true; userId: string }
+  | { ok: true; userId: string; rememberMe?: boolean }
   | {
       ok: false;
       reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
@@ -39,11 +44,11 @@ export class AuthService {
   constructor(options: AuthOptions) {
     this.#db = options.db;
     this.#signer = options.signer;
-    this.#accessTtl = options.accessTtlSeconds ?? 15 * 60;
-    this.#refreshTtl = options.refreshTtlSeconds ?? 7 * 24 * 60 * 60;
+    this.#accessTtl = options.accessTtlSeconds ?? ACCESS_TTL_SECONDS;
+    this.#refreshTtl = options.refreshTtlSeconds ?? REFRESH_TTL_SECONDS;
   }
 
-  async issueAccessToken(userId: string): Promise<string> {
+  async issueAccessToken(userId: string, rememberMe?: boolean): Promise<string> {
     const user = this.#readUser(userId);
     if (!user) {
       // Minting a token for a missing user would produce a credential that can
@@ -51,19 +56,29 @@ export class AuthService {
       throw new Error(`unknown user: ${userId}`);
     }
     return this.#signer.sign(
-      { sub: user.id, tokenVersion: user.token_version, type: "access" },
+      {
+        sub: user.id,
+        tokenVersion: user.token_version,
+        type: "access",
+        ...(rememberMe !== undefined ? { rememberMe } : {}),
+      },
       this.#accessTtl,
     );
   }
 
-  async issueRefreshToken(userId: string): Promise<string> {
+  async issueRefreshToken(userId: string, rememberMe?: boolean): Promise<string> {
     const user = this.#readUser(userId);
     if (!user) {
       throw new Error(`unknown user: ${userId}`);
     }
     return this.#signer.sign(
-      { sub: user.id, tokenVersion: user.token_version, type: "refresh" },
-      this.#refreshTtl,
+      {
+        sub: user.id,
+        tokenVersion: user.token_version,
+        type: "refresh",
+        ...(rememberMe !== undefined ? { rememberMe } : {}),
+      },
+      rememberMe === true ? REMEMBERED_REFRESH_TTL_SECONDS : this.#refreshTtl,
     );
   }
 
@@ -93,7 +108,13 @@ export class AuthService {
       return { ok: false, reason: "revoked" };
     }
 
-    return { ok: true, userId: user.id };
+    return {
+      ok: true,
+      userId: user.id,
+      ...(verified.claims.rememberMe !== undefined
+        ? { rememberMe: verified.claims.rememberMe }
+        : {}),
+    };
   }
 
   async verifyRefreshToken(token: string | undefined): Promise<AuthenticateResult> {
@@ -120,11 +141,17 @@ export class AuthService {
       return { ok: false, reason: "revoked" };
     }
 
-    return { ok: true, userId: user.id };
+    return {
+      ok: true,
+      userId: user.id,
+      ...(verified.claims.rememberMe !== undefined
+        ? { rememberMe: verified.claims.rememberMe }
+        : {}),
+    };
   }
 
   async refresh(refreshToken: string | undefined): Promise<
-    | { ok: true; userId: string; accessToken: string; refreshToken: string }
+    | { ok: true; userId: string; accessToken: string; refreshToken: string; rememberMe?: boolean }
     | {
         ok: false;
         reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
@@ -133,14 +160,15 @@ export class AuthService {
     const verified = await this.verifyRefreshToken(refreshToken);
     if (!verified.ok) return verified;
 
-    const accessToken = await this.issueAccessToken(verified.userId);
-    const newRefreshToken = await this.issueRefreshToken(verified.userId);
+    const accessToken = await this.issueAccessToken(verified.userId, verified.rememberMe);
+    const newRefreshToken = await this.issueRefreshToken(verified.userId, verified.rememberMe);
 
     return {
       ok: true,
       userId: verified.userId,
       accessToken,
       refreshToken: newRefreshToken,
+      ...(verified.rememberMe !== undefined ? { rememberMe: verified.rememberMe } : {}),
     };
   }
 

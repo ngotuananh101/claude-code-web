@@ -844,6 +844,7 @@ export type TranslationDictionary = {
     tagline: string;
     username: string;
     password: string;
+    rememberMe: string;
     continue: string;
     setupTitle: string;
     setupSubtitle: string;

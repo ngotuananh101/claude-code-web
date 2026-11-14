@@ -12,6 +12,7 @@ const router = useRouter();
 const { t } = useI18n();
 const username = ref("");
 const password = ref("");
+const rememberMe = ref(false);
 const busy = ref(false);
 
 async function submit(): Promise<void> {
@@ -20,7 +21,11 @@ async function submit(): Promise<void> {
     const response = await fetch("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: username.value, password: password.value }),
+      body: JSON.stringify({
+        username: username.value,
+        password: password.value,
+        rememberMe: rememberMe.value,
+      }),
     });
     if (!response.ok) {
       // The server answers every credential failure identically (no username
@@ -77,6 +82,18 @@ async function submit(): Promise<void> {
           class="max-sm:h-11"
           :placeholder="t('auth.password')"
         />
+        <label
+          for="remember-me"
+          class="my-0.5 flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground"
+        >
+          <input
+            id="remember-me"
+            v-model="rememberMe"
+            type="checkbox"
+            class="h-4 w-4 cursor-pointer rounded border-border accent-primary"
+          />
+          <span>{{ t("auth.rememberMe") }}</span>
+        </label>
         <Button
           type="submit"
           class="max-sm:h-11"
