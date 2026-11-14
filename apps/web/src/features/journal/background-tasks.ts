@@ -277,24 +277,8 @@ export function taskStateFromEvents(events: ReadonlyArray<TaskEvent>): Backgroun
   return events.reduce(applyTaskEvent, EMPTY_TASK_STATE);
 }
 
-/** Live, non-ambient tasks, oldest first. */
-export function liveActivityTasks(state: BackgroundTaskState): BackgroundTask[] {
-  const live: BackgroundTask[] = [];
-  for (const taskId of state.liveTaskIds) {
-    const task = state.tasks.get(taskId);
-    // `ambient` already covers every skip-transcript task per the SDK, but the
-    // spec names both flags; a frame that sets only one must not leak a
-    // housekeeping task into the activity band.
-    if (task !== undefined && !task.ambient && task.skipTranscript !== true) live.push(task);
-  }
-  return live.sort((a, b) => {
-    if (a.startedAt === b.startedAt) return a.taskId < b.taskId ? -1 : a.taskId > b.taskId ? 1 : 0;
-    return a.startedAt < b.startedAt ? -1 : 1;
-  });
-}
-
 /**
- * Compact elapsed label for the activity band: `8s`, `3p 05s`, `1g 05p`.
+ * Compact elapsed label for a running task: `8s`, `3p 05s`, `1g 05p`.
  * A clock that went backwards (a skewed journal timestamp) clamps to zero.
  */
 export function formatTaskElapsed(ms: number): string {

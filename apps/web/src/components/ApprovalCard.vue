@@ -204,12 +204,12 @@ function submitAnswers(): void {
             :key="option.label"
             variant="outline"
             size="sm"
-            class="h-auto min-h-11 w-full justify-start py-2 text-left text-[13px] sm:min-h-0 sm:py-1.5"
+            class="h-auto min-h-11 w-full justify-start py-2 text-left whitespace-normal text-[13px] sm:min-h-0 sm:py-1.5"
             :class="answers[index] === option.label ? 'border-primary bg-primary/10' : ''"
             :disabled="!interactive"
             @click="pick(index, option.label)"
           >
-            <span class="min-w-0">
+            <span class="min-w-0 break-words">
               <span class="block font-medium">{{ option.label }}</span>
               <span
                 v-if="option.description"

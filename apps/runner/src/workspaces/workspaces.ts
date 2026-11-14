@@ -78,11 +78,18 @@ export function discoverWorkspaces(options: DiscoverOptions): DeclaredWorkspace[
     collected.push({ workspaceId: "default", path: resolve(trimmed) });
   }
 
-  // 2. custom workspaces from the db keep their persisted ids (canonicalized).
+  // 2. custom workspaces from the db keep their persisted ids (canonicalized),
+  //    filtered to directories that still exist. A persisted row outlives the
+  //    folder it names — the operator deletes or renames a project — and this
+  //    list is what hello() declares, so a path that is gone must not travel:
+  //    every declared workspace gets a git call at dial time, and a missing cwd
+  //    makes that call throw.
   if (db) {
     const custom = listCustomWorkspaces(db);
     for (const w of custom) {
-      collected.push({ workspaceId: w.workspaceId, path: resolve(w.path) });
+      const canonical = resolve(w.path);
+      if (!isRealDir(canonical)) continue;
+      collected.push({ workspaceId: w.workspaceId, path: canonical });
     }
   }
 

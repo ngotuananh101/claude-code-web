@@ -50,6 +50,15 @@ describe("listBranches", () => {
   test("a directory that is not a repository lists no branches", () => {
     expect(listBranches(tempDir())).toEqual([]);
   });
+
+  test("a path that no longer exists lists no branches instead of throwing", () => {
+    // hello() declares every workspace on the host, and a persisted custom
+    // workspace may name a folder the operator has since deleted. Bun's
+    // spawnSync throws ENOENT *for the missing cwd* while naming the binary
+    // ("posix_spawn 'git'"), so an unguarded call here reads as "git is not
+    // installed" and takes the whole daemon down in a restart loop.
+    expect(listBranches("/nonexistent/cc-web/workspace")).toEqual([]);
+  });
 });
 
 describe("currentBranch", () => {
@@ -71,6 +80,12 @@ describe("currentBranch", () => {
 
   test("a directory that is not a repository names no branch", () => {
     expect(currentBranch(tempDir())).toBeUndefined();
+  });
+
+  test("a path that no longer exists names no branch instead of throwing", () => {
+    // Same hazard as listBranches: this runs inside hello()'s workspace
+    // declaration, and one deleted folder must not fail the dial.
+    expect(currentBranch("/nonexistent/cc-web/workspace")).toBeUndefined();
   });
 });
 

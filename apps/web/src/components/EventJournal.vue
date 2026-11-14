@@ -30,8 +30,6 @@ const props = defineProps<{
   historicalMessages?: SessionMessage[];
   needsResync: boolean;
   sessionLive: boolean;
-  /** Live background work that outlived the run it belongs to. */
-  backgroundTasks?: BackgroundTask[];
   /** Every task the journal has seen, live or settled (tool-step badges). */
   backgroundTaskState?: BackgroundTaskState;
   pendingRun?: { runId: string; prompt: string; attachments?: AttachmentInfo[] } | undefined;

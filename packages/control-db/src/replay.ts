@@ -253,7 +253,11 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     summary.lastEventType = tail?.type ?? null;
 
     // Extract the SDK session id from the most recent session.updated event,
-    // if any. The payload is { sdkSessionId?: string }.
+    // if any. `session.updated` is the SDK's own `system/init` frame, so the id
+    // arrives under the SDK's spelling, `session_id`; `sdkSessionId` is kept as
+    // a fallback for events journaled from an envelope. Reading only the latter
+    // left every summary null, and the web keys its transcript fetch on this
+    // value — a null meant the subagent dialog could never load one.
     const updated = db
       .prepare(
         "SELECT payload FROM run_events WHERE session_id = ? AND type = 'session.updated' ORDER BY session_sequence DESC LIMIT 1",
@@ -262,8 +266,8 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
     if (updated !== null) {
       try {
         const parsed = JSON.parse(updated.payload) as Record<string, unknown>;
-        const id = parsed["sdkSessionId"];
-        if (typeof id === "string" && id !== "") {
+        const id = sdkSessionIdFromEventPayload(parsed);
+        if (id !== undefined) {
           summary.sdkSessionId = id;
         }
       } catch {
@@ -273,4 +277,20 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
   }
 
   return summaries.sort((a, b) => b.lastIngestedAt - a.lastIngestedAt);
+}
+
+/**
+ * The SDK session id a `session.updated` payload names, under either spelling.
+ *
+ * The runner journals the SDK's `system/init` frame verbatim (minus secrets), so
+ * the id is `session_id`. The `sdkSessionId` spelling is what an older/hand-built
+ * envelope carried; accepting both costs nothing and keeps a replayed journal
+ * from a different runner version readable.
+ */
+function sdkSessionIdFromEventPayload(payload: Record<string, unknown>): string | undefined {
+  for (const key of ["session_id", "sdkSessionId"]) {
+    const value = payload[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return undefined;
 }

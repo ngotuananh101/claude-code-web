@@ -257,6 +257,31 @@ export type SessionMessage = {
   message: unknown;
   parentToolUseId?: string;
   agentId?: string;
+  /**
+   * The subagent's own metadata, projected from its transcript's `.meta.json`
+   * by the runner when the message belongs to a subagent.
+   *
+   * It travels per message because it is not in the transcript itself: a
+   * Workflow's launch text names the run, never the agents inside it, so
+   * without this the browser can only label an agent by its opaque id.
+   */
+  agentType?: string;
+  /** The agent's human label — `.meta.json`'s `description`. */
+  agentLabel?: string;
+  /** The workflow phase the agent ran in (`.meta.json`'s `workflowPhase`). */
+  workflowPhase?: string;
+  /**
+   * The `Workflow` tool call this message's agent runs under.
+   *
+   * Distinct from `parentToolUseId` because the two answer different questions.
+   * Every child of one run shares the Workflow call, so it cannot be the id that
+   * identifies any one of them — a consumer keying rows on `parentToolUseId`
+   * alone would collapse a five-agent run into a single row. The runner knows
+   * which parent is a run (it read the launch text), so it says so explicitly
+   * rather than making the browser infer it from an id it may never have seen:
+   * the call is often far outside the page of messages the browser asked for.
+   */
+  workflowToolUseId?: string;
 };
 
 /** The runner's answer to a `workspace.sessions.messages` command. */

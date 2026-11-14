@@ -119,13 +119,28 @@ describe("discoverWorkspaces", () => {
   test("custom workspaces from the db are merged in", async () => {
     const home = await makeFsRoot();
     const db = freshDb();
-    const custom = "/srv/custom";
+    // The row must name a real directory: a persisted workspace whose folder
+    // is gone is filtered out by the same on-disk check discovery applies to
+    // ~/.claude/projects entries.
+    const custom = await makeFsRoot();
     // addCustomWorkspace uses the given id; discovery must keep persisted ids.
     const { addCustomWorkspace } = await import("@cc-web/runner-db");
     addCustomWorkspace(db, { workspaceId: "custom-1", path: custom }, 1_000);
 
     const found = discoverWorkspaces(opts({ db, homeDir: home }));
     expect(found).toContainEqual({ workspaceId: "custom-1", path: custom });
+  });
+
+  test("a custom workspace whose folder is gone is not declared", async () => {
+    // The boot hazard this pins: hello() calls git in every declared path, and
+    // Bun.spawnSync throws on a missing cwd — a single stale row used to put
+    // the daemon in a systemd restart loop.
+    const home = await makeFsRoot();
+    const db = freshDb();
+    const { addCustomWorkspace } = await import("@cc-web/runner-db");
+    addCustomWorkspace(db, { workspaceId: "gone-1", path: "/nonexistent/cc-web/gone" }, 1_000);
+
+    expect(discoverWorkspaces(opts({ db, homeDir: home }))).toEqual([]);
   });
 
   test("projects under ~/.claude/projects are discovered and slugged", async () => {

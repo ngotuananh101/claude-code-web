@@ -12,7 +12,7 @@ import Composer from "../components/Composer.vue";
 import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
-import { liveActivityTasks, taskStateFromEvents } from "../features/journal/background-tasks.ts";
+import { taskStateFromEvents } from "../features/journal/background-tasks.ts";
 import {
   deriveSubagentItems,
   resolveSubagentDialogTab,
@@ -160,15 +160,13 @@ const liveRunId = computed(() => {
 });
 
 /**
- * Background work that outlived its run. Derived from the journal exactly like
- * the turns, so a replay rebuilds the same band. The level signal is what
- * decides: a missed `task.completed` cannot leave this list stuck.
- *
- * Deliberately independent of `liveRunId`: the Stop button stays tied to the
- * run, and this band is the honest indicator that something is still working.
+ * Every background task the journal has seen, live or settled — the map the
+ * spawning `Agent`/`Task` step joins by tool-use id (P2b). Derived from the
+ * journal exactly like the turns, so a replay rebuilds the same badge; the
+ * level signal decides liveness, so a missed `task.completed` cannot leave a
+ * task stuck as running.
  */
 const backgroundTaskState = computed(() => taskStateFromEvents(sessions.stream?.events ?? []));
-const backgroundTasks = computed(() => liveActivityTasks(backgroundTaskState.value));
 
 const subagentItems = computed(() =>
   deriveSubagentItems(
@@ -381,7 +379,6 @@ async function refreshNow(): Promise<void> {
               :events="sessions.stream.events"
               :needs-resync="sessions.stream.needsResync"
               :session-live="activeLive"
-              :background-tasks="backgroundTasks"
               :background-task-state="backgroundTaskState"
               :historical-messages="historicalMessages"
               :pending-run="activePendingRun"

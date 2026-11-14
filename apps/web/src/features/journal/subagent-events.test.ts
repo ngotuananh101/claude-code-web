@@ -36,6 +36,110 @@ function resetSeq(): void {
   seq = 0;
 }
 
+const WORKFLOW_TOOL_USE_ID = "call_00_zlmqteg6c7sxiru8lyea2eej";
+const WORKFLOW_RUN_ID = "wf_af8103d7-91f";
+
+/**
+ * The main transcript's half of a Workflow launch: the `Workflow` tool call and
+ * its result. Verified against a live transcript — the result is plain launch
+ * text, not JSON with a `workflowProgress` array (the SDK never emits that).
+ */
+function workflowLaunchMessages(): SessionMessage[] {
+  return [
+    {
+      type: "assistant",
+      uuid: "main-wf-call",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: WORKFLOW_TOOL_USE_ID,
+            name: "Workflow",
+            input: { script: "export const meta = { name: 'ytdlp-js-runtime-scout' }" },
+          },
+        ],
+      },
+    },
+    {
+      type: "user",
+      uuid: "main-wf-res",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: WORKFLOW_TOOL_USE_ID,
+            content: [
+              "Workflow launched in background. Task ID: wwgczx5jh",
+              "Summary: Verify quickjs-ng assets/digests, yt-dlp runtime discovery",
+              `Transcript dir: /home/u/.claude/projects/p/1591ce94/subagents/workflows/${WORKFLOW_RUN_ID}`,
+              `Script file: /home/u/.claude/projects/p/1591ce94/workflows/scripts/scout-${WORKFLOW_RUN_ID}.js`,
+              `Run ID: ${WORKFLOW_RUN_ID}`,
+              "You will be notified when it completes. Use /workflows to watch live progress.",
+            ].join("\n"),
+          },
+        ],
+      },
+    },
+  ];
+}
+
+/**
+ * One Workflow child's transcript as the runner projects it: a prompt, a tool
+ * call, its result, and the metadata the runner reads from the agent's
+ * `.meta.json` (`description` + `workflowPhase`) because the launch text names
+ * the run, never the agents inside it.
+ */
+function workflowAgentTranscript(
+  agentId: string,
+  description: string,
+  phase: string,
+  toolUseId: string,
+): SessionMessage[] {
+  // `workflowToolUseId` is the runner's statement that this agent runs under a
+  // Workflow call rather than an `Agent` call — the browser cannot infer it
+  // when the call itself falls outside the page of messages it asked for.
+  const meta = {
+    agentLabel: description,
+    agentType: "workflow-subagent",
+    workflowPhase: phase,
+    parentToolUseId: WORKFLOW_TOOL_USE_ID,
+    workflowToolUseId: WORKFLOW_TOOL_USE_ID,
+  };
+  return [
+    {
+      type: "user",
+      uuid: `${agentId}-prompt`,
+      agentId,
+      ...meta,
+      message: { role: "user", content: `Investigate ${description}` },
+    },
+    {
+      type: "assistant",
+      uuid: `${agentId}-step`,
+      agentId,
+      ...meta,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: toolUseId, name: "Read", input: { file_path: "apps/x.ts" } },
+        ],
+      },
+    },
+    {
+      type: "user",
+      uuid: `${agentId}-result`,
+      agentId,
+      ...meta,
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: toolUseId, content: "12 lines" }],
+      },
+    },
+  ];
+}
+
 describe("deriveSubagentItems", () => {
   test("groups live subagent tool steps, deltas and summary under the spawning subagent", () => {
     resetSeq();
@@ -442,61 +546,194 @@ describe("deriveSubagentItems", () => {
     expect(agentTurn?.kind === "agent" && agentTurn.text).toContain("Wrap both popovers");
   });
 
-  test("correlates Workflow subagents by agentId in both live frames (parent_tool_use_id: null) and historical Workflow tool_result + subagent transcripts", () => {
+  test("splits a Workflow's agents into their own items and labels them from the transcript metadata", () => {
+    resetSeq();
+    // The real shape the runner sees (verified against a live transcript): the
+    // Workflow tool_result is plain launch text, not JSON. There is no
+    // `workflowProgress` array anywhere in the SDK — the only place an agent's
+    // human label lives is its `.meta.json` (`description` + `workflowPhase`),
+    // which the runner projects onto that agent's messages.
+    const history: SessionMessage[] = [
+      ...workflowLaunchMessages(),
+      ...workflowAgentTranscript("a51c84ff15e3201f4", "plan-critique", "Scout", "toolu-wf-read-1"),
+      ...workflowAgentTranscript("a7678005adbe47337", "quickjs-assets", "Scout", "toolu-wf-read-2"),
+    ];
+
+    const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
+
+    // Two agents under one Workflow call are two subagents — not one merged row.
+    expect(items.map((i) => i.taskId)).toEqual(["a51c84ff15e3201f4", "a7678005adbe47337"]);
+    expect(items.map((i) => i.description)).toEqual(["plan-critique", "quickjs-assets"]);
+    // The phase is what the SDK calls the agent's workflow phase.
+    expect(items.map((i) => i.workflowName)).toEqual(["Scout", "Scout"]);
+    expect(items.map((i) => i.subagentType)).toEqual(["workflow-subagent", "workflow-subagent"]);
+    for (const item of items) {
+      // Each agent keeps its own tool history — this is the "0 events" symptom.
+      expect(item.events.filter((e) => e.kind === "tool")).toHaveLength(1);
+      expect(item.turns.map((t) => t.kind)).toEqual(["user", "agent"]);
+    }
+  });
+
+  test("splits a Workflow's children even when the Workflow call is outside the page", () => {
+    resetSeq();
+    // A long session puts its `Workflow` calls far behind the tail page the
+    // browser asked for, so the launch text is not in `historicalMessages` at
+    // all. `workflowToolUseId` is what the runner knows and the browser cannot
+    // infer: without it these three children share one `parentToolUseId`, get
+    // keyed on it, and collapse back into a single renaming row — the original
+    // "5 spawned, 1 shown" symptom, arriving by a different road.
+    const history: SessionMessage[] = [
+      ...workflowAgentTranscript("a51c84ff15e3201f4", "plan-critique", "Scout", "toolu-wf-read-1"),
+      ...workflowAgentTranscript("a7678005adbe47337", "quickjs-assets", "Scout", "toolu-wf-read-2"),
+      ...workflowAgentTranscript("a648ed22b0223633f", "test-inventory", "Scout", "toolu-wf-read-3"),
+    ];
+
+    const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
+
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.description)).toEqual([
+      "plan-critique",
+      "quickjs-assets",
+      "test-inventory",
+    ]);
+    // Each child reports the call it runs under, never as its own identity.
+    for (const item of items) {
+      expect(item.workflowToolUseId).toBe(WORKFLOW_TOOL_USE_ID);
+      expect(item.toolUseId).toBeUndefined();
+      expect(item.events.filter((e) => e.kind === "tool")).toHaveLength(1);
+    }
+  });
+
+  test("inspecting the Workflow call selects one of its children", () => {
+    resetSeq();
+    // The main-screen `Workflow` step is the entry point into the inspector, and
+    // it only knows the call's tool-use id. The run's own row is gone, so that
+    // id has to resolve through a child — falling back to "the first item" would
+    // open the wrong subagent.
+    const history: SessionMessage[] = [
+      ...workflowAgentTranscript("a51c84ff15e3201f4", "plan-critique", "Scout", "toolu-wf-read-1"),
+      ...workflowAgentTranscript("a7678005adbe47337", "quickjs-assets", "Scout", "toolu-wf-read-2"),
+    ];
+    const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
+
+    const selected = resolveSelectedSubagentId(items, WORKFLOW_TOOL_USE_ID);
+
+    expect(items.find((i) => i.id === selected)?.workflowToolUseId).toBe(WORKFLOW_TOOL_USE_ID);
+  });
+
+  test("keeps a Workflow's container row only while it has no readable children", () => {
+    resetSeq();
+    // The SDK reports the run itself as a `local_workflow` background task whose
+    // `description` cycles through each agent's label ("Scout: plan-critique" →
+    // "Scout: ytdlp-discovery"). A child agent is the real subagent, so the row
+    // is a stand-in: it must disappear as soon as one child is known, and must
+    // survive when the children's transcripts are not readable yet — otherwise
+    // a live workflow with nothing to split shows no subagent at all.
+    const events: BrowserReplayEvent[] = [
+      liveEvent("task.started", {
+        taskId: "wwgczx5jh",
+        runId: "run-wf",
+        description: "Verify quickjs-ng assets",
+        taskType: "local_workflow",
+        workflowName: "ytdlp-js-runtime-scout",
+        toolUseId: WORKFLOW_TOOL_USE_ID,
+      }),
+      liveEvent("task.progress", {
+        taskId: "wwgczx5jh",
+        runId: "run-wf",
+        description: "Scout: plan-critique",
+        lastToolName: "plan-critique",
+      }),
+    ];
+
+    const alone = deriveSubagentItems([], events, taskStateFromEvents(events));
+    expect(alone.map((i) => i.taskId)).toEqual(["wwgczx5jh"]);
+
+    const withChildren = deriveSubagentItems(
+      [
+        ...workflowLaunchMessages(),
+        ...workflowAgentTranscript(
+          "a51c84ff15e3201f4",
+          "plan-critique",
+          "Scout",
+          "toolu-wf-read-1",
+        ),
+      ],
+      events,
+      taskStateFromEvents(events),
+    );
+
+    // Only the child remains — the run's own row is gone, not renamed.
+    expect(withChildren.map((i) => i.taskId)).toEqual(["a51c84ff15e3201f4"]);
+  });
+
+  test("keeps an Agent subagent whose transcript the runner could not label", () => {
+    resetSeq();
+    // A missing/unreadable `.meta.json` must degrade to today's behaviour (the
+    // agent id as the label) rather than dropping the subagent: the transcript
+    // is still there and its tool history is the point.
+    const history: SessionMessage[] = [
+      {
+        type: "assistant",
+        uuid: "unlabelled-step",
+        agentId: "a51c84ff15e3201f4",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu-x", name: "Read", input: { file_path: "a.ts" } },
+          ],
+        },
+      },
+    ];
+
+    const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.description).toBe("a51c84ff15e3201f4");
+    expect(items[0]?.events.filter((e) => e.kind === "tool")).toHaveLength(1);
+  });
+
+  test("correlates Agent subagents by agentId in live frames and historical tool_result + transcripts", () => {
     resetSeq();
     const history: SessionMessage[] = [
       {
         type: "assistant",
-        uuid: "main-wf-call",
+        uuid: "main-agent-call",
         message: {
           role: "assistant",
           content: [
             {
               type: "tool_use",
-              id: "toolu-wf-1",
-              name: "Workflow",
-              input: { script: "export const meta = { name: 'audit' }" },
+              id: "toolu-agent-1",
+              name: "Agent",
+              input: { description: "Audit scroll area", subagent_type: "Explore" },
             },
           ],
         },
       },
       {
         type: "user",
-        uuid: "main-wf-res",
+        uuid: "main-agent-res",
         message: {
           role: "user",
           content: [
             {
               type: "tool_result",
-              tool_use_id: "toolu-wf-1",
-              content: JSON.stringify({
-                summary: "Audit workflow",
-                workflowProgress: [
-                  {
-                    type: "workflow_agent",
-                    agentId: "ae3454d16c5171399",
-                    label: "investigate:scrollarea",
-                    phaseTitle: "Investigate",
-                    state: "done",
-                    tokens: 18715,
-                    toolCalls: 2,
-                    durationMs: 14000,
-                  },
-                ],
-              }),
+              tool_use_id: "toolu-agent-1",
+              content: "Async agent launched.\nagentId: ae3454d16c5171399",
             },
           ],
         },
       },
       {
         type: "user",
-        uuid: "wf-sub-prompt",
+        uuid: "sub-prompt",
         agentId: "ae3454d16c5171399",
         message: { role: "user", content: "Check ScrollArea.vue" },
       },
       {
         type: "assistant",
-        uuid: "wf-sub-step",
+        uuid: "sub-step",
         agentId: "ae3454d16c5171399",
         message: {
           role: "assistant",
@@ -512,7 +749,7 @@ describe("deriveSubagentItems", () => {
       },
       {
         type: "user",
-        uuid: "wf-sub-tool-res",
+        uuid: "sub-tool-res",
         agentId: "ae3454d16c5171399",
         message: {
           role: "user",
@@ -523,17 +760,17 @@ describe("deriveSubagentItems", () => {
 
     const items = deriveSubagentItems(history, [], EMPTY_TASK_STATE);
     expect(items).toHaveLength(1);
-    const wfSub = items[0]!;
-    expect(wfSub.taskId).toBe("ae3454d16c5171399");
-    expect(wfSub.description).toBe("investigate:scrollarea");
-    expect(wfSub.workflowName).toBe("Investigate");
-    expect(wfSub.status).toBe("completed");
-    expect(wfSub.usage).toEqual({ totalTokens: 18715, toolUses: 2, durationMs: 14000 });
-    expect(wfSub.events.filter((e) => e.kind === "tool")).toHaveLength(1);
-    expect(wfSub.turns.map((t) => t.kind)).toEqual(["user", "agent"]);
+    const sub = items[0]!;
+    expect(sub.taskId).toBe("ae3454d16c5171399");
+    expect(sub.toolUseId).toBe("toolu-agent-1");
+    // No `.meta.json` label on these messages: the spawning input supplies it.
+    expect(sub.description).toBe("Audit scroll area");
+    expect(sub.subagentType).toBe("Explore");
+    expect(sub.events.filter((e) => e.kind === "tool")).toHaveLength(1);
+    expect(sub.turns.map((t) => t.kind)).toEqual(["user", "agent"]);
 
-    // Also verify replayed live events where a legacy tool.completed lacks agentId/parentToolUseId
-    // still resolves the subagent tool step by its globally unique toolCallId:
+    // A replayed live frame the legacy journal wrote without agentId still
+    // resolves the subagent's tool step by its globally unique toolCallId.
     const liveWfEvents: BrowserReplayEvent[] = [
       liveEvent("task.started", {
         taskId: "wf-live-1",

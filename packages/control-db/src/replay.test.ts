@@ -307,4 +307,57 @@ describe("listing an owner's sessions", () => {
     const sessions = listSessions(db, "owner-1");
     expect(sessions.map((s) => s.sessionId)).toEqual(["session-new", "session-old"]);
   });
+
+  test("carries the SDK session id the runner journaled in session.updated", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    // The event the runner actually writes: `eventTypeOf` folds the SDK's
+    // `system/init` frame into `session.updated` and the payload is that frame,
+    // so the id sits in `session_id` — the SDK's own spelling, not ours.
+    ingestEvent(
+      db,
+      event({
+        type: "session.updated",
+        payload: {
+          type: "system",
+          subtype: "init",
+          session_id: "1591ce94-7136-4c96-8eee-a326b5b28661",
+        },
+      }),
+    );
+
+    const [summary] = listSessions(db, "owner-1");
+
+    // Without this the web has nothing to ask the runner for: the transcript
+    // fetch is keyed on exactly this value, so a null here means the subagent
+    // dialog can never load history for a session opened cold.
+    expect(summary?.sdkSessionId).toBe("1591ce94-7136-4c96-8eee-a326b5b28661");
+  });
+
+  test("the newest session.updated wins", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    ingestEvent(db, event({ type: "session.updated", payload: { session_id: "sdk-old" } }));
+    ingestEvent(
+      db,
+      event({
+        type: "session.updated",
+        payload: { session_id: "sdk-new" },
+        eventId: "evt-2",
+        localSequence: 2,
+      }),
+    );
+
+    const [summary] = listSessions(db, "owner-1");
+    expect(summary?.sdkSessionId).toBe("sdk-new");
+  });
+
+  test("a session with no session.updated reports no SDK id", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    seedSession(db, "session-1", 2);
+
+    const [summary] = listSessions(db, "owner-1");
+    expect(summary?.sdkSessionId).toBeNull();
+  });
 });

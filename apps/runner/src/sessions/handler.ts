@@ -32,6 +32,18 @@ import {
   type SessionsListResult,
 } from "@cc-web/protocol";
 import { redactErrorText, redactSdkMessage } from "../execution/redact.ts";
+import {
+  extractAgentIdFromResultText,
+  extractWorkflowLaunchMap,
+  readWorkflowLaunchMapFromTranscript,
+} from "./subagent-launch.ts";
+import {
+  claudeProjectsDir,
+  readSubagentMetaIndex,
+  type SubagentMeta,
+  type SubagentMetaIndex,
+  sessionTranscriptPath,
+} from "./subagent-meta.ts";
 
 const MAX_SUBAGENTS_PER_SESSION = 30;
 const MAX_SUBAGENT_MESSAGES_LIMIT = 100;
@@ -89,6 +101,12 @@ export type SessionsHandlerOptions = {
    * cost of importing the bundled binary.
    */
   sdk?: SessionsSdk;
+  /**
+   * Where Claude Code keeps its project transcripts — the directory holding
+   * subagent `.meta.json` files. Defaults to `CLAUDE_CONFIG_DIR`/`~/.claude`
+   * via `claudeProjectsDir()`; tests point it at a fixture tree.
+   */
+  projectsDir?: string;
 };
 
 /** Advisory: which optional command kinds this runner implements. */
@@ -196,12 +214,20 @@ export function createSessionsHandler(
           sdk.listSubagents !== undefined &&
           sdk.getSubagentMessages !== undefined
         ) {
+          const metaIndex = readMetaIndex(options, msgRequest.sessionId);
+          const workflowRunToToolUseId = readWorkflowLaunchMap(
+            options,
+            msgRequest.sessionId,
+            messages,
+          );
           const subagentMessages = await loadSubagentSessionMessages(
             sdk as Required<Pick<SessionsSdk, "listSubagents" | "getSubagentMessages">>,
             msgRequest.sessionId,
             resolvedDir,
             Math.min(limit, MAX_SUBAGENT_MESSAGES_LIMIT),
             messages,
+            metaIndex,
+            workflowRunToToolUseId,
           );
           mapped.push(...subagentMessages);
         }
@@ -222,6 +248,46 @@ function resolveSdk(options: SessionsHandlerOptions): SessionsSdk {
   // Lazy require so importing this module in tests does not load the bundled
   // binary. `require` is Bun's synchronous loader (§20.3).
   return require("@anthropic-ai/claude-agent-sdk") as SessionsSdk;
+}
+
+/**
+ * The subagent metadata on disk for this session.
+ *
+ * `sessions.messages` must still answer when the meta files are unreadable —
+ * they are decoration beside the transcripts, so a scan failure degrades the
+ * labels, never the result.
+ */
+function readMetaIndex(options: SessionsHandlerOptions, sessionId: string): SubagentMetaIndex {
+  try {
+    const projectsDir = options.projectsDir ?? claudeProjectsDir();
+    return readSubagentMetaIndex(projectsDir, sessionId);
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Which `Workflow` call launched each run this session started.
+ *
+ * The page the caller asked for normally holds the call, and then the cheap
+ * in-memory scan answers. A long session puts its `Workflow` calls far behind
+ * the tail page, though, and a run old enough to inspect is exactly when that
+ * happens — so the transcript file is consulted as well, and its answer wins:
+ * it is the complete record, while the page is a window.
+ */
+function readWorkflowLaunchMap(
+  options: SessionsHandlerOptions,
+  sessionId: string,
+  mainMessages: readonly SDKSessionMessage[],
+): Map<string, string> {
+  try {
+    const projectsDir = options.projectsDir ?? claudeProjectsDir();
+    const file = sessionTranscriptPath(projectsDir, sessionId);
+    if (file !== undefined) return readWorkflowLaunchMapFromTranscript(file);
+  } catch {
+    // Fall through to the page the caller holds.
+  }
+  return extractWorkflowLaunchMap(mainMessages);
 }
 
 function clampLimit(value: number | undefined, defaultLimit: number, maxLimit: number): number {
@@ -255,7 +321,14 @@ function redactMessageField(value: unknown): unknown {
 
 function toSessionMessage(
   msg: SDKSessionMessage,
-  extra?: { agentId?: string; parentToolUseId?: string },
+  extra?: {
+    agentId?: string;
+    parentToolUseId?: string;
+    workflowToolUseId?: string;
+    agentType?: string;
+    agentLabel?: string;
+    workflowPhase?: string;
+  },
 ): SessionMessage {
   const out: SessionMessage = {
     type: msg.type,
@@ -269,11 +342,15 @@ function toSessionMessage(
   if (parentId !== undefined && parentId !== "") {
     out.parentToolUseId = parentId;
   }
+  if (extra?.workflowToolUseId !== undefined) out.workflowToolUseId = extra.workflowToolUseId;
   const agentId =
     typeof msg.agent_id === "string" && msg.agent_id !== "" ? msg.agent_id : extra?.agentId;
   if (agentId !== undefined && agentId !== "") {
     out.agentId = agentId;
   }
+  if (extra?.agentType !== undefined) out.agentType = extra.agentType;
+  if (extra?.agentLabel !== undefined) out.agentLabel = extra.agentLabel;
+  if (extra?.workflowPhase !== undefined) out.workflowPhase = extra.workflowPhase;
   return out;
 }
 
@@ -329,10 +406,9 @@ function extractAgentIdToToolUseIdMap(
         if (rec["type"] !== "tool_result") continue;
         const toolUseId = rec["tool_use_id"];
         if (typeof toolUseId !== "string" || !subagentToolUseIds.has(toolUseId)) continue;
-        const text = flattenResultText(rec["content"]);
-        const match = /\bagentId:\s*([A-Za-z0-9_-]+)/.exec(text);
-        if (match?.[1] !== undefined) {
-          agentIdToToolUseId.set(match[1], toolUseId);
+        const agentId = extractAgentIdFromResultText(flattenResultText(rec["content"]));
+        if (agentId !== undefined) {
+          agentIdToToolUseId.set(agentId, toolUseId);
         }
       }
     }
@@ -341,12 +417,50 @@ function extractAgentIdToToolUseIdMap(
   return agentIdToToolUseId;
 }
 
+/** The metadata a subagent's messages travel with, when its meta file exists. */
+type SubagentContext = {
+  agentType?: string;
+  agentLabel?: string;
+  workflowPhase?: string;
+};
+
+function contextOf(meta: SubagentMeta | undefined): SubagentContext {
+  if (meta === undefined) return {};
+  return {
+    ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
+    ...(meta.description !== undefined ? { agentLabel: meta.description } : {}),
+    ...(meta.workflowPhase !== undefined ? { workflowPhase: meta.workflowPhase } : {}),
+  };
+}
+
+/**
+ * Load every subagent transcript this session has and project it into
+ * `SessionMessage`s carrying their own routing keys.
+ *
+ * `parentToolUseId` is what tells the browser which spawning block a subagent
+ * belongs to, and it is resolved differently per kind:
+ *
+ *  - an `Agent`/`Task` child names its spawner in the result text (`agentId:`),
+ *    which `extractAgentIdToToolUseIdMap` matches back to the tool_use id; when
+ *    the main transcript does not reach far enough back to hold that block
+ *    (it is read with a `limit`), the child's own meta file names it instead;
+ *  - a `Workflow` child names nothing — its meta file carries only the run id,
+ *    and the run id is what pairs it with the `Workflow` call. Its meta file's
+ *    `toolUseId` is deliberately ignored: for a workflow child it is absent,
+ *    and if a future SDK version writes the run's id there it is still the run
+ *    that is the parent.
+ *
+ * A subagent with no recoverable parent is still returned (with `agentId`
+ * only) — its transcript is worth showing even when the link is missing.
+ */
 async function loadSubagentSessionMessages(
   sdk: Required<Pick<SessionsSdk, "listSubagents" | "getSubagentMessages">>,
   sessionId: string,
   resolvedDir: string | undefined,
   perSubagentLimit: number,
   mainMessages: readonly SDKSessionMessage[],
+  metaIndex: SubagentMetaIndex,
+  workflowRunToToolUseId: ReadonlyMap<string, string>,
 ): Promise<SessionMessage[]> {
   let subagentIds: string[];
   try {
@@ -371,11 +485,24 @@ async function loadSubagentSessionMessages(
           ...(resolvedDir !== undefined ? { dir: resolvedDir } : {}),
           limit: perSubagentLimit,
         });
-        const parentToolUseId = agentIdToToolUseId.get(agentId);
+        const meta = metaIndex.get(agentId);
+        // A workflow child's parent is the run's `Workflow` call, and it is
+        // reported as such: every child of one run shares that id, so a
+        // consumer treating it as the child's own identity merges them.
+        const workflowToolUseId =
+          meta?.workflowRunId !== undefined
+            ? workflowRunToToolUseId.get(meta.workflowRunId)
+            : undefined;
+        const parentToolUseId =
+          agentIdToToolUseId.get(agentId) ??
+          (meta?.workflowRunId !== undefined ? workflowToolUseId : meta?.toolUseId);
+        const context = contextOf(meta);
         return subMsgs.map((subMsg) =>
           toSessionMessage(subMsg, {
             agentId,
             ...(parentToolUseId !== undefined ? { parentToolUseId } : {}),
+            ...(workflowToolUseId !== undefined ? { workflowToolUseId } : {}),
+            ...context,
           }),
         );
       } catch {

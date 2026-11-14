@@ -1,13 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyTaskEvent,
+  type BackgroundTaskState,
   EMPTY_TASK_STATE,
   formatTaskElapsed,
-  liveActivityTasks,
   taskStateFromEvents,
 } from "./background-tasks.ts";
 
 const at = (n: number) => `2026-11-01T00:00:0${n}.000Z`;
+
+/** The live set, sorted so assertions do not depend on insertion order. */
+function liveIds(state: BackgroundTaskState): string[] {
+  return [...state.liveTaskIds].sort();
+}
 
 describe("background task state", () => {
   test("started adds a live task; tasks.changed replaces the live set", () => {
@@ -16,14 +21,14 @@ describe("background task state", () => {
       occurredAt: at(1),
       payload: { taskId: "a", description: "Sweep", subagentType: "Explore", ambient: false },
     });
-    expect(liveActivityTasks(state).map((t) => t.taskId)).toEqual(["a"]);
+    expect(liveIds(state)).toEqual(["a"]);
 
     state = applyTaskEvent(state, {
       type: "tasks.changed",
       occurredAt: at(2),
       payload: { tasks: [] },
     });
-    expect(liveActivityTasks(state)).toEqual([]);
+    expect(liveIds(state)).toEqual([]);
   });
 
   test("an edge that never got its completion cannot survive a level reset", () => {
@@ -37,7 +42,7 @@ describe("background task state", () => {
     ]);
     // The task row survives for history, but nothing is live.
     expect(state.tasks.has("a")).toBe(true);
-    expect(liveActivityTasks(state)).toEqual([]);
+    expect(liveIds(state)).toEqual([]);
   });
 
   test("progress and completion update the row", () => {
@@ -51,7 +56,7 @@ describe("background task state", () => {
       occurredAt: at(2),
       payload: { taskId: "a", lastToolName: "Bash", summary: "working" },
     });
-    expect(liveActivityTasks(state)[0]?.lastToolName).toBe("Bash");
+    expect(state.tasks.get("a")?.lastToolName).toBe("Bash");
 
     state = applyTaskEvent(state, {
       type: "task.completed",
@@ -67,17 +72,20 @@ describe("background task state", () => {
     expect(task?.status).toBe("completed");
     expect(task?.summary).toBe("done");
     expect(task?.usage).toEqual({ totalTokens: 120, toolUses: 2, durationMs: 3000 });
-    expect(liveActivityTasks(state)).toEqual([]);
+    expect(liveIds(state)).toEqual([]);
   });
 
-  test("ambient tasks never appear in the activity list", () => {
+  test("the ambient flag is recorded on the row", () => {
+    // Liveness is the reducer's business; whether a task is shown at all was
+    // the band's, and the band is gone — the spawning badge filters by the
+    // tool-use join instead. The flag still has to travel.
     const state = applyTaskEvent(EMPTY_TASK_STATE, {
       type: "task.started",
       occurredAt: at(1),
       payload: { taskId: "a", description: "Watcher", ambient: true },
     });
     expect(state.tasks.has("a")).toBe(true);
-    expect(liveActivityTasks(state)).toEqual([]);
+    expect(state.tasks.get("a")?.ambient).toBe(true);
   });
 
   test("progress records the runId so a later older-run frame is ignored", () => {
@@ -120,14 +128,14 @@ describe("background task state", () => {
     expect(state.tasks.get("a")?.runId).toBe("run-2");
   });
 
-  test("skip-transcript tasks never appear in the activity list", () => {
+  test("the skip-transcript flag is recorded on the row", () => {
     const state = applyTaskEvent(EMPTY_TASK_STATE, {
       type: "task.started",
       occurredAt: at(1),
       payload: { taskId: "a", description: "Watcher", skipTranscript: true, ambient: false },
     });
     expect(state.tasks.has("a")).toBe(true);
-    expect(liveActivityTasks(state)).toEqual([]);
+    expect(state.tasks.get("a")?.skipTranscript).toBe(true);
   });
 
   test("a late update from an older run is ignored", () => {

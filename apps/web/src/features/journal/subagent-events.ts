@@ -53,6 +53,12 @@ export type SubagentItem = {
   id: string;
   taskId?: string;
   toolUseId?: string;
+  /**
+   * The `Workflow` tool call this subagent runs under, when it is a workflow
+   * child. Deliberately not `toolUseId`: every child of one run shares the
+   * call, so adopting it would collide with its siblings.
+   */
+  workflowToolUseId?: string;
   description: string;
   subagentType?: string;
   workflowName?: string;
@@ -79,6 +85,24 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function isSubagentToolName(name: string): boolean {
   return name === "Agent" || name === "Task";
+}
+
+/**
+ * A Workflow run as a background task: the container, not a subagent.
+ *
+ * The SDK reports the run itself as a `local_workflow` task whose `description`
+ * cycles through each child's label ("Scout: plan-critique" → "Scout:
+ * ytdlp-discovery"), so folding the children into it produces one row that
+ * renames itself while the agents it contains — the ones with transcripts to
+ * read — stay hidden behind it.
+ *
+ * The row is still the only signal of a running workflow before any child
+ * transcript has been read (a live run, a cold open of a session whose
+ * transcripts have not loaded yet), so it is kept as a fallback and dropped
+ * only once its children are present.
+ */
+function isWorkflowContainerTask(taskType: string | undefined): boolean {
+  return taskType === "local_workflow";
 }
 
 function isHousekeepingAgentId(id: string): boolean {
@@ -123,51 +147,20 @@ function extractAgentIdFromText(text: string): string | undefined {
   return match?.[1];
 }
 
-type WorkflowAgentProgressEntry = {
-  agentId: string;
-  label?: string;
-  phaseTitle?: string;
-  state?: string;
-  startedAt?: number;
-  lastProgressAt?: number;
-  tokens?: number;
-  toolCalls?: number;
-  durationMs?: number;
-};
-
-function extractWorkflowAgentsFromText(text: string): WorkflowAgentProgressEntry[] {
-  if (!text.includes("workflowProgress")) return [];
-  try {
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    const progress = parsed?.["workflowProgress"];
-    if (!Array.isArray(progress)) return [];
-    const entries: WorkflowAgentProgressEntry[] = [];
-    for (const raw of progress) {
-      const rec = asRecord(raw);
-      if (rec?.["type"] !== "workflow_agent") continue;
-      const agentId = asString(rec["agentId"]);
-      if (agentId === undefined) continue;
-      const label = asString(rec["label"]);
-      const phaseTitle = asString(rec["phaseTitle"]);
-      const state = asString(rec["state"]);
-      entries.push({
-        agentId,
-        ...(label !== undefined ? { label } : {}),
-        ...(phaseTitle !== undefined ? { phaseTitle } : {}),
-        ...(state !== undefined ? { state } : {}),
-        ...(typeof rec["startedAt"] === "number" ? { startedAt: rec["startedAt"] } : {}),
-        ...(typeof rec["lastProgressAt"] === "number"
-          ? { lastProgressAt: rec["lastProgressAt"] }
-          : {}),
-        ...(typeof rec["tokens"] === "number" ? { tokens: rec["tokens"] } : {}),
-        ...(typeof rec["toolCalls"] === "number" ? { toolCalls: rec["toolCalls"] } : {}),
-        ...(typeof rec["durationMs"] === "number" ? { durationMs: rec["durationMs"] } : {}),
-      });
-    }
-    return entries;
-  } catch {
-    return [];
-  }
+/** The metadata the runner projects onto a subagent's messages from `.meta.json`. */
+function agentMetaOf(message: SessionMessage): {
+  agentLabel?: string;
+  agentType?: string;
+  workflowPhase?: string;
+} {
+  const meta: { agentLabel?: string; agentType?: string; workflowPhase?: string } = {};
+  const label = asString(message.agentLabel);
+  if (label !== undefined) meta.agentLabel = label;
+  const agentType = asString(message.agentType);
+  if (agentType !== undefined) meta.agentType = agentType;
+  const workflowPhase = asString(message.workflowPhase);
+  if (workflowPhase !== undefined) meta.workflowPhase = workflowPhase;
+  return meta;
 }
 
 type ToolResultEntry = {
@@ -246,6 +239,7 @@ type MutableSubagent = {
   id: string;
   taskId?: string;
   toolUseId?: string;
+  workflowToolUseId?: string;
   hasTaskRecord: boolean;
   description: string;
   subagentType?: string;
@@ -473,12 +467,78 @@ export function deriveSubagentItems(
   const ignoredTaskIds = new Set<string>();
   const ignoredToolUseIds = new Set<string>();
   const workflowToolUseIds = new Set<string>();
+  /** Workflow containers, keyed by the Workflow tool call their row stands for. */
+  const workflowContainers = new Map<string, MutableSubagent>();
+  /**
+   * The subagent rows that belong to each Workflow call.
+   *
+   * A Workflow child points at the Workflow call through `parentToolUseId`, but
+   * it must not adopt the call's `toolUseId` as its own: several children share
+   * one call, so an identity keyed on it would merge them back into the single
+   * renaming row this whole split exists to undo. The relation is recorded here
+   * instead — enough to drop the container row once a child exists, and to let
+   * "inspect this call" select one of its children.
+   */
+  const workflowChildren = new Map<string, Set<MutableSubagent>>();
+
+  function recordWorkflowChild(workflowToolUseId: string, acc: MutableSubagent): void {
+    // Points at the call, never at itself — see `SubagentItem.workflowToolUseId`.
+    acc.workflowToolUseId ??= workflowToolUseId;
+    let children = workflowChildren.get(workflowToolUseId);
+    if (children === undefined) {
+      children = new Set();
+      workflowChildren.set(workflowToolUseId, children);
+    }
+    children.add(acc);
+  }
+
+  /**
+   * The row for one child of a Workflow run, keyed by the child's own agent id.
+   *
+   * A workflow's children all report the same `parentToolUseId` (the `Workflow`
+   * call), so the parent cannot be their identity — that is the merge this
+   * whole split undoes. Their agent id is unique, and the call is recorded
+   * separately.
+   */
+  function workflowChildAcc(
+    workflowToolUseId: string,
+    agentId: string,
+  ): MutableSubagent | undefined {
+    const acc = ensureByTaskId(agentId);
+    if (acc !== undefined) recordWorkflowChild(workflowToolUseId, acc);
+    return acc;
+  }
 
   // 1. Seed from BackgroundTaskState (authoritative for live status, usage, elapsed).
   for (const task of taskState.tasks.values()) {
     if (task.ambient || task.skipTranscript === true || isHousekeepingAgentId(task.taskId)) {
       ignoredTaskIds.add(task.taskId);
       if (task.toolUseId !== undefined) ignoredToolUseIds.add(task.toolUseId);
+      continue;
+    }
+    if (isWorkflowContainerTask(task.taskType)) {
+      // Kept as a fallback row (see `isWorkflowContainerTask`), and its
+      // toolUseId is the Workflow call itself: the call must never grow into a
+      // subagent accumulator of its own.
+      if (task.toolUseId !== undefined) workflowToolUseIds.add(task.toolUseId);
+      const container = createEmptyAccumulator(task.taskId);
+      container.taskId = task.taskId;
+      container.hasTaskRecord = true;
+      container.description = task.description;
+      if (task.toolUseId !== undefined) container.toolUseId = task.toolUseId;
+      if (task.workflowName !== undefined) container.workflowName = task.workflowName;
+      container.status =
+        task.status === "running" && !taskState.liveTaskIds.has(task.taskId)
+          ? "completed"
+          : task.status;
+      container.startedAt = task.startedAt;
+      container.updatedAt = task.updatedAt;
+      if (task.status !== "running") container.completedAt = task.updatedAt;
+      if (task.usage !== undefined) container.usage = task.usage;
+      if (task.summary !== undefined) container.summary = task.summary;
+      ordered.push(container);
+      byTaskId.set(task.taskId, container);
+      if (task.toolUseId !== undefined) workflowContainers.set(task.toolUseId, container);
       continue;
     }
     const acc = createEmptyAccumulator(task.taskId);
@@ -602,7 +662,14 @@ export function deriveSubagentItems(
       return linkTaskAndToolUse(agentId, parentId);
     }
     if (agentId !== undefined) {
-      return ensureByTaskId(agentId);
+      const acc = ensureByTaskId(agentId);
+      // A Workflow child names the run's call as its parent but belongs under
+      // it, not inside it: remember the relation so the container row can be
+      // dropped once a real child shows up.
+      if (acc !== undefined && parentId !== undefined && workflowToolUseIds.has(parentId)) {
+        recordWorkflowChild(parentId, acc);
+      }
+      return acc;
     }
     if (parentId !== undefined) {
       return ensureByToolUseId(parentId);
@@ -620,45 +687,24 @@ export function deriveSubagentItems(
     if (acc.prompt === undefined && prompt !== undefined) acc.prompt = prompt;
   }
 
-  function applyWorkflowAgentEntries(entries: readonly WorkflowAgentProgressEntry[]): void {
-    for (const entry of entries) {
-      const wfAcc = ensureByTaskId(entry.agentId);
-      if (wfAcc === undefined) continue;
-      if (wfAcc.description === "" && entry.label !== undefined) {
-        wfAcc.description = entry.label;
-      }
-      if (wfAcc.workflowName === undefined && entry.phaseTitle !== undefined) {
-        wfAcc.workflowName = entry.phaseTitle;
-      }
-      wfAcc.subagentType ??= "workflow-subagent";
-      if (!wfAcc.hasTaskRecord && entry.state !== undefined) {
-        wfAcc.status =
-          entry.state === "done"
-            ? "completed"
-            : entry.state === "error" || entry.state === "failed"
-              ? "failed"
-              : entry.state === "stopped" || entry.state === "killed"
-                ? "stopped"
-                : "running";
-      }
-      if (wfAcc.startedAt === undefined && entry.startedAt !== undefined) {
-        wfAcc.startedAt = new Date(entry.startedAt).toISOString();
-      }
-      if (wfAcc.updatedAt === undefined && entry.lastProgressAt !== undefined) {
-        wfAcc.updatedAt = new Date(entry.lastProgressAt).toISOString();
-      }
-      if (
-        wfAcc.usage === undefined &&
-        entry.tokens !== undefined &&
-        entry.toolCalls !== undefined &&
-        entry.durationMs !== undefined
-      ) {
-        wfAcc.usage = {
-          totalTokens: entry.tokens,
-          toolUses: entry.toolCalls,
-          durationMs: entry.durationMs,
-        };
-      }
+  /**
+   * The agent's own label, as the runner projected it from its `.meta.json`.
+   *
+   * A Workflow child's launch text names the run, never the agents inside it,
+   * so without this a workflow agent can only be shown by its opaque id. The
+   * spawning input is the better label for an Agent/Task child (it is what the
+   * model wrote), so meta only fills a blank.
+   */
+  function applyAgentMeta(
+    acc: MutableSubagent,
+    meta: { agentLabel?: string; agentType?: string; workflowPhase?: string },
+  ): void {
+    if (acc.description === "" && meta.agentLabel !== undefined) acc.description = meta.agentLabel;
+    if (acc.subagentType === undefined && meta.agentType !== undefined) {
+      acc.subagentType = meta.agentType;
+    }
+    if (acc.workflowName === undefined && meta.workflowPhase !== undefined) {
+      acc.workflowName = meta.workflowPhase;
     }
   }
 
@@ -703,14 +749,6 @@ export function deriveSubagentItems(
     } else if (message.type === "user") {
       for (const res of extractToolResults(msg)) {
         const text = extractResultSummary(res.content);
-        if (text !== null) {
-          const wfEntries = extractWorkflowAgentsFromText(text);
-          if (wfEntries.length > 0) {
-            workflowToolUseIds.add(res.toolUseId);
-            applyWorkflowAgentEntries(wfEntries);
-            continue;
-          }
-        }
         let acc = byToolUseId.get(res.toolUseId);
         if (acc !== undefined && text !== null) {
           const linkedAgentId = extractAgentIdFromText(text);
@@ -740,8 +778,22 @@ export function deriveSubagentItems(
     if (agentId !== undefined && liveAgentIds.has(agentId)) continue;
     if (parentId !== undefined && liveParentToolUseIds.has(parentId)) continue;
 
-    const acc = resolveSubagentAcc(agentId, parentId);
+    // `workflowToolUseId` is the runner's own statement that this agent runs
+    // under a Workflow rather than an Agent call. Without it the browser has to
+    // guess from `parentToolUseId`, and it only learns a call is a Workflow's
+    // when the call itself is in the page it holds — so a long session's
+    // children would merge onto one row keyed by that shared id.
+    const workflowToolUseId = asString(message.workflowToolUseId);
+    const acc =
+      workflowToolUseId !== undefined && agentId !== undefined
+        ? workflowChildAcc(workflowToolUseId, agentId)
+        : resolveSubagentAcc(agentId, parentId);
     if (acc === undefined) continue;
+
+    // The agent's own metadata, which the runner reads from its `.meta.json`.
+    // Applied before the message's content so the label is set even for an
+    // agent whose first routed message is a tool call.
+    applyAgentMeta(acc, agentMetaOf(message));
 
     const msg = asRecord(message.message);
     if (message.type === "assistant") {
@@ -931,25 +983,6 @@ export function deriveSubagentItems(
       } else if (event.type === "tool.completed") {
         const toolCallId = asString(payload["toolCallId"]);
         const outSummary = asString(payload["outputSummary"]);
-        if (outSummary !== undefined) {
-          const wfEntries = extractWorkflowAgentsFromText(outSummary);
-          if (wfEntries.length > 0) {
-            if (toolCallId !== undefined) workflowToolUseIds.add(toolCallId);
-            applyWorkflowAgentEntries(wfEntries);
-            for (const wfEntry of wfEntries) {
-              const wfAcc = byTaskId.get(wfEntry.agentId);
-              if (
-                wfAcc !== undefined &&
-                wfAcc.status !== "running" &&
-                wfAcc.completedAt === undefined
-              ) {
-                wfAcc.completedAt = event.occurredAt;
-                wfAcc.updatedAt = event.occurredAt;
-              }
-            }
-            continue;
-          }
-        }
         if (toolCallId !== undefined) {
           const subTool = subagentToolsByCallId.get(toolCallId);
           if (subTool !== undefined) {
@@ -1169,34 +1202,49 @@ export function deriveSubagentItems(
     }
   }
 
-  return ordered.map((acc): SubagentItem => {
-    const description =
-      acc.description ||
-      acc.subagentType ||
-      acc.workflowName ||
-      acc.taskId ||
-      acc.toolUseId ||
-      acc.id;
-    const turns = finalizeSubagentTurns(acc);
-    return {
-      id: acc.id,
-      ...(acc.taskId === undefined ? {} : { taskId: acc.taskId }),
-      ...(acc.toolUseId === undefined ? {} : { toolUseId: acc.toolUseId }),
-      description,
-      ...(acc.subagentType === undefined ? {} : { subagentType: acc.subagentType }),
-      ...(acc.workflowName === undefined ? {} : { workflowName: acc.workflowName }),
-      ...(acc.parentTaskId === undefined ? {} : { parentTaskId: acc.parentTaskId }),
-      status: acc.status,
-      ...(acc.startedAt === undefined ? {} : { startedAt: acc.startedAt }),
-      ...(acc.updatedAt === undefined ? {} : { updatedAt: acc.updatedAt }),
-      ...(acc.completedAt === undefined ? {} : { completedAt: acc.completedAt }),
-      ...(acc.usage === undefined ? {} : { usage: acc.usage }),
-      ...(acc.summary === undefined ? {} : { summary: acc.summary }),
-      ...(acc.prompt === undefined ? {} : { prompt: acc.prompt }),
-      events: acc.events,
-      turns,
-    };
-  });
+  // A run's own row is a stand-in for its children, not a subagent: drop it
+  // once at least one child transcript is known, and keep it otherwise so a
+  // live workflow with no readable transcripts yet still shows something.
+  const containersToDrop = new Set<MutableSubagent>();
+  for (const [toolUseId, container] of workflowContainers) {
+    const children = workflowChildren.get(toolUseId);
+    const hasChild = children !== undefined && [...children].some((acc) => ordered.includes(acc));
+    if (hasChild) containersToDrop.add(container);
+  }
+
+  return ordered
+    .filter((acc) => !containersToDrop.has(acc))
+    .map((acc): SubagentItem => {
+      const description =
+        acc.description ||
+        acc.subagentType ||
+        acc.workflowName ||
+        acc.taskId ||
+        acc.toolUseId ||
+        acc.id;
+      const turns = finalizeSubagentTurns(acc);
+      return {
+        id: acc.id,
+        ...(acc.taskId === undefined ? {} : { taskId: acc.taskId }),
+        ...(acc.toolUseId === undefined ? {} : { toolUseId: acc.toolUseId }),
+        ...(acc.workflowToolUseId === undefined
+          ? {}
+          : { workflowToolUseId: acc.workflowToolUseId }),
+        description,
+        ...(acc.subagentType === undefined ? {} : { subagentType: acc.subagentType }),
+        ...(acc.workflowName === undefined ? {} : { workflowName: acc.workflowName }),
+        ...(acc.parentTaskId === undefined ? {} : { parentTaskId: acc.parentTaskId }),
+        status: acc.status,
+        ...(acc.startedAt === undefined ? {} : { startedAt: acc.startedAt }),
+        ...(acc.updatedAt === undefined ? {} : { updatedAt: acc.updatedAt }),
+        ...(acc.completedAt === undefined ? {} : { completedAt: acc.completedAt }),
+        ...(acc.usage === undefined ? {} : { usage: acc.usage }),
+        ...(acc.summary === undefined ? {} : { summary: acc.summary }),
+        ...(acc.prompt === undefined ? {} : { prompt: acc.prompt }),
+        events: acc.events,
+        turns,
+      };
+    });
 }
 
 export type SubagentCounts = {
@@ -1229,8 +1277,10 @@ export function summarizeSubagentCounts(items: readonly SubagentItem[]): Subagen
 
 /**
  * Resolve which subagent item should be highlighted in the 2-column dialog.
- * Matches against `id`, `taskId`, or `toolUseId` so clicking either an `Agent`
- * tool step in the main chat or an item in the left rail selects the right entry.
+ * Matches against `id`, `taskId`, `toolUseId`, or the `Workflow` call a child
+ * runs under, so clicking either an `Agent` tool step in the main chat or an
+ * item in the left rail selects the right entry. A Workflow step names the run,
+ * and every child of that run records the call as `workflowToolUseId`.
  */
 export function resolveSelectedSubagentId(
   items: readonly SubagentItem[],
@@ -1240,7 +1290,10 @@ export function resolveSelectedSubagentId(
   if (requestedId !== undefined && requestedId !== null && requestedId !== "") {
     const found = items.find(
       (item) =>
-        item.id === requestedId || item.taskId === requestedId || item.toolUseId === requestedId,
+        item.id === requestedId ||
+        item.taskId === requestedId ||
+        item.toolUseId === requestedId ||
+        item.workflowToolUseId === requestedId,
     );
     if (found !== undefined) return found.id;
   }
@@ -1305,7 +1358,10 @@ export function resolveSubagentDialogTab(
   if (selectedId !== undefined && selectedId !== null && selectedId !== "") {
     const matched = items.find(
       (item) =>
-        item.id === selectedId || item.taskId === selectedId || item.toolUseId === selectedId,
+        item.id === selectedId ||
+        item.taskId === selectedId ||
+        item.toolUseId === selectedId ||
+        item.workflowToolUseId === selectedId,
     );
     if (matched !== undefined && !isSubagentVisibleByDefault(matched, nowMs, ttlMs)) {
       return "history";

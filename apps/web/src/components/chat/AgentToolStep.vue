@@ -123,7 +123,17 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
       </div>
 
       <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-        <!-- Background task badge: status dot + elapsed, joined by tool-use id. -->
+        <!--
+          Spawning-step badge: status dot + elapsed, joined by tool-use id.
+
+          The subagent's own tool activity is deliberately absent — not its
+          current tool name, not its steps. A subagent's tool history belongs
+          to its inspector: a row on the main screen that reports "Bash" or a
+          workflow child's label was the only place that activity showed when
+          the inspector loaded none, so it read as the subagent's whole
+          transcript. The badge's job is "something is running, and here is
+          where to look at it".
+        -->
         <span
           v-if="task || step.toolName === 'Agent' || step.toolName === 'Task'"
           class="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/5 px-1.5 py-0.25 text-[10px] font-medium text-muted-foreground"
@@ -132,9 +142,6 @@ async function copyToClipboard(text: string, label: string): Promise<void> {
           <template v-if="task">
             <i class="size-[6px] shrink-0 rounded-full" :class="taskDotClass" aria-hidden="true" />
             <span class="font-mono">{{ taskElapsed }}</span>
-            <span v-if="task.lastToolName" class="max-w-24 truncate font-mono">
-              {{ task.lastToolName }}
-            </span>
           </template>
           <button
             type="button"

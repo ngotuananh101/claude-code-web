@@ -1,5 +1,7 @@
-import { describe, expect, mock, test } from "bun:test";
-import { resolve } from "node:path";
+import { afterAll, describe, expect, mock, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   SESSIONS_CAPABILITY,
   SESSIONS_LIST_DEFAULT_LIMIT,
@@ -8,6 +10,38 @@ import {
 } from "@cc-web/protocol";
 import type { SessionsSdk } from "./handler.ts";
 import { createSessionsHandler, SESSIONS_CAPABILITIES } from "./handler.ts";
+
+const fixtureRoots: string[] = [];
+
+/**
+ * A `~/.claude/projects` fixture holding one session's subagent meta files —
+ * the shape `readSubagentMetaIndex` reads, at both nesting levels Claude Code
+ * uses (`subagents/` for Agent children, `subagents/workflows/<run>/` for
+ * Workflow children).
+ */
+async function makeProjectsFixture(
+  sessionId: string,
+  agents: Array<
+    | { kind: "agent"; agentId: string; meta: Record<string, unknown> }
+    | { kind: "workflow"; runId: string; agentId: string; meta: Record<string, unknown> }
+  >,
+): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "cc-web-projects-"));
+  fixtureRoots.push(root);
+  for (const agent of agents) {
+    const dir =
+      agent.kind === "workflow"
+        ? join(root, "-tmp-proj", sessionId, "subagents", "workflows", agent.runId)
+        : join(root, "-tmp-proj", sessionId, "subagents");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `agent-${agent.agentId}.meta.json`), JSON.stringify(agent.meta));
+  }
+  return root;
+}
+
+afterAll(async () => {
+  await Promise.all(fixtureRoots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 function command(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -559,6 +593,254 @@ describe("workspace.sessions.messages", () => {
     expect(wfMsg).toBeDefined();
     expect(wfMsg?.agentId).toBe("ae3454d16c5171399");
     expect("parentToolUseId" in (wfMsg ?? {})).toBe(false);
+  });
+
+  test("links a Workflow's children to the Workflow call and labels them from their meta files", async () => {
+    // The real Workflow result is launch text, not JSON: no `workflowProgress`,
+    // no per-agent ids. The only thing it names is the run, so the run id is
+    // the bridge between "these five transcripts" and "the block that started
+    // them" — and each child's `.meta.json` supplies the label.
+    const launchText = [
+      "Workflow launched in background. Task ID: wwgczx5jh",
+      "Summary: Verify quickjs-ng assets/digests",
+      "Transcript dir: /home/u/.claude/projects/p/s1/subagents/workflows/wf_af8103d7-91f",
+      "Run ID: wf_af8103d7-91f",
+    ].join("\n");
+
+    const mainMessages = [
+      {
+        type: "assistant" as const,
+        uuid: "m-wf-call",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_00_zlmqteg6c7sxiru8lyea2eej",
+              name: "Workflow",
+              input: {},
+            },
+          ],
+        },
+      },
+      {
+        type: "user" as const,
+        uuid: "m-wf-res",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_00_zlmqteg6c7sxiru8lyea2eej",
+              content: launchText,
+            },
+          ],
+        },
+      },
+    ];
+
+    const projectsDir = await makeProjectsFixture("s1", [
+      {
+        kind: "workflow",
+        runId: "wf_af8103d7-91f",
+        agentId: "a51c84ff15e3201f4",
+        meta: {
+          agentType: "workflow-subagent",
+          description: "plan-critique",
+          workflowPhase: "Scout",
+        },
+      },
+      {
+        kind: "agent",
+        agentId: "a004bc3d38e1acc56",
+        meta: {
+          agentType: "Explore",
+          description: "Explore repo",
+          toolUseId: "call_agent_explore",
+        },
+      },
+    ]);
+
+    const { sdk } = makeMockSdk([], mainMessages);
+    sdk.listSubagents = mock(async () => ["a51c84ff15e3201f4", "a004bc3d38e1acc56"]);
+    sdk.getSubagentMessages = mock(async (_sid: string, agentId: string) => [
+      {
+        type: "assistant" as const,
+        uuid: `sub-${agentId}`,
+        message: { role: "assistant", content: [{ type: "text", text: "finding" }] },
+      },
+    ]);
+
+    const handler = createSessionsHandler({
+      workspacePathFor: () => "/tmp/proj",
+      sdk,
+      projectsDir,
+    });
+
+    const frame = (await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", dir: "/tmp/proj" },
+      }),
+    )) as {
+      ok: boolean;
+      result: {
+        messages: Array<{
+          uuid: string;
+          agentId?: string;
+          parentToolUseId?: string;
+          agentType?: string;
+          agentLabel?: string;
+          workflowPhase?: string;
+          workflowToolUseId?: string;
+        }>;
+      };
+    };
+
+    expect(frame.ok).toBe(true);
+
+    const workflowChild = frame.result.messages.find((m) => m.uuid === "sub-a51c84ff15e3201f4");
+    expect(workflowChild).toMatchObject({
+      agentId: "a51c84ff15e3201f4",
+      parentToolUseId: "call_00_zlmqteg6c7sxiru8lyea2eej",
+      // The call is named twice, on purpose: `parentToolUseId` says what it
+      // hangs under, `workflowToolUseId` says that parent is a run rather than
+      // an Agent call — the browser keys rows on the child, not on the shared id.
+      workflowToolUseId: "call_00_zlmqteg6c7sxiru8lyea2eej",
+      agentType: "workflow-subagent",
+      agentLabel: "plan-critique",
+      workflowPhase: "Scout",
+    });
+
+    // An Agent child still links by its own result's agentId…
+    const agentChild = frame.result.messages.find((m) => m.uuid === "sub-a004bc3d38e1acc56");
+    expect(agentChild).toMatchObject({ agentId: "a004bc3d38e1acc56", agentLabel: "Explore repo" });
+    // …and when the main transcript does not reach back to the spawning block
+    // (it is read with a limit), the meta file's toolUseId is the link.
+    expect(agentChild?.parentToolUseId).toBe("call_agent_explore");
+    expect(agentChild?.workflowToolUseId).toBeUndefined();
+  });
+
+  test("finds a Workflow launch in the session transcript when the page does not reach it", async () => {
+    // The reason the transcript file is read at all: the SDK's `getSessionMessages`
+    // is windowed, so for a long session the `Workflow` call sits far above the
+    // page the browser asked for and the pairing is missing exactly when a run is
+    // old enough to inspect. Nothing in this test's main messages names a run.
+    const launchText = [
+      "Workflow launched in background. Task ID: wwgczx5jh",
+      "Summary: Verify quickjs-ng assets/digests",
+      "Run ID: wf_af8103d7-91f",
+    ].join("\n");
+
+    const projectsDir = await makeProjectsFixture("s1", [
+      {
+        kind: "workflow",
+        runId: "wf_af8103d7-91f",
+        agentId: "a51c84ff15e3201f4",
+        meta: { agentType: "workflow-subagent", description: "plan-critique" },
+      },
+    ]);
+    const transcript = [
+      {
+        type: "assistant",
+        uuid: "m-wf-call",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_00_zlmqteg6c7sxiru8lyea2eej",
+              name: "Workflow",
+              input: {},
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "m-wf-res",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_00_zlmqteg6c7sxiru8lyea2eej",
+              content: launchText,
+            },
+          ],
+        },
+      },
+    ];
+    await writeFile(
+      join(projectsDir, "-tmp-proj", "s1.jsonl"),
+      transcript.map((line) => `${JSON.stringify(line)}\n`).join(""),
+    );
+
+    const { sdk } = makeMockSdk(
+      [],
+      [{ type: "assistant", uuid: "m-tail", message: { content: [] } }],
+    );
+    sdk.listSubagents = mock(async () => ["a51c84ff15e3201f4"]);
+    sdk.getSubagentMessages = mock(async () => [
+      {
+        type: "assistant" as const,
+        uuid: "sub-a51c84ff15e3201f4",
+        message: { role: "assistant", content: [{ type: "text", text: "finding" }] },
+      },
+    ]);
+
+    const handler = createSessionsHandler({
+      workspacePathFor: () => "/tmp/proj",
+      sdk,
+      projectsDir,
+    });
+    const frame = (await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", dir: "/tmp/proj" },
+      }),
+    )) as {
+      ok: boolean;
+      result: {
+        messages: Array<{ uuid: string; parentToolUseId?: string; workflowToolUseId?: string }>;
+      };
+    };
+
+    const child = frame.result.messages.find((m) => m.uuid === "sub-a51c84ff15e3201f4");
+    expect(child?.workflowToolUseId).toBe("call_00_zlmqteg6c7sxiru8lyea2eej");
+    expect(child?.parentToolUseId).toBe("call_00_zlmqteg6c7sxiru8lyea2eej");
+  });
+
+  test("a session with no meta files still returns every subagent transcript", async () => {
+    // Labels are decoration: losing the meta directory must not cost the
+    // history that makes the popup useful.
+    const { sdk } = makeMockSdk([], []);
+    sdk.listSubagents = mock(async () => ["a51c84ff15e3201f4"]);
+    sdk.getSubagentMessages = mock(async () => [
+      {
+        type: "assistant" as const,
+        uuid: "sub-1",
+        message: { role: "assistant", content: [{ type: "text", text: "finding" }] },
+      },
+    ]);
+
+    const handler = createSessionsHandler({
+      workspacePathFor: () => "/tmp/proj",
+      sdk,
+      projectsDir: join(tmpdir(), "cc-web-no-such-projects-dir"),
+    });
+
+    const frame = (await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", dir: "/tmp/proj" },
+      }),
+    )) as { ok: boolean; result: { messages: Array<{ uuid: string; agentId?: string }> } };
+
+    expect(frame.ok).toBe(true);
+    expect(frame.result.messages.find((m) => m.uuid === "sub-1")?.agentId).toBe(
+      "a51c84ff15e3201f4",
+    );
   });
 });
 
