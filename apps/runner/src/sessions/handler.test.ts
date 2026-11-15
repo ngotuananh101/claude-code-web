@@ -58,7 +58,7 @@ function command(overrides: Record<string, unknown> = {}): Record<string, unknow
 type ListSessionsCall = { dir: string; limit: number; offset?: number; includeProgrammatic: false };
 type GetMessagesCall = {
   dir?: string;
-  limit: number;
+  limit?: number;
   offset?: number;
   includeSystemMessages: false;
 };
@@ -80,7 +80,11 @@ function makeMockSdk(
     }) as SessionsSdk["listSessions"],
     getSessionMessages: mock(async (sid: string, opts: GetMessagesCall) => {
       getSessionMessagesCalls.push([sid, opts]);
-      return messages as never;
+      const offset = opts.offset ?? 0;
+      return messages.slice(
+        offset,
+        opts.limit === undefined ? undefined : offset + opts.limit,
+      ) as never;
     }) as SessionsSdk["getSessionMessages"],
   };
   return { sdk, listSessionsCalls, getSessionMessagesCalls };
@@ -375,10 +379,7 @@ describe("workspace.sessions.messages", () => {
       parentToolUseId: "toolu-agent-1",
     });
     expect(getSessionMessagesCalls).toEqual([
-      [
-        "s1",
-        { dir: "/abs/ws-2", limit: SESSIONS_MESSAGES_DEFAULT_LIMIT, includeSystemMessages: false },
-      ],
+      ["s1", { dir: "/abs/ws-2", includeSystemMessages: false }],
     ]);
   });
 
@@ -420,21 +421,118 @@ describe("workspace.sessions.messages", () => {
     expect(getSessionMessagesCalls[0]![1].dir).toBeUndefined();
   });
 
-  test("applies default limit when none provided", async () => {
-    const { sdk, getSessionMessagesCalls } = makeMockSdk();
+  test("returns the newest default page in chronological order", async () => {
+    const messages = Array.from({ length: 150 }, (_, i) => ({
+      type: "assistant",
+      uuid: `m-${i + 1}`,
+      message: { content: `message ${i + 1}` },
+    }));
     const handler = createSessionsHandler({
       workspacePathFor: () => "/tmp/proj",
-      sdk,
+      sdk: makeMockSdk([], messages).sdk,
     });
 
-    await handler(
+    const frame = (await handler(
       command({
         kind: "workspace.sessions.messages",
         payload: { op: "sessions.messages", sessionId: "s1", dir: "/tmp/proj" },
       }),
-    );
+    )) as { ok: boolean; result: { messages: Array<{ uuid: string }> } };
 
-    expect(getSessionMessagesCalls[0]![1].limit).toBe(SESSIONS_MESSAGES_DEFAULT_LIMIT);
+    expect(frame.ok).toBe(true);
+    expect(frame.result.messages).toHaveLength(SESSIONS_MESSAGES_DEFAULT_LIMIT);
+    expect(frame.result.messages[0]?.uuid).toBe("m-51");
+    expect(frame.result.messages.at(-1)?.uuid).toBe("m-150");
+    expect(frame.result.messages.slice(0, 3).map((message) => message.uuid)).toEqual([
+      "m-51",
+      "m-52",
+      "m-53",
+    ]);
+  });
+
+  test("uses an explicit limit for the tail but preserves head-relative explicit offsets", async () => {
+    const messages = ["m1", "m2", "m3", "m4"].map((uuid) => ({
+      type: "assistant",
+      uuid,
+      message: { content: uuid },
+    }));
+    const handler = createSessionsHandler({
+      workspacePathFor: () => "/tmp/proj",
+      sdk: makeMockSdk([], messages).sdk,
+    });
+
+    for (const [pagination, expected] of [
+      [{ limit: 2 }, ["m3", "m4"]],
+      [{ limit: 2, offset: 0 }, ["m1", "m2"]],
+      [{ limit: 2, offset: 1 }, ["m2", "m3"]],
+      [{ limit: 2, offset: 10 }, []],
+    ] as const) {
+      const frame = (await handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: { op: "sessions.messages", sessionId: "s1", ...pagination },
+        }),
+      )) as { ok: boolean; result: { messages: Array<{ uuid: string }> } };
+
+      expect(frame.ok).toBe(true);
+      expect(frame.result.messages.map((message) => message.uuid)).toEqual([...expected]);
+    }
+  });
+
+  test("returns the newest subagent messages even when its spawning call is outside the main page", async () => {
+    const { sdk } = makeMockSdk(
+      [],
+      [
+        {
+          type: "assistant",
+          uuid: "spawn",
+          message: { content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: {} }] },
+        },
+        {
+          type: "user",
+          uuid: "spawn-result",
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "tool-agent", content: "agentId: child-a" },
+            ],
+          },
+        },
+        { type: "user", uuid: "latest-user", message: { content: "latest question" } },
+        { type: "assistant", uuid: "latest-answer", message: { content: "latest answer" } },
+      ],
+    );
+    sdk.listSubagents = async () => ["child-a"];
+    const childMessages = ["child-1", "child-2", "child-3", "child-4"].map((uuid) => ({
+      type: "assistant" as const,
+      uuid,
+      message: { content: uuid },
+    }));
+    sdk.getSubagentMessages = async (_sessionId, _agentId, options) =>
+      childMessages.slice(0, options?.limit);
+    const handler = createSessionsHandler({
+      workspacePathFor: () => "/tmp/proj",
+      sdk,
+      projectsDir: join(tmpdir(), "cc-web-no-such-projects-dir"),
+    });
+
+    const frame = (await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", limit: 2 },
+      }),
+    )) as {
+      ok: boolean;
+      result: { messages: Array<{ uuid: string; agentId?: string; parentToolUseId?: string }> };
+    };
+
+    expect(frame.ok).toBe(true);
+    expect(
+      frame.result.messages.filter((message) => !message.agentId).map((message) => message.uuid),
+    ).toEqual(["latest-user", "latest-answer"]);
+    expect(frame.result.messages.filter((message) => message.agentId)).toMatchObject([
+      { uuid: "child-3", agentId: "child-a", parentToolUseId: "tool-agent" },
+      { uuid: "child-4", agentId: "child-a", parentToolUseId: "tool-agent" },
+    ]);
   });
 
   test("refuses an out-of-bounds limit as UNSUPPORTED_COMMAND", async () => {

@@ -229,7 +229,9 @@ export type SessionMessagesRequest = {
   op: "sessions.messages";
   sessionId: string;
   dir?: string;
+  /** Maximum messages per transcript; omitted offsets select the newest page. */
   limit?: number;
+  /** Explicit offsets count from the start, including zero for the oldest page. */
   offset?: number;
 };
 

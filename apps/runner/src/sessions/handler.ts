@@ -60,7 +60,7 @@ export type SessionsSdk = {
     sessionId: string,
     options: {
       dir?: string;
-      limit: number;
+      limit?: number;
       offset?: number;
       includeSystemMessages: false;
     },
@@ -200,14 +200,17 @@ export function createSessionsHandler(
           SESSIONS_MESSAGES_MAX_LIMIT,
         );
 
+        // SDK pagination is head-relative. Read the conversation chain once
+        // for a default tail page, then bound the response before redaction and
+        // transport. Keep explicit offsets head-relative for existing callers.
         const messages = await sdk.getSessionMessages(msgRequest.sessionId, {
           ...(resolvedDir !== undefined ? { dir: resolvedDir } : {}),
-          limit,
-          ...(msgRequest.offset !== undefined ? { offset: msgRequest.offset } : {}),
+          ...(msgRequest.offset !== undefined ? { limit, offset: msgRequest.offset } : {}),
           includeSystemMessages: false,
         });
+        const page = msgRequest.offset === undefined ? messages.slice(-limit) : messages;
 
-        const mapped: SessionMessage[] = messages.map((msg) => toSessionMessage(msg));
+        const mapped: SessionMessage[] = page.map((msg) => toSessionMessage(msg));
 
         if (
           (msgRequest.offset === undefined || msgRequest.offset === 0) &&
@@ -225,6 +228,7 @@ export function createSessionsHandler(
             msgRequest.sessionId,
             resolvedDir,
             Math.min(limit, MAX_SUBAGENT_MESSAGES_LIMIT),
+            msgRequest.offset === undefined,
             messages,
             metaIndex,
             workflowRunToToolUseId,
@@ -269,11 +273,9 @@ function readMetaIndex(options: SessionsHandlerOptions, sessionId: string): Suba
 /**
  * Which `Workflow` call launched each run this session started.
  *
- * The page the caller asked for normally holds the call, and then the cheap
- * in-memory scan answers. A long session puts its `Workflow` calls far behind
- * the tail page, though, and a run old enough to inspect is exactly when that
- * happens — so the transcript file is consulted as well, and its answer wins:
- * it is the complete record, while the page is a window.
+ * The SDK chain can omit earlier `Workflow` calls after compaction or explicit
+ * pagination. Consult the transcript file as well, and prefer its answer:
+ * it is the complete record, while the SDK result can be a window.
  */
 function readWorkflowLaunchMap(
   options: SessionsHandlerOptions,
@@ -434,16 +436,16 @@ function contextOf(meta: SubagentMeta | undefined): SubagentContext {
 }
 
 /**
- * Load every subagent transcript this session has and project it into
- * `SessionMessage`s carrying their own routing keys.
+ * Load bounded pages from this session's subagent transcripts and project them
+ * into `SessionMessage`s carrying their own routing keys.
  *
  * `parentToolUseId` is what tells the browser which spawning block a subagent
  * belongs to, and it is resolved differently per kind:
  *
  *  - an `Agent`/`Task` child names its spawner in the result text (`agentId:`),
  *    which `extractAgentIdToToolUseIdMap` matches back to the tool_use id; when
- *    the main transcript does not reach far enough back to hold that block
- *    (it is read with a `limit`), the child's own meta file names it instead;
+ *    the SDK chain omits that block after compaction or explicit pagination,
+ *    the child's own meta file names it instead;
  *  - a `Workflow` child names nothing — its meta file carries only the run id,
  *    and the run id is what pairs it with the `Workflow` call. Its meta file's
  *    `toolUseId` is deliberately ignored: for a workflow child it is absent,
@@ -458,6 +460,7 @@ async function loadSubagentSessionMessages(
   sessionId: string,
   resolvedDir: string | undefined,
   perSubagentLimit: number,
+  fromTail: boolean,
   mainMessages: readonly SDKSessionMessage[],
   metaIndex: SubagentMetaIndex,
   workflowRunToToolUseId: ReadonlyMap<string, string>,
@@ -483,8 +486,9 @@ async function loadSubagentSessionMessages(
       try {
         const subMsgs = await sdk.getSubagentMessages(sessionId, agentId, {
           ...(resolvedDir !== undefined ? { dir: resolvedDir } : {}),
-          limit: perSubagentLimit,
+          ...(fromTail ? {} : { limit: perSubagentLimit }),
         });
+        const page = fromTail ? subMsgs.slice(-perSubagentLimit) : subMsgs;
         const meta = metaIndex.get(agentId);
         // A workflow child's parent is the run's `Workflow` call, and it is
         // reported as such: every child of one run shares that id, so a
@@ -497,7 +501,7 @@ async function loadSubagentSessionMessages(
           agentIdToToolUseId.get(agentId) ??
           (meta?.workflowRunId !== undefined ? workflowToolUseId : meta?.toolUseId);
         const context = contextOf(meta);
-        return subMsgs.map((subMsg) =>
+        return page.map((subMsg) =>
           toSessionMessage(subMsg, {
             agentId,
             ...(parentToolUseId !== undefined ? { parentToolUseId } : {}),
