@@ -198,4 +198,31 @@ describe("cached paged chat turns", () => {
     expect(next[0]!.text).toBe("prefix tail");
     expect(next[0]!.kind === "agent" && next[0]!.status).toBe("done");
   });
+
+  /**
+   * Vue keys a `v-for` list by `turn.key`, so two siblings sharing one key make
+   * it reuse or mispatch the wrong bubble. A history page assigns keys from the
+   * page cursor, which is one value — so a chunk that derives more than one turn
+   * of the same kind (a run boundary this reducer splits into two bubbles) must
+   * still hand out distinct keys.
+   */
+  test("a history chunk that derives several turns still yields distinct keys", () => {
+    const derive = createPagedTurns();
+    const inputs: HistoryTurn[] = [
+      {
+        cursor: 11,
+        kind: "agent",
+        events: [
+          event(1, "run.started", { prompt: "question" }),
+          event(2, "message.delta", { text: "first" }),
+          event(3, "run.finished", {}),
+          event(4, "message.delta", { text: "second" }),
+        ],
+      },
+    ];
+    const turns = derive(inputs, []);
+    const keys = turns.map((turn) => turn.key);
+    expect(turns.length).toBeGreaterThan(1);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });

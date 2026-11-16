@@ -41,7 +41,13 @@ export function createPagedTurns() {
       let cached = historyCache.get(input);
       if (cached === undefined) {
         cached = deriveChatTurns([], input.events).filter((turn) => turn.kind === input.kind);
-        for (const turn of cached) turn.key = `history-${input.cursor}`;
+        // The page cursor names the chunk, not the bubble: a chunk that derives
+        // more than one turn of its kind still needs a sibling-safe key, or Vue
+        // reuses one bubble's DOM for both.
+        for (const [position, turn] of cached.entries()) {
+          turn.key =
+            position === 0 ? `history-${input.cursor}` : `history-${input.cursor}-${position}`;
+        }
         historyCache.set(input, cached);
       }
       const tail = cached.at(-1);
