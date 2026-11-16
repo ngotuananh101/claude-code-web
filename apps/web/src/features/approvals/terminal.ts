@@ -8,7 +8,7 @@
  * rendering a card as permitted.
  */
 
-import { APPROVAL_NO_EXPIRY } from "@cc-web/protocol";
+import { APPROVAL_NO_EXPIRY, type BrowserReplayEvent } from "@cc-web/protocol";
 
 export type ApprovalTerminal = { decision?: "allow" | "deny"; reason?: string };
 
@@ -68,4 +68,61 @@ export function approvalNeedsDecision(input: DecisionAvailability): boolean {
   if (input.terminal !== undefined) return false;
   if (input.closed === true) return false;
   return !isDisplayExpired(input.expiresAt, input.now);
+}
+
+/**
+ * Pending gates that the loaded journal pages do not already render.
+ *
+ * Bootstrap context carries gates whose `requested` row predates the newest
+ * twelve bubbles: without this the run would wait forever behind a card the
+ * operator cannot see. A gate whose id already arrived inside a loaded bubble
+ * is skipped there — its card is in place. Rows are keyed by id, so a resolved
+ * gate and a repeated request cannot produce two cards.
+ */
+export function selectPendingGates(
+  context: readonly BrowserReplayEvent[],
+  renderedIds: ReadonlySet<string>,
+  terminals: ReadonlyArray<{ type: string; payload: unknown }> = [],
+): BrowserReplayEvent[] {
+  const closed = mapApprovalTerminals(terminals);
+  const newest = new Map<string, BrowserReplayEvent>();
+  for (const event of context) {
+    if (event.type !== "approval.requested") continue;
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const approvalId = payload["approvalId"];
+    if (typeof approvalId !== "string" || approvalId === "") continue;
+    const previous = newest.get(approvalId);
+    if (previous === undefined || previous.sessionSequence < event.sessionSequence) {
+      newest.set(approvalId, event);
+    }
+  }
+  const pending: BrowserReplayEvent[] = [];
+  for (const [approvalId, event] of newest) {
+    if (renderedIds.has(approvalId) || closed.has(approvalId)) continue;
+    pending.push(event);
+  }
+  return pending.sort((a, b) => a.sessionSequence - b.sessionSequence);
+}
+
+/**
+ * Approval ids already rendered inside a loaded bubble.
+ *
+ * A card lives beside the agent step that asked for it, so these gates need no
+ * separate surface; only gates from outside the loaded pages do.
+ */
+export function renderedApprovalIds(
+  turns: ReadonlyArray<{ kind: string; steps?: ReadonlyArray<{ kind: string; event?: unknown }> }>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const turn of turns) {
+    if (turn.kind !== "agent" || turn.steps === undefined) continue;
+    for (const step of turn.steps) {
+      if (step.kind !== "approval") continue;
+      const event = step.event as { payload?: unknown } | undefined;
+      const payload = (event?.payload ?? {}) as Record<string, unknown>;
+      const approvalId = payload["approvalId"];
+      if (typeof approvalId === "string" && approvalId !== "") ids.add(approvalId);
+    }
+  }
+  return ids;
 }

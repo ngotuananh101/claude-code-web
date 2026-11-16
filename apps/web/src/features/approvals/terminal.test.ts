@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { APPROVAL_NO_EXPIRY } from "@cc-web/protocol";
-import { approvalNeedsDecision, mapApprovalTerminals } from "./terminal.ts";
+import { APPROVAL_NO_EXPIRY, type BrowserReplayEvent } from "@cc-web/protocol";
+import {
+  approvalNeedsDecision,
+  mapApprovalTerminals,
+  renderedApprovalIds,
+  selectPendingGates,
+} from "./terminal.ts";
 
 /** The journal row shape EventJournal feeds in (type + raw payload). */
 function row(type: string, payload: unknown): { type: string; payload: unknown } {
@@ -108,5 +113,59 @@ describe("approvalNeedsDecision", () => {
 
   test("a row with no expiry information needs a human", () => {
     expect(approvalNeedsDecision({ now })).toBe(true);
+  });
+});
+
+const requested = (approvalId: string, seq: number): BrowserReplayEvent => ({
+  sessionSequence: seq,
+  eventId: `e-${seq}`,
+  runId: "run-1",
+  attemptId: "attempt-1",
+  occurredAt: "2026-11-16T00:00:00Z",
+  type: "approval.requested",
+  payload: { approvalId, kind: "tool_permission" },
+});
+
+describe("selectPendingGates", () => {
+  test("a pending gate outside the selected page stays visible", () => {
+    const gates = selectPendingGates([requested("outside", 1)], new Set());
+    expect(gates.map((event) => (event.payload as { approvalId: string }).approvalId)).toEqual([
+      "outside",
+    ]);
+  });
+
+  test("a gate already rendered inside a loaded bubble is not shown twice", () => {
+    expect(selectPendingGates([requested("inside", 1)], new Set(["inside"]))).toEqual([]);
+  });
+
+  test("a gate with a journal terminal is not pending", () => {
+    const rows = [
+      { type: "approval.requested", payload: { approvalId: "answered" } },
+      { type: "approval.resolved", payload: { approvalId: "answered", decision: "allow" } },
+    ];
+    expect(selectPendingGates([requested("answered", 2)], new Set(), rows)).toEqual([]);
+  });
+
+  test("the newest request wins when a gate id is repeated", () => {
+    const gates = selectPendingGates([requested("dup", 1), requested("dup", 3)], new Set());
+    expect(gates.map((event) => event.sessionSequence)).toEqual([3]);
+  });
+});
+
+describe("renderedApprovalIds", () => {
+  test("collects approval ids from agent steps and ignores other turns", () => {
+    const turns = [
+      { kind: "user" },
+      {
+        kind: "agent",
+        steps: [
+          { kind: "tool" },
+          { kind: "approval", event: requested("a1", 1) },
+          { kind: "approval", event: requested("a1", 2) },
+          { kind: "approval", event: { payload: {} } },
+        ],
+      },
+    ];
+    expect([...renderedApprovalIds(turns)]).toEqual(["a1"]);
   });
 });

@@ -113,6 +113,32 @@ describe("fetchWorkspaceSessions", () => {
     expect(captured.url).toBe("/api/workspaces/r-1%2Fdefault/sessions?limit=20&offset=10");
   });
 
+  test("forwards a chat cursor and maps the page metadata", async () => {
+    const captured = capture(200, {
+      op: "sessions.messages",
+      sessionId: "sess-1",
+      messages,
+      chatBefore: 27,
+      hasMore: true,
+      chatSnapshot: "snapshot-1",
+    });
+
+    const outcome = await fetchSessionMessages("r-1%2Fdefault", "sess-1", undefined, {
+      chatBefore: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(captured.url).toBe(
+      `/api/workspaces/r-1%2Fdefault/sessions/sess-1/messages?chatBefore=${Number.MAX_SAFE_INTEGER}`,
+    );
+    expect(outcome).toEqual({
+      ok: true,
+      messages,
+      chatBefore: 27,
+      hasMore: true,
+      chatSnapshot: "snapshot-1",
+    });
+  });
+
   test("builds the composite id from a runner when given", async () => {
     const captured = capture(200, {
       op: "sessions.list",
@@ -185,6 +211,60 @@ describe("fetchWorkspaceSessions", () => {
 });
 
 describe("fetchSessionMessages", () => {
+  test("forwards and retains the immutable chat snapshot", async () => {
+    const captured = capture(200, {
+      op: "sessions.messages",
+      sessionId: "sess-1",
+      messages,
+      chatBefore: 12,
+      hasMore: true,
+      chatSnapshot: "snapshot-1",
+    });
+    const outcome = await fetchSessionMessages("w", "sess-1", undefined, {
+      chatBefore: 27,
+      chatSnapshot: "snapshot-1",
+    } as Parameters<typeof fetchSessionMessages>[3]);
+    expect(captured.url).toBe(
+      "/api/workspaces/w/sessions/sess-1/messages?chatBefore=27&chatSnapshot=snapshot-1",
+    );
+    expect(outcome).toEqual({
+      ok: true,
+      messages,
+      chatBefore: 12,
+      hasMore: true,
+      chatSnapshot: "snapshot-1",
+    });
+  });
+
+  test.each([
+    {},
+    { chatSnapshot: "" },
+    { chatBefore: 27 },
+    { hasMore: "yes" },
+    { chatBefore: 30 },
+    { chatBefore: null, hasMore: true },
+    { messages: [null] },
+    { messages: [{ type: "unknown", uuid: "u", message: {} }] },
+    { messages: [{ type: "user", uuid: "u" }] },
+    { sessionId: "other" },
+  ])("refuses malformed SDK chat metadata without throwing: %j", async (change) => {
+    const body = {
+      op: "sessions.messages",
+      sessionId: "sess-1",
+      messages,
+      chatBefore: 12,
+      hasMore: true,
+      chatSnapshot: "snapshot-1",
+      ...change,
+    };
+    if (Object.keys(change).length === 0) delete (body as { chatSnapshot?: string }).chatSnapshot;
+    capture(200, body);
+    expect(await fetchSessionMessages("w", "sess-1", undefined, { chatBefore: 27 })).toMatchObject({
+      ok: false,
+      code: "INVALID_HISTORY_PAGE",
+    });
+  });
+
   test("reads session messages through the runner and returns the parsed array", async () => {
     const captured = capture(200, {
       op: "sessions.messages",

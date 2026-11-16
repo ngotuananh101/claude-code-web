@@ -93,6 +93,36 @@ describe("parseBrowseRequest", () => {
     ).toBeUndefined();
   });
 
+  test("accepts a chat cursor only alone, never beside an SDK offset", () => {
+    expect(
+      parseSessionsRequest("workspace.sessions.messages", {
+        sessionId: "msg-123",
+        chatBefore: 27,
+      }),
+    ).toEqual({ op: "sessions.messages", sessionId: "msg-123", chatBefore: 27 });
+    expect(
+      parseSessionsRequest("workspace.sessions.messages", {
+        sessionId: "msg-123",
+        chatBefore: 0,
+      }),
+    ).toEqual({ op: "sessions.messages", sessionId: "msg-123", chatBefore: 0 });
+    for (const chatBefore of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2, "27", null]) {
+      expect(
+        parseSessionsRequest("workspace.sessions.messages", {
+          sessionId: "msg-123",
+          chatBefore,
+        }),
+      ).toBeUndefined();
+    }
+    expect(
+      parseSessionsRequest("workspace.sessions.messages", {
+        sessionId: "msg-123",
+        chatBefore: 27,
+        offset: 0,
+      }),
+    ).toBeUndefined();
+  });
+
   test("rejects a non-object payload", () => {
     expect(parseBrowseRequest("workspace.fs.browse", null)).toBeUndefined();
     expect(parseBrowseRequest("workspace.fs.browse", "src")).toBeUndefined();
@@ -107,6 +137,27 @@ describe("parseBrowseRequest", () => {
 });
 
 describe("parseSessionsRequest", () => {
+  test("retains bounded snapshot identity only on chat pagination requests", () => {
+    expect(
+      parseSessionsRequest("workspace.sessions.messages", {
+        sessionId: "s",
+        chatBefore: 24,
+        chatSnapshot: "snapshot-1",
+      }),
+    ).toEqual({
+      op: "sessions.messages",
+      sessionId: "s",
+      chatBefore: 24,
+      chatSnapshot: "snapshot-1",
+    });
+    for (const payload of [
+      { sessionId: "s", chatSnapshot: "snapshot-1" },
+      { sessionId: "s", chatBefore: 24, chatSnapshot: "" },
+      { sessionId: "s", chatBefore: 24, chatSnapshot: "s".repeat(129) },
+      { sessionId: "s", chatBefore: 24, chatSnapshot: 42 },
+    ])
+      expect(parseSessionsRequest("workspace.sessions.messages", payload)).toBeUndefined();
+  });
   test("accepts sessions.list with a dir and a limit", () => {
     expect(
       parseSessionsRequest("workspace.sessions.list", { dir: "/home/user/project", limit: 10 }),

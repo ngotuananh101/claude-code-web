@@ -142,7 +142,12 @@ async function connectSessionsRunner(
         maxConcurrentRuns: 1,
         activeRuns: [],
         eventOffsets: [],
-        capabilities: options.capabilities ?? ["workspace.browse", "workspace.sessions", "inspect"],
+        capabilities: options.capabilities ?? [
+          "workspace.browse",
+          "workspace.sessions",
+          "workspace.sessions.chat-pages",
+          "inspect",
+        ],
         workspaces: options.workspaces ?? [{ workspaceId: "default", path: "/srv/proj" }],
       },
     }),
@@ -258,6 +263,73 @@ describe("GET /api/workspaces/:workspaceId/sessions", () => {
       workspaceId: "default",
       payload: { op: "sessions.list", dir: "/srv/proj", limit: 20 },
     });
+  });
+
+  test("legacy runners reject chat paging without disabling legacy message reads", async () => {
+    const { db, url, cookie, credential } = await start();
+    db.query(
+      "INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("runner-a", "default", "/srv/proj", "[]", Date.now());
+    const { received } = await connectSessionsRunner(url, credential, runnerInbox(), {
+      capabilities: ["workspace.sessions"],
+      answer: (command) => sessionMessagesFrame(command["commandId"] as string),
+    });
+    const base = `${url}/api/workspaces/${composite}/sessions/sess-1/messages`;
+    const headers = { Origin: origin, Cookie: cookie };
+    const paged = await fetch(`${base}?chatBefore=27`, { headers });
+    expect(paged.status).toBe(503);
+    expect(await paged.json()).toMatchObject({
+      error: {
+        code: "RUNNER_UNAVAILABLE",
+        message: "runner does not support workspace.sessions.chat-pages",
+      },
+    });
+    expect(received).toHaveLength(0);
+    expect((await fetch(`${base}?limit=12&offset=0`, { headers })).status).toBe(200);
+    expect(received).toHaveLength(1);
+  });
+
+  test("forwards a chat cursor and refuses it beside an offset", async () => {
+    const { db, url, cookie, credential } = await start();
+    db.query(
+      "INSERT INTO workspaces (runner_id, workspace_id, path, branches, registered_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("runner-a", "default", "/srv/proj", "[]", Date.now());
+    const { received } = await connectSessionsRunner(url, credential, runnerInbox(), {
+      answer: (command) => sessionMessagesFrame(command["commandId"] as string),
+    });
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const response = await fetch(
+      `${url}/api/workspaces/${composite}/sessions/sess-1/messages?chatBefore=27&chatSnapshot=snapshot-1`,
+      { headers: { Origin: origin, Cookie: cookie } },
+    );
+    expect(response.status).toBe(200);
+    expect(received[0]).toMatchObject({
+      payload: {
+        op: "sessions.messages",
+        sessionId: "sess-1",
+        chatBefore: 27,
+        chatSnapshot: "snapshot-1",
+      },
+    });
+
+    for (const query of [
+      "chatBefore=27&offset=0",
+      "chatBefore=-1",
+      "chatBefore=abc",
+      "chatBefore=",
+      "chatBefore=%20",
+      "chatSnapshot=snapshot-1",
+      "chatBefore=27&chatSnapshot=",
+      `chatBefore=27&chatSnapshot=${"s".repeat(129)}`,
+    ]) {
+      const refused = await fetch(
+        `${url}/api/workspaces/${composite}/sessions/sess-1/messages?${query}`,
+        { headers: { Origin: origin, Cookie: cookie } },
+      );
+      expect(refused.status).toBe(400);
+    }
+    expect(received).toHaveLength(1);
   });
 
   test("401 without a cookie, 403 from a foreign origin", async () => {

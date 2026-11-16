@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as scroll from "./scroll.ts";
 import {
   computeScrollAnchorOffset,
   isNearBottom,
@@ -9,6 +10,69 @@ import {
   shouldAutoLoadEarlier,
   shouldFollowAppend,
 } from "./scroll.ts";
+
+describe("asynchronous prepend anchoring", () => {
+  test("owns native anchoring during the prepend without applying the correction twice", () => {
+    const viewport = {
+      scrollHeight: 1000,
+      scrollTop: 200,
+      style: { overflowAnchor: "auto" },
+      getBoundingClientRect: () => ({ top: 0, bottom: 400 }),
+    };
+    let top = -100;
+    const visible = {
+      isConnected: true,
+      getBoundingClientRect: () => ({ top, bottom: top + 300 }),
+    };
+    const capture = (
+      scroll as unknown as {
+        capturePrependAnchor: (viewport: unknown, turns: unknown[]) => { restore: () => void };
+      }
+    ).capturePrependAnchor;
+    const anchor = capture(viewport, [visible]);
+    // User scrolling is retained; native anchoring must not compensate as well.
+    viewport.scrollTop += 50;
+    top -= 50;
+    viewport.scrollHeight += 1000;
+    top += 300;
+    if (viewport.style.overflowAnchor !== "none") {
+      viewport.scrollTop += 300;
+      top -= 300;
+    }
+    anchor.restore();
+    expect(viewport.scrollTop).toBe(550);
+    expect(viewport.style.overflowAnchor).toBe("auto");
+  });
+
+  test("keeps a visible turn fixed despite live growth and scrolling during the request", () => {
+    const viewport = {
+      scrollHeight: 1000,
+      scrollTop: 200,
+      getBoundingClientRect: () => ({ top: 0, bottom: 400 }),
+    };
+    let top = -100;
+    const hidden = {
+      isConnected: true,
+      getBoundingClientRect: () => ({ top: -200, bottom: -100 }),
+    };
+    const visible = {
+      isConnected: true,
+      getBoundingClientRect: () => ({ top, bottom: top + 300 }),
+    };
+    const capture = (
+      scroll as unknown as {
+        capturePrependAnchor: (viewport: unknown, turns: unknown[]) => { restore: () => void };
+      }
+    ).capturePrependAnchor;
+    const anchor = capture(viewport, [hidden, visible]);
+    // Reader moves 50px during the request. Older prepend adds 300px; live tail adds 700px.
+    viewport.scrollTop = 250;
+    viewport.scrollHeight = 2000;
+    top = 150;
+    anchor.restore();
+    expect(viewport.scrollTop).toBe(550);
+  });
+});
 
 describe("isNearBottom", () => {
   test("returns true when exactly at the bottom", () => {
@@ -66,7 +130,7 @@ describe("isNearTop", () => {
 
 describe("resolveWindowStart", () => {
   test("follows the tail when the window is not pinned", () => {
-    expect(resolveWindowStart(null, 100)).toBe(80);
+    expect(resolveWindowStart(null, 100)).toBe(88);
     expect(resolveWindowStart(null, 12)).toBe(0);
   });
 
@@ -79,7 +143,7 @@ describe("resolveWindowStart", () => {
 
 describe("previousPageStart", () => {
   test("moves one page up and stops at zero", () => {
-    expect(previousPageStart(40)).toBe(20);
+    expect(previousPageStart(40)).toBe(28);
     expect(previousPageStart(5)).toBe(0);
     expect(previousPageStart(0)).toBe(0);
   });

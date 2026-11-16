@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
+import { backfillSessionHistory } from "./session-history.ts";
 
 /**
  * Control database migrations.
@@ -201,6 +202,28 @@ export function migrate(db: Database): void {
     CREATE INDEX IF NOT EXISTS run_events_run
       ON run_events (run_id);
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_history_projection (
+      id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS session_history_state (
+      session_id TEXT PRIMARY KEY, last_sequence INTEGER NOT NULL,
+      reset_sequence INTEGER NOT NULL, agent_cursor INTEGER,
+      active INTEGER NOT NULL, context TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS session_history_turns (
+      session_id TEXT NOT NULL, cursor INTEGER NOT NULL, kind TEXT NOT NULL,
+      reset_sequence INTEGER NOT NULL, PRIMARY KEY (session_id, cursor)
+    );
+    CREATE INDEX IF NOT EXISTS session_history_page
+      ON session_history_turns (session_id, reset_sequence, cursor);
+    CREATE TABLE IF NOT EXISTS session_history_chunks (
+      session_id TEXT NOT NULL, cursor INTEGER NOT NULL, chunk_index INTEGER NOT NULL,
+      event TEXT NOT NULL, PRIMARY KEY (session_id, cursor, chunk_index)
+    );
+  `);
+  backfillSessionHistory(db);
 
   // §12.1: "conflicting duplicate phải được audit". The journal keeps the first
   // observation; this table is the record that something else claimed the same

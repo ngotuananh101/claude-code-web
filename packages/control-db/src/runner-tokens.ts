@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { deleteSessionHistory } from "./session-history.ts";
 
 /**
  * Web-minted connector tokens (§6.1, ADR-0002 — the cloudflared model).
@@ -126,6 +127,7 @@ export function deleteRunner(
       ).run(sid);
       db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sid);
       db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sid);
+      deleteSessionHistory(db, sid);
       db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sid);
       db.prepare("DELETE FROM command_outbox WHERE session_id = ?").run(sid);
       db.prepare("DELETE FROM sessions WHERE id = ?").run(sid);

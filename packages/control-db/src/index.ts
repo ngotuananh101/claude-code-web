@@ -101,6 +101,7 @@ export {
   Scheduler,
   type SchedulerOptions,
 } from "./scheduler.ts";
+export { readSessionHistory } from "./session-history.ts";
 export {
   deleteSession,
   type EnsureSessionPinInput,

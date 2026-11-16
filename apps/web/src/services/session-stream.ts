@@ -1,10 +1,13 @@
 import {
   type BrowserReplayEvent,
+  type HistoryTurn,
   isConversationReset,
   isThinkingTokenEstimate,
   type SessionEventsFrame,
+  type SessionHistoryFrame,
   type SessionResyncFrame,
 } from "@cc-web/protocol";
+import { validSessionHistory } from "./history-validation.ts";
 
 /**
  * The client half of §12.5: how a browser absorbs replay frames into one
@@ -35,6 +38,8 @@ export type SubscribeFrame = {
   sessionId: string;
   afterSessionSequence: number;
   projection: "journal";
+  history?: true;
+  requestId?: string;
 };
 
 export type SessionStreamState = {
@@ -44,6 +49,12 @@ export type SessionStreamState = {
   events: BrowserReplayEvent[];
   /** Current conversation's render projection, starting at its latest reset. */
   journalEvents: BrowserReplayEvent[];
+  historyTurns: HistoryTurn[];
+  historyBefore: number | null;
+  historyHasMore: boolean;
+  resetSequence: number;
+  historyContext: BrowserReplayEvent[];
+  bootstrapped: boolean;
   /** Live-ness of the last frame seen; null before the first one. */
   live: boolean | null;
   /** Retention deleted this client's history and the rewind is not done yet. */
@@ -53,14 +64,21 @@ export type SessionStreamState = {
 export type SessionStreamOptions = {
   sessionId: string;
   send: (frame: SubscribeFrame) => void;
+  historyRequestId?: string;
 };
 
 export function createSessionStream(options: SessionStreamOptions): {
-  apply: (frame: SessionEventsFrame | SessionResyncFrame) => boolean;
+  apply: (frame: SessionEventsFrame | SessionResyncFrame | SessionHistoryFrame) => boolean;
   state: () => SessionStreamState;
 } {
   const events: BrowserReplayEvent[] = [];
   const journalEvents: BrowserReplayEvent[] = [];
+  let historyTurns: HistoryTurn[] = [];
+  let historyBefore: number | null = null;
+  let historyHasMore = false;
+  let resetSequence = 0;
+  let historyContext: BrowserReplayEvent[] = [];
+  let bootstrapped = false;
   let through = 0;
   let live: boolean | null = null;
   let needsResync = false;
@@ -79,17 +97,63 @@ export function createSessionStream(options: SessionStreamOptions): {
     });
   }
 
-  function apply(frame: SessionEventsFrame | SessionResyncFrame): boolean {
+  function apply(frame: SessionEventsFrame | SessionResyncFrame | SessionHistoryFrame): boolean {
     if (frame.sessionId !== options.sessionId) return false;
+    if (frame.type === "session.history") {
+      if (!validSessionHistory(frame)) return false;
+      if (frame.bootstrap) {
+        if (bootstrapped || frame.watermark < through) return false;
+        historyTurns = frame.turns;
+        through = frame.watermark;
+        events.length = 0;
+        journalEvents.length = 0;
+        resetSequence = frame.resetSequence;
+        historyContext = frame.context;
+        bootstrapped = true;
+        awaitingReplay = false;
+        needsResync = false;
+      } else {
+        if (
+          !bootstrapped ||
+          frame.resetSequence !== resetSequence ||
+          frame.turns.some((turn) => historyBefore === null || turn.cursor >= historyBefore)
+        )
+          return false;
+        historyTurns = [...frame.turns, ...historyTurns];
+      }
+      historyBefore = frame.before;
+      historyHasMore = frame.hasMore;
+      return true;
+    }
     if (frame.type === "session.resync_required") {
       // Everything the client holds is outside the journal now. fromSequence
       // is the earliest surviving event; subscribing from through = from - 1
       // has the server serve that boundary event too.
+      // Retention cannot be repaired by silently retaining old turn snapshots.
+      const paged = bootstrapped || options.historyRequestId !== undefined;
+      historyTurns = [];
+      historyBefore = null;
+      historyHasMore = false;
+      historyContext = [];
+      resetSequence = 0;
+      bootstrapped = false;
       events.length = 0;
       journalEvents.length = 0;
       through = frame.fromSequence - 1;
       needsResync = true;
-      subscribe(through);
+      if (paged) {
+        awaitingReplay = true;
+        options.send({
+          type: "subscribe",
+          sessionId: options.sessionId,
+          afterSessionSequence: through,
+          projection: "journal",
+          history: true,
+          ...(options.historyRequestId === undefined
+            ? {}
+            : { requestId: options.historyRequestId }),
+        });
+      } else subscribe(through);
       return true;
     }
 
@@ -119,7 +183,7 @@ export function createSessionStream(options: SessionStreamOptions): {
       for (const event of frame.events) {
         if (event.sessionSequence > through) {
           events.push(event);
-          if (isConversationReset(event)) journalEvents.length = 0;
+          resetHistory(event);
           journalEvents.push(event);
         }
       }
@@ -138,7 +202,7 @@ export function createSessionStream(options: SessionStreamOptions): {
         events.push(event);
         // Progress estimates do not alter chat or subagent content. Keep them
         // in the complete journal and advance continuity before projecting.
-        if (isConversationReset(event)) journalEvents.length = 0;
+        resetHistory(event);
         if (!isThinkingTokenEstimate(event)) journalEvents.push(event);
         changed = true;
         through = event.sessionSequence;
@@ -154,8 +218,30 @@ export function createSessionStream(options: SessionStreamOptions): {
     return changed;
   }
 
+  function resetHistory(event: BrowserReplayEvent): void {
+    if (!isConversationReset(event)) return;
+    journalEvents.length = 0;
+    historyTurns = [];
+    historyBefore = null;
+    historyHasMore = false;
+    resetSequence = event.sessionSequence;
+    historyContext = [event];
+  }
+
   function state(): SessionStreamState {
-    return { through, events, journalEvents, live, needsResync };
+    return {
+      through,
+      events,
+      journalEvents,
+      live,
+      needsResync,
+      historyTurns,
+      historyBefore,
+      historyHasMore,
+      resetSequence,
+      historyContext,
+      bootstrapped,
+    };
   }
 
   return { apply, state };

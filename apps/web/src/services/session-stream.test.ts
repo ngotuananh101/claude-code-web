@@ -51,6 +51,193 @@ function harness() {
   return { stream, sent };
 }
 
+describe("history bootstrap", () => {
+  test.each([
+    ["cursor metadata mismatch", { before: 19 }],
+    ["invalid older-page flag", { hasMore: "yes" }],
+    ["missing bootstrap flag", { bootstrap: undefined }],
+    ["empty page with more history", { turns: [], before: null }],
+    ["null turn", { turns: [null] }],
+    ["null event", { turns: [{ cursor: 21, kind: "agent", events: [null] }] }],
+    [
+      "unknown event type",
+      {
+        turns: [
+          { cursor: 21, kind: "agent", events: [replayEvent(10, { type: "invalid" as never })] },
+        ],
+      },
+    ],
+    [
+      "event after watermark",
+      { turns: [{ cursor: 21, kind: "agent", events: [replayEvent(101)] }] },
+    ],
+    [
+      "event before turn start",
+      { turns: [{ cursor: 21, kind: "agent", events: [replayEvent(9)] }] },
+    ],
+    [
+      "unordered compact chunks",
+      { turns: [{ cursor: 21, kind: "agent", events: [replayEvent(12), replayEvent(11)] }] },
+    ],
+    [
+      "missing payload",
+      {
+        turns: [
+          { cursor: 21, kind: "agent", events: [{ ...replayEvent(10), payload: undefined }] },
+        ],
+      },
+    ],
+    ["invalid context envelope", { context: [null] }],
+    ["invalid request correlation", { requestId: 42 }],
+  ])("rejects %s before mutating history or continuity", (_name, overrides) => {
+    const { stream } = harness();
+    const frame = {
+      type: "session.history",
+      sessionId: "session-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      before: 21,
+      hasMore: true,
+      turns: [{ cursor: 21, kind: "agent", events: [replayEvent(10)] }],
+      context: [],
+      ...overrides,
+    };
+    expect(() => stream.apply(frame as never)).not.toThrow();
+    expect(stream.apply(frame as never)).toBe(false);
+    expect(stream.state().through).toBe(0);
+    expect(stream.state().historyTurns).toEqual([]);
+    expect(stream.state().bootstrapped).toBe(false);
+  });
+
+  test("reset-scoped pages reject pre-reset events while retaining unknown JSON payloads", () => {
+    const { stream } = harness();
+    const frame = {
+      type: "session.history",
+      sessionId: "session-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 9,
+      before: 21,
+      hasMore: false,
+      turns: [
+        {
+          cursor: 21,
+          kind: "agent",
+          events: [
+            replayEvent(10, { payload: null }),
+            replayEvent(11, { payload: { future: [false, 42, "text", null] } }),
+          ],
+        },
+      ],
+      context: [],
+    };
+    expect(
+      stream.apply({
+        ...frame,
+        turns: [{ cursor: 17, kind: "agent", events: [replayEvent(8)] }],
+        before: 17,
+      } as never),
+    ).toBe(false);
+    expect(stream.apply(frame as never)).toBe(true);
+    expect(stream.state().historyTurns[0]?.events[0]?.payload).toBeNull();
+  });
+
+  test("bootstrap establishes coverage without pretending omitted history was replayed", () => {
+    const { stream } = harness();
+    const frame = {
+      type: "session.history",
+      sessionId: "session-1",
+      bootstrap: true,
+      watermark: 900,
+      resetSequence: 0,
+      hasMore: true,
+      before: 101,
+      turns: [{ cursor: 101, kind: "agent", events: [replayEvent(50)] }],
+      context: [],
+    } as const;
+    expect(stream.apply(frame as unknown as Parameters<typeof stream.apply>[0])).toBe(true);
+    expect(stream.state().through).toBe(900);
+    expect(stream.state().historyTurns).toHaveLength(1);
+    stream.apply(batch([replayEvent(901)], true));
+    expect(stream.state().through).toBe(901);
+    expect(stream.state().journalEvents).toHaveLength(1);
+  });
+
+  test("retention repair discards paged history and requests a fresh bootstrap", () => {
+    const sent: unknown[] = [];
+    const stream = createSessionStream({
+      sessionId: "session-1",
+      historyRequestId: "open-1",
+      send: (frame) => sent.push(frame),
+    });
+    stream.apply({
+      type: "session.history",
+      sessionId: "session-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      hasMore: true,
+      before: 91,
+      turns: [{ cursor: 91, kind: "agent", events: [replayEvent(45)] }],
+      context: [],
+    });
+    stream.apply(resync(110));
+    expect(stream.state().historyTurns).toEqual([]);
+    expect(stream.state().bootstrapped).toBe(false);
+    expect(sent).toEqual([
+      {
+        type: "subscribe",
+        sessionId: "session-1",
+        afterSessionSequence: 109,
+        projection: "journal",
+        history: true,
+        requestId: "open-1",
+      },
+    ]);
+  });
+
+  test("older pages prepend without changing continuity and a reset rejects stale pages", () => {
+    const { stream } = harness();
+    const page = {
+      type: "session.history",
+      sessionId: "session-1",
+      bootstrap: true,
+      watermark: 20,
+      resetSequence: 0,
+      hasMore: true,
+      before: 11,
+      turns: [{ cursor: 11, kind: "agent", events: [replayEvent(5)] }],
+      context: [],
+    };
+    stream.apply(page as unknown as Parameters<typeof stream.apply>[0]);
+    stream.apply({
+      ...page,
+      bootstrap: false,
+      watermark: 25,
+      before: 2,
+      turns: [{ cursor: 2, kind: "user", events: [replayEvent(1)] }],
+    } as unknown as Parameters<typeof stream.apply>[0]);
+    expect(stream.state().historyTurns.map((turn) => turn.cursor)).toEqual([2, 11]);
+    expect(stream.state().through).toBe(20);
+    stream.apply(
+      batch(
+        [
+          replayEvent(21, {
+            type: "session.updated",
+            payload: { type: "conversation_reset", new_conversation_id: "new" },
+          }),
+        ],
+        true,
+      ),
+    );
+    expect(stream.state().historyTurns).toEqual([]);
+    expect(
+      stream.apply({ ...page, bootstrap: false } as unknown as Parameters<typeof stream.apply>[0]),
+    ).toBe(false);
+  });
+});
+
 describe("the session stream state machine", () => {
   test("a replay batch appends in order and advances through", () => {
     const { stream } = harness();

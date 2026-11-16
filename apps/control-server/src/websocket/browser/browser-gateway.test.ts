@@ -56,10 +56,167 @@ function makeSocket(sendStatus: number | (() => number) = 1) {
 }
 
 type ReplayHarness = {
+  history?: BrowserGatewayOptions["readHistory"];
   owner?: (sessionId: string) => string | undefined;
   events?: BrowserReplayEvent[];
   bounds?: { watermark: number; earliest: number };
 };
+
+describe("lazy history bootstrap", () => {
+  test("cold subscription uses one history page instead of replaying all events", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: Array.from({ length: 500 }, (_, i) => replayEvent(i + 1)),
+        history: () => ({
+          turns: [],
+          before: null,
+          hasMore: true,
+          resetSequence: 0,
+          watermark: 500,
+          context: [],
+        }),
+      },
+    });
+    const { socket, sent } = makeSocket();
+    await gateway.attach(socket, { origin, cookie });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "subscribe",
+        sessionId: "session",
+        projection: "journal",
+        history: true,
+      }),
+    );
+    expect(sent.map((frame) => frame["type"])).toEqual(["subscribed", "session.history"]);
+    expect(sent[1]!["watermark"]).toBe(500);
+    expect(sent[1]!["bootstrap"]).toBe(true);
+  });
+
+  test.each(["foreign", "unknown"])(
+    "history errors echo correlation without revealing ownership for %s",
+    async (id) => {
+      const { gateway, cookie } = await setup({
+        replay: { owner: (sessionId) => (sessionId === "foreign" ? "another-owner" : undefined) },
+      });
+      const { socket, sent } = makeSocket();
+      await gateway.attach(socket, { origin, cookie });
+      gateway.handleMessage(
+        socket,
+        JSON.stringify({
+          type: "history.before",
+          sessionId: id,
+          requestId: "older-1",
+          before: 10,
+          resetSequence: 0,
+        }),
+      );
+      expect(sent).toEqual([
+        { type: "error", reason: "forbidden", sessionId: id, requestId: "older-1" },
+      ]);
+    },
+  );
+
+  test("malformed older cursors retain valid bounded correlation fields", async () => {
+    const { gateway, cookie } = await setup();
+    const { socket, sent } = makeSocket();
+    await gateway.attach(socket, { origin, cookie });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "history.before",
+        sessionId: "session",
+        requestId: "older-2",
+        before: -1,
+        resetSequence: 0,
+      }),
+    );
+    expect(sent.at(-1)).toEqual({
+      type: "error",
+      reason: "malformed",
+      sessionId: "session",
+      requestId: "older-2",
+    });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "history.before",
+        sessionId: "s".repeat(513),
+        requestId: "older-3",
+        before: 10,
+        resetSequence: 0,
+      }),
+    );
+    expect(sent.at(-1)).toEqual({ type: "error", reason: "malformed", requestId: "older-3" });
+  });
+
+  test("a reset-stale older cursor gets an explicit error", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        history: () => {
+          throw new Error("history_reset");
+        },
+      },
+    });
+    const { socket, sent } = makeSocket();
+    await gateway.attach(socket, { origin, cookie });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "history.before",
+        sessionId: "session",
+        before: 10,
+        resetSequence: 0,
+      }),
+    );
+    expect(sent).toEqual([{ type: "error", reason: "history_reset", sessionId: "session" }]);
+  });
+
+  test("a dropped subscription acknowledgement never reads the history page", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        history: () => {
+          throw new Error("read after dropped send");
+        },
+      },
+    });
+    const { socket, closed } = makeSocket(0);
+    await gateway.attach(socket, { origin, cookie });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "subscribe",
+        sessionId: "session",
+        projection: "journal",
+        history: true,
+      }),
+    );
+    expect(closed).toEqual([4002]);
+  });
+
+  test("older pages require ownership and reject a reset-stale cursor", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        owner: (id) => (id === "foreign" ? "another-owner" : undefined),
+        history: () => {
+          throw new Error("must not read foreign data");
+        },
+      },
+    });
+    const { socket, sent } = makeSocket();
+    await gateway.attach(socket, { origin, cookie });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "history.before",
+        sessionId: "foreign",
+        before: 10,
+        resetSequence: 0,
+      }),
+    );
+    expect(sent.at(-1)).toEqual({ type: "error", reason: "forbidden", sessionId: "foreign" });
+  });
+});
 
 function replayEvent(
   sessionSequence: number,
@@ -126,6 +283,7 @@ async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarn
             ),
         )
         .slice(0, limit),
+    ...(replay.history === undefined ? {} : { readHistory: replay.history }),
     replayBounds: () => bounds,
   };
 

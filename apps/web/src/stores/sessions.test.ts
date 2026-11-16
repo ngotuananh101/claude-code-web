@@ -3,6 +3,7 @@ import { computed, isReactive, watch } from "vue";
 import { socket } from "../services/socket.ts";
 import {
   closeSession,
+  loadEarlierSession,
   openSession,
   removeSession,
   resolveSessionLive,
@@ -94,6 +95,177 @@ describe("the sessions store's reactive mirror", () => {
     openSession("s-1");
   });
   afterEach(() => closeSession());
+
+  test("cold open negotiates lazy history and makes no older-page request", () => {
+    sent.length = 0;
+    openSession("s-1");
+    expect(sent).toEqual([
+      { type: "unsubscribe", sessionId: "s-1" },
+      {
+        type: "subscribe",
+        sessionId: "s-1",
+        afterSessionSequence: 0,
+        projection: "journal",
+        history: true,
+        requestId: expect.any(String),
+      },
+    ]);
+  });
+
+  test.each(["forbidden", "malformed"])(
+    "correlated %s errors settle an older request immediately and allow retry",
+    async (reason) => {
+      deliver({
+        type: "session.history",
+        sessionId: "s-1",
+        bootstrap: true,
+        watermark: 100,
+        resetSequence: 0,
+        before: 51,
+        hasMore: true,
+        context: [],
+        turns: [{ cursor: 51, kind: "agent", events: replayFrame(25)["events"] }],
+      });
+      sent.length = 0;
+      let settled = false;
+      const pending = loadEarlierSession().then(() => {
+        settled = true;
+      });
+      const request = sent[0] as { requestId: string };
+      deliver({ type: "error", reason, sessionId: "s-1", requestId: "stale" });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      deliver({ type: "error", reason, sessionId: "s-1", requestId: request.requestId });
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      await pending;
+      const retry = loadEarlierSession();
+      expect(sent).toHaveLength(2);
+      closeSession();
+      await retry;
+    },
+  );
+
+  test("older pages are single-flight, prepend, and never advance the watermark", async () => {
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      before: 51,
+      hasMore: true,
+      context: [],
+      turns: [{ cursor: 51, kind: "agent", events: replayFrame(25)["events"] }],
+    });
+    sent.length = 0;
+    const pending = loadEarlierSession();
+    const duplicate = loadEarlierSession();
+    expect(sent).toEqual([
+      {
+        type: "history.before",
+        sessionId: "s-1",
+        before: 51,
+        resetSequence: 0,
+        requestId: expect.any(String),
+      },
+    ]);
+    deliver({
+      requestId: (sent[0] as { requestId: string }).requestId,
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: false,
+      watermark: 105,
+      resetSequence: 0,
+      before: 20,
+      hasMore: false,
+      context: [],
+      turns: [{ cursor: 20, kind: "user", events: replayFrame(10)["events"] }],
+    });
+    await Promise.all([pending, duplicate]);
+    expect(sessions.stream?.historyTurns.map((turn) => turn.cursor)).toEqual([20, 51]);
+    expect(sessions.stream?.through).toBe(100);
+  });
+
+  test("a page from an earlier visit cannot populate a reopened session", async () => {
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      before: 51,
+      hasMore: true,
+      context: [],
+      turns: [{ cursor: 51, kind: "agent", events: replayFrame(25)["events"] }],
+    });
+    sent.length = 0;
+    const pending = loadEarlierSession();
+    const oldRequest = sent[0] as { requestId: string };
+    openSession("other");
+    await pending;
+    openSession("s-1");
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      before: 51,
+      hasMore: true,
+      context: [],
+      turns: [{ cursor: 51, kind: "agent", events: replayFrame(25)["events"] }],
+    });
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: false,
+      requestId: oldRequest.requestId,
+      watermark: 100,
+      resetSequence: 0,
+      before: 20,
+      hasMore: false,
+      context: [],
+      turns: [{ cursor: 20, kind: "user", events: replayFrame(10)["events"] }],
+    });
+    expect(sessions.stream?.historyTurns.map((turn) => turn.cursor)).toEqual([51]);
+  });
+
+  test("clear cancels an older request and rejects its delayed response", async () => {
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: true,
+      watermark: 100,
+      resetSequence: 0,
+      before: 51,
+      hasMore: true,
+      context: [],
+      turns: [{ cursor: 51, kind: "agent", events: replayFrame(25)["events"] }],
+    });
+    const pending = loadEarlierSession();
+    const reset = replayBatch(101, 1, true);
+    (reset["events"] as Record<string, unknown>[])[0]!["type"] = "session.updated";
+    (reset["events"] as Record<string, unknown>[])[0]!["payload"] = {
+      type: "conversation_reset",
+      new_conversation_id: "new",
+    };
+    deliver(reset);
+    await pending;
+    deliver({
+      type: "session.history",
+      sessionId: "s-1",
+      bootstrap: false,
+      watermark: 100,
+      resetSequence: 0,
+      before: 20,
+      hasMore: false,
+      context: [],
+      turns: [{ cursor: 20, kind: "user", events: replayFrame(10)["events"] }],
+    });
+    expect(sessions.stream?.historyTurns).toEqual([]);
+    expect(sessions.stream?.through).toBe(101);
+  });
 
   test("a replay frame hands the journal a fresh events array", () => {
     const before = sessions.stream?.events;
@@ -336,7 +508,14 @@ describe("session subscription lifecycle", () => {
   test("every open opts into compact replay", () => {
     openSession("s-1");
     expect(sent).toEqual([
-      { type: "subscribe", sessionId: "s-1", afterSessionSequence: 0, projection: "journal" },
+      {
+        type: "subscribe",
+        sessionId: "s-1",
+        afterSessionSequence: 0,
+        projection: "journal",
+        history: true,
+        requestId: expect.any(String),
+      },
     ]);
   });
 
@@ -345,14 +524,28 @@ describe("session subscription lifecycle", () => {
     openSession("second");
     closeSession();
     expect(sent).toEqual([
-      { type: "subscribe", sessionId: "first", afterSessionSequence: 0, projection: "journal" },
+      {
+        type: "subscribe",
+        sessionId: "first",
+        afterSessionSequence: 0,
+        projection: "journal",
+        history: true,
+        requestId: expect.any(String),
+      },
       { type: "unsubscribe", sessionId: "first" },
-      { type: "subscribe", sessionId: "second", afterSessionSequence: 0, projection: "journal" },
+      {
+        type: "subscribe",
+        sessionId: "second",
+        afterSessionSequence: 0,
+        projection: "journal",
+        history: true,
+        requestId: expect.any(String),
+      },
       { type: "unsubscribe", sessionId: "second" },
     ]);
   });
 
-  test("reconnect uses the received watermark even before a UI flush", () => {
+  test("reconnect before bootstrap requests history again rather than full replay", () => {
     let reopen: (() => void) | undefined;
     const reopenSpy = spyOn(socket, "onReopen").mockImplementation((listener) => {
       reopen = listener;
@@ -370,7 +563,14 @@ describe("session subscription lifecycle", () => {
       sent.length = 0;
       reopen?.();
       expect(sent).toEqual([
-        { type: "subscribe", sessionId: "s-1", afterSessionSequence: 200, projection: "journal" },
+        {
+          type: "subscribe",
+          sessionId: "s-1",
+          afterSessionSequence: 200,
+          projection: "journal",
+          history: true,
+          requestId: expect.any(String),
+        },
       ]);
     } finally {
       reopenSpy.mockRestore();

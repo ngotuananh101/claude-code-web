@@ -8,7 +8,7 @@ import {
   updateSessionTitle,
   workspacesForOwner,
 } from "@cc-web/control-db";
-import { SESSIONS_CAPABILITY } from "@cc-web/protocol";
+import { SESSION_CHAT_PAGES_CAPABILITY, SESSIONS_CAPABILITY } from "@cc-web/protocol";
 import type { Dispatcher } from "../dispatch/dispatcher.ts";
 import type { PendingRpcRequests } from "../rpc/pending-requests.ts";
 import type { ServerOptions } from "../server.ts";
@@ -195,6 +195,8 @@ export async function handleWorkspaceSessionMessages(
   const payload: {
     op: "sessions.messages";
     sessionId: string;
+    chatBefore?: number;
+    chatSnapshot?: string;
     dir?: string;
     limit?: number;
     offset?: number;
@@ -212,12 +214,31 @@ export async function handleWorkspaceSessionMessages(
     if (!Number.isNaN(offset)) payload.offset = offset;
   }
 
+  const chatBeforeParam = url.searchParams.get("chatBefore");
+  if (chatBeforeParam !== null) {
+    const chatBefore = Number(chatBeforeParam);
+    if (
+      !/^\d+$/.test(chatBeforeParam) ||
+      !Number.isSafeInteger(chatBefore) ||
+      chatBefore < 0 ||
+      offsetParam !== null
+    )
+      return jsonError("BAD_REQUEST", "invalid chat cursor", 400);
+    payload.chatBefore = chatBefore;
+  }
+  const chatSnapshot = url.searchParams.get("chatSnapshot");
+  if (chatSnapshot !== null) {
+    if (payload.chatBefore === undefined || chatSnapshot === "" || chatSnapshot.length > 128)
+      return jsonError("BAD_REQUEST", "invalid chat snapshot", 400);
+    payload.chatSnapshot = chatSnapshot;
+  }
   return submitRpc(options, runnerGateway, pending, dispatcher, {
     runnerId: owned.runnerId,
     workspaceId: owned.workspaceId,
     kind: "workspace.sessions.messages",
     payload,
-    capability: SESSIONS_CAPABILITY,
+    capability:
+      payload.chatBefore === undefined ? SESSIONS_CAPABILITY : SESSION_CHAT_PAGES_CAPABILITY,
   });
 }
 

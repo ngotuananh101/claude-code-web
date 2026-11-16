@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  SESSION_CHAT_PAGES_CAPABILITY,
   SESSIONS_CAPABILITY,
   SESSIONS_LIST_DEFAULT_LIMIT,
   SESSIONS_LIST_MAX_LIMIT,
@@ -99,7 +100,7 @@ const throwingSdk = (): SessionsSdk => ({
 
 describe("SESSIONS_CAPABILITIES", () => {
   test("advertises the sessions capability", () => {
-    expect(SESSIONS_CAPABILITIES).toEqual([SESSIONS_CAPABILITY]);
+    expect(SESSIONS_CAPABILITIES).toEqual([SESSIONS_CAPABILITY, SESSION_CHAT_PAGES_CAPABILITY]);
   });
 });
 
@@ -324,6 +325,347 @@ describe("workspace.sessions.list", () => {
 });
 
 describe("workspace.sessions.messages", () => {
+  test("older SDK pages use one immutable snapshot even when compaction changes the chain", async () => {
+    const messages = Array.from({ length: 15 }, (_, i) => [
+      { type: "user", uuid: `u-${i}`, message: { content: `prompt ${i}` } },
+      { type: "assistant", uuid: `a-${i}`, message: { content: `answer ${i}` } },
+    ]).flat();
+    const { sdk, getSessionMessagesCalls } = makeMockSdk([], messages);
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const read = (chatBefore: number, chatSnapshot?: string) =>
+      handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: {
+            op: "sessions.messages",
+            sessionId: "s1",
+            chatBefore,
+            ...(chatSnapshot === undefined ? {} : { chatSnapshot }),
+          },
+        }),
+      );
+    const first = (await read(Number.MAX_SAFE_INTEGER)).result as {
+      messages: { uuid: string }[];
+      chatBefore: number;
+      chatSnapshot?: string;
+    };
+    expect(first.messages[0]?.uuid).toBe("u-9");
+    expect(first.chatSnapshot).toEqual(expect.any(String));
+    messages.splice(0, 12);
+    const second = (await read(first.chatBefore, first.chatSnapshot)).result as typeof first;
+    expect(second.messages.map((row) => row.uuid)).toEqual([
+      "u-3",
+      "a-3",
+      "u-4",
+      "a-4",
+      "u-5",
+      "a-5",
+      "u-6",
+      "a-6",
+      "u-7",
+      "a-7",
+      "u-8",
+      "a-8",
+    ]);
+    expect(getSessionMessagesCalls).toHaveLength(1);
+    expect(second.chatSnapshot).toBe(first.chatSnapshot);
+    const forged = await read(6, "unknown-snapshot");
+    expect(forged).toMatchObject({ ok: false, error: { code: "SDK_HISTORY_EXPIRED" } });
+    expect(getSessionMessagesCalls).toHaveLength(1);
+  });
+
+  test("chat snapshots cannot be reused for another session or runner restart", async () => {
+    const { sdk, getSessionMessagesCalls } = makeMockSdk(
+      [],
+      [{ type: "user", uuid: "u", message: { content: "hello" } }],
+    );
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const payload = {
+      op: "sessions.messages",
+      sessionId: "s1",
+      chatBefore: Number.MAX_SAFE_INTEGER,
+    };
+    const first = (await handler(command({ kind: "workspace.sessions.messages", payload })))
+      .result as { chatSnapshot: string };
+    const older = { ...payload, chatBefore: 1, chatSnapshot: first.chatSnapshot };
+    const foreign = await handler(
+      command({ kind: "workspace.sessions.messages", payload: { ...older, sessionId: "other" } }),
+    );
+    expect(foreign).toMatchObject({ ok: false, error: { code: "SDK_HISTORY_EXPIRED" } });
+    const restarted = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    expect(
+      await restarted(command({ kind: "workspace.sessions.messages", payload: older })),
+    ).toMatchObject({ ok: false, error: { code: "SDK_HISTORY_EXPIRED" } });
+    expect(getSessionMessagesCalls).toHaveLength(1);
+  });
+
+  test("snapshot continuations reject a cursor that would split a complete bubble", async () => {
+    const { sdk, getSessionMessagesCalls } = makeMockSdk(
+      [],
+      [
+        { type: "user", uuid: "u", message: { content: "prompt" } },
+        { type: "assistant", uuid: "a", message: { content: "answer" } },
+        {
+          type: "user",
+          uuid: "tool",
+          message: { content: [{ type: "tool_result", content: "result" }] },
+        },
+      ],
+    );
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const payload = {
+      op: "sessions.messages",
+      sessionId: "s1",
+      chatBefore: Number.MAX_SAFE_INTEGER,
+    };
+    const first = (await handler(command({ kind: "workspace.sessions.messages", payload })))
+      .result as { chatSnapshot: string };
+    expect(
+      await handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: { ...payload, chatBefore: 2, chatSnapshot: first.chatSnapshot },
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "SDK_HISTORY_INVALID_CURSOR" } });
+    expect(getSessionMessagesCalls).toHaveLength(1);
+  });
+
+  test("bounded snapshots expire and evict without rereading an old cursor", async () => {
+    const { sdk, getSessionMessagesCalls } = makeMockSdk(
+      [],
+      [{ type: "user", uuid: "u", message: { content: "prompt" } }],
+    );
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => undefined });
+    const read = (
+      sessionId: string,
+      chatBefore = Number.MAX_SAFE_INTEGER,
+      chatSnapshot?: string,
+      dir?: string,
+    ) =>
+      handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: {
+            op: "sessions.messages",
+            sessionId,
+            chatBefore,
+            ...(chatSnapshot === undefined ? {} : { chatSnapshot }),
+            ...(dir === undefined ? {} : { dir }),
+          },
+        }),
+      );
+    const first = (await read("s0")).result as { chatSnapshot: string };
+    for (let i = 1; i <= 8; i++) expect((await read(`s${i}`)).ok).toBe(true);
+    expect(await read("s0", 0, first.chatSnapshot)).toMatchObject({
+      ok: false,
+      error: { code: "SDK_HISTORY_EXPIRED" },
+    });
+    const fresh = (await read("fresh")).result as { chatSnapshot: string };
+    const now = Date.now;
+    try {
+      Date.now = () => now() + 31 * 60 * 1000;
+      expect(await read("fresh", 0, fresh.chatSnapshot)).toMatchObject({
+        ok: false,
+        error: { code: "SDK_HISTORY_EXPIRED" },
+      });
+    } finally {
+      Date.now = now;
+    }
+    const scoped = (await read("scoped", Number.MAX_SAFE_INTEGER, undefined, "/tmp/first"))
+      .result as { chatSnapshot: string };
+    expect(await read("scoped", 0, scoped.chatSnapshot, "/tmp/other")).toMatchObject({
+      ok: false,
+      error: { code: "SDK_HISTORY_EXPIRED" },
+    });
+    expect(await read("scoped", 1)).toMatchObject({
+      ok: false,
+      error: { code: "SDK_HISTORY_EXPIRED" },
+    });
+    expect(getSessionMessagesCalls).toHaveLength(11);
+  });
+
+  test("oversized SDK snapshots fail explicitly rather than returning truncated chat", async () => {
+    const { sdk } = makeMockSdk(
+      [],
+      [{ type: "user", uuid: "u", message: { content: "x".repeat(32 * 1024 * 1024) } }],
+    );
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    expect(
+      await handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: { op: "sessions.messages", sessionId: "s", chatBefore: Number.MAX_SAFE_INTEGER },
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "SDK_HISTORY_TOO_LARGE" } });
+  });
+
+  test("chat pagination returns twelve complete bubbles without child fan-out", async () => {
+    const messages = Array.from({ length: 15 }, (_, i) => [
+      { type: "user", uuid: `u-${i}`, message: { content: `prompt ${i}` } },
+      {
+        type: "assistant",
+        uuid: `a-${i}`,
+        message: { content: [{ type: "text", text: `answer ${i}` }] },
+      },
+      {
+        type: "user",
+        uuid: `tool-${i}`,
+        message: { content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] },
+      },
+    ]).flat();
+    const { sdk } = makeMockSdk([], messages);
+    sdk.listSubagents = async () => {
+      throw new Error("chat pages must not enumerate children");
+    };
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const request = (chatBefore: number, chatSnapshot?: string) =>
+      handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: {
+            op: "sessions.messages",
+            sessionId: "s1",
+            chatBefore,
+            ...(chatSnapshot === undefined ? {} : { chatSnapshot }),
+          },
+        }),
+      );
+    const first = await request(Number.MAX_SAFE_INTEGER);
+    const page = first.result as {
+      messages: { uuid: string }[];
+      chatBefore: number | null;
+      chatSnapshot: string;
+      hasMore: boolean;
+    };
+    expect(first.ok).toBe(true);
+    expect(page.messages[0]?.uuid).toBe("u-9");
+    expect(page.messages.at(-1)?.uuid).toBe("tool-14");
+    expect(page.hasMore).toBe(true);
+    expect(page.chatBefore).toBe(27);
+    const second = (await request(page.chatBefore!, page.chatSnapshot)).result as typeof page;
+    expect(second.messages[0]?.uuid).toBe("u-3");
+    expect(second.messages.at(-1)?.uuid).toBe("tool-8");
+  });
+
+  test("chat pagination counts bubbles, not rows, and keeps wrapper rows inside the page", async () => {
+    const messages: Array<Record<string, unknown>> = [];
+    for (let i = 1; i <= 8; i++) {
+      messages.push({ type: "user", uuid: `u-${i}`, message: { content: `prompt ${i}` } });
+      messages.push({
+        type: "assistant",
+        uuid: `a-${i}`,
+        message: { content: [{ type: "text", text: `answer ${i}` }] },
+      });
+      if (i === 3) {
+        messages.push({
+          type: "user",
+          uuid: "wrapped",
+          message: {
+            content: [{ type: "text", text: "<system-reminder>injected</system-reminder>" }],
+          },
+        });
+      }
+    }
+    const { sdk } = makeMockSdk([], messages);
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const first = await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: { op: "sessions.messages", sessionId: "s1", chatBefore: Number.MAX_SAFE_INTEGER },
+      }),
+    );
+    const page = first.result as {
+      messages: { uuid: string }[];
+      chatBefore: number | null;
+      chatSnapshot: string;
+      hasMore: boolean;
+    };
+    const firstIds = page.messages.map((message) => message.uuid);
+    expect(firstIds[0]).toBe("u-3");
+    expect(firstIds).toContain("wrapped");
+    expect(firstIds.filter((id) => !id.startsWith("u-") && !id.startsWith("a-"))).toEqual([
+      "wrapped",
+    ]);
+    expect(firstIds.filter((id) => id.startsWith("u-"))).toHaveLength(6);
+    expect(page.chatBefore).toBe(4);
+    expect(page.hasMore).toBe(true);
+
+    const second = await handler(
+      command({
+        kind: "workspace.sessions.messages",
+        payload: {
+          op: "sessions.messages",
+          sessionId: "s1",
+          chatBefore: page.chatBefore!,
+          chatSnapshot: page.chatSnapshot,
+        },
+      }),
+    );
+    const older = second.result as typeof page;
+    expect(older.messages.map((message) => message.uuid)).toEqual(["u-1", "a-1", "u-2", "a-2"]);
+    expect(older.hasMore).toBe(false);
+  });
+
+  test("task notifications split assistant bubbles at the twelve-bubble SDK page boundary", async () => {
+    const messages: Array<Record<string, unknown>> = [
+      { type: "user", uuid: "u-0", message: { content: "start" } },
+    ];
+    for (let i = 0; i < 14; i++) {
+      if (i > 0)
+        messages.push({
+          type: "user",
+          uuid: `notification-${i}`,
+          message: { content: `<task-notification>task ${i}</task-notification>` },
+        });
+      messages.push({ type: "assistant", uuid: `a-${i}`, message: { content: `answer ${i}` } });
+    }
+    const { sdk } = makeMockSdk([], messages);
+    const handler = createSessionsHandler({ sdk, workspacePathFor: () => "/tmp/proj" });
+    const request = (chatBefore: number, chatSnapshot?: string) =>
+      handler(
+        command({
+          kind: "workspace.sessions.messages",
+          payload: {
+            op: "sessions.messages",
+            sessionId: "s1",
+            chatBefore,
+            ...(chatSnapshot === undefined ? {} : { chatSnapshot }),
+          },
+        }),
+      );
+    const first = await request(Number.MAX_SAFE_INTEGER);
+    const page = first.result as {
+      messages: { type: string; uuid: string }[];
+      chatBefore: number;
+      chatSnapshot: string;
+      hasMore: boolean;
+    };
+    expect(first.ok).toBe(true);
+    expect(page.messages.filter((row) => row.type === "assistant").map((row) => row.uuid)).toEqual([
+      "a-2",
+      "a-3",
+      "a-4",
+      "a-5",
+      "a-6",
+      "a-7",
+      "a-8",
+      "a-9",
+      "a-10",
+      "a-11",
+      "a-12",
+      "a-13",
+    ]);
+    expect(page.chatBefore).toBe(5);
+    expect(page.hasMore).toBe(true);
+    const older = (await request(page.chatBefore, page.chatSnapshot)).result as typeof page;
+    expect(older.messages.filter((row) => row.type === "assistant").map((row) => row.uuid)).toEqual(
+      ["a-0", "a-1"],
+    );
+    expect(older.hasMore).toBe(false);
+  });
+
   test("calls sdk.getSessionMessages with sessionId and resolved dir", async () => {
     const messages = [
       { type: "user" as const, uuid: "m1", session_id: "s1", message: { content: "hi" } },

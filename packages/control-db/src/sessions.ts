@@ -14,6 +14,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { deleteSessionHistory } from "./session-history.ts";
 
 export type SessionPin = {
   sessionId: string;
@@ -86,6 +87,7 @@ export function deleteSession(
     ).run(sessionId);
     db.prepare("DELETE FROM approvals WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM active_runs WHERE session_id = ?").run(sessionId);
+    deleteSessionHistory(db, sessionId);
     db.prepare("DELETE FROM run_events WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM command_outbox WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);

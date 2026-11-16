@@ -22,7 +22,11 @@
  * subscription streaming events to a login that has been revoked.
  */
 
-import { type BrowserReplayEvent, isThinkingTokenEstimate } from "@cc-web/protocol";
+import {
+  type BrowserReplayEvent,
+  isThinkingTokenEstimate,
+  type SessionHistoryPage,
+} from "@cc-web/protocol";
 
 /**
  * Resolves a raw Cookie header to a user id, or null when unauthenticated.
@@ -73,6 +77,10 @@ export type BrowserGatewayOptions = {
     through: number,
     limit: number,
   ) => BrowserReplayEvent[];
+  readHistory?: (
+    sessionId: string,
+    options: { before?: number; resetSequence?: number },
+  ) => SessionHistoryPage;
   /** The highest committed sequence and the lowest surviving one. */
   replayBounds: (sessionId: string) => { watermark: number; earliest: number };
 };
@@ -171,6 +179,15 @@ export class BrowserGateway {
     }
 
     const record = message as Record<string, unknown>;
+    const requestId = record["requestId"];
+    if (
+      requestId !== undefined &&
+      (typeof requestId !== "string" || requestId === "" || requestId.length > 128)
+    ) {
+      this.#send(socket, { type: "error", reason: "malformed" });
+      return;
+    }
+    const request = requestId === undefined ? {} : { requestId };
 
     switch (record["type"]) {
       case "subscribe": {
@@ -208,6 +225,27 @@ export class BrowserGateway {
         else journal.delete(sessionId);
         this.#journalSubscriptions.set(socket, journal);
         if (!this.#send(socket, { type: "subscribed", sessionId })) return;
+
+        if (record["history"] === true) {
+          if (projection !== "journal" || this.#options.readHistory === undefined) {
+            this.#send(socket, {
+              type: "error",
+              reason: "history_unavailable",
+              sessionId,
+              ...request,
+            });
+            return;
+          }
+          const page = this.#options.readHistory(sessionId, {});
+          this.#send(socket, {
+            type: "session.history",
+            sessionId,
+            bootstrap: true,
+            ...page,
+            ...request,
+          });
+          return;
+        }
 
         const offset = after ?? 0;
         const { watermark, earliest } = this.#options.replayBounds(sessionId);
@@ -281,6 +319,59 @@ export class BrowserGateway {
             return;
           if (batch.length < BrowserGateway.REPLAY_BATCH_LIMIT) break;
           cursor = through;
+        }
+        return;
+      }
+
+      case "history.before": {
+        const sessionId = record["sessionId"];
+        const before = record["before"];
+        const resetSequence = record["resetSequence"];
+        const correlation = {
+          ...request,
+          ...(typeof sessionId === "string" && sessionId !== "" && sessionId.length <= 512
+            ? { sessionId }
+            : {}),
+        };
+        if (
+          typeof sessionId !== "string" ||
+          sessionId === "" ||
+          sessionId.length > 512 ||
+          typeof before !== "number" ||
+          !Number.isSafeInteger(before) ||
+          before <= 0 ||
+          typeof resetSequence !== "number" ||
+          !Number.isSafeInteger(resetSequence) ||
+          resetSequence < 0
+        ) {
+          this.#send(socket, { type: "error", reason: "malformed", ...correlation });
+          return;
+        }
+        if (this.#options.resolveOwner(sessionId) !== socket.data.userId) {
+          this.#send(socket, { type: "error", reason: "forbidden", ...correlation });
+          return;
+        }
+        if (this.#options.readHistory === undefined) {
+          this.#send(socket, {
+            type: "error",
+            reason: "history_unavailable",
+            sessionId,
+            ...request,
+          });
+          return;
+        }
+        try {
+          const page = this.#options.readHistory(sessionId, { before, resetSequence });
+          this.#send(socket, {
+            type: "session.history",
+            sessionId,
+            bootstrap: false,
+            ...page,
+            ...request,
+          });
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "history_reset") throw error;
+          this.#send(socket, { type: "error", reason: "history_reset", sessionId, ...request });
         }
         return;
       }

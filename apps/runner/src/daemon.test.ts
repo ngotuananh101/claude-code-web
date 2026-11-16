@@ -353,6 +353,7 @@ describe("the hello frame advertises capabilities", () => {
       "workspace.write",
       "workspace.browse",
       "workspace.sessions",
+      "workspace.sessions.chat-pages",
       "session.cleanup",
     ]);
   });
@@ -427,6 +428,7 @@ describe("the hello frame's runner capabilities", () => {
       "workspace.write",
       "workspace.browse",
       "workspace.sessions",
+      "workspace.sessions.chat-pages",
       "session.cleanup",
     ]);
     expect(frame["runnerCapabilities"]).toEqual(runnerCapabilities);

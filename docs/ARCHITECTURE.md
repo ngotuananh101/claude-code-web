@@ -773,6 +773,102 @@ same boundary. Older runners' `run.status` reset payloads are recognized too.
 Neither the durable event journal/ACK identities nor the SDK transcript files
 are deleted by `/clear`; transcript cleanup remains the separate §18.5 policy.
 
+**Bounded chat history bootstrap.** A cold open no longer replays the journal
+and reduces it before slicing. `subscribe` with `history: true` (journal
+projection only) answers `subscribed` followed by one `session.history` frame
+with `bootstrap: true` instead of any `session.events` frame; it carries the
+newest **12 chat bubbles** in chronological order, an exclusive `before`
+cursor, `hasMore`, the current `resetSequence`, the journal `watermark`, and
+`context` — bootstrap-time rows (latest `session.updated` init and unresolved
+`approval.requested`) that a thin page cannot carry. `history.before` asks for
+the previous 12 bubbles: it is ownership-checked, never advances `through`,
+and answers `error.history_reset` when its `resetSequence` predates the current
+conversation. A `requestId` echoed on every history answer and error lets the
+client drop a response that crossed a route change or `/clear`.
+
+The read model is `packages/control-db/src/session-history.ts`: ingestion
+projects each committed event inside the existing journal transaction into
+indexed turn headers (`session_history_turns`, keyed by a session-scoped
+cursor, reset-scoped) and compact event chunks (`session_history_chunks`).
+Consecutive same-route text deltas coalesce up to 16 KiB per stored chunk, so a
+run with thousands of deltas costs a handful of rows while keeping the complete
+text; tool/process boundaries never merge. A page query reads at most 13 turn
+headers and parses chunks only for the 12 selected turns — unrequested older
+pages are neither read nor reduced. A prompt that is only transport wrappers
+creates no user turn, matching the reducer, so a page holds 12 real bubbles.
+Raw journal rows, event ids, sequence allocation and runner ACKs are unchanged;
+session/runner deletion removes the compact rows in the same authorized
+transaction. `/clear` keeps old turn rows hidden behind the reset scope rather
+than deleting them. `session_history_projection` records the read-model version;
+unversioned or changed semantics rebuild all compact rows inside an IMMEDIATE
+transaction, with the marker committed only after complete reconstruction.
+A current-version startup reads no raw journal rows, including no MAX/GROUP BY.
+A failed rebuild rolls back compact rows and the marker without changing raw events.
+
+History frames are validated in full before browser mutation: bounded page count,
+ordered reset-scoped cursors, kind parity, complete event envelopes and JSON payloads,
+watermark coverage, and consistent `before`/`hasMore`. Unknown JSON payload fields
+remain allowed. Valid bounded session/request identifiers are echoed on malformed
+and forbidden older-history errors so pending requests settle immediately; foreign
+and nonexistent sessions remain indistinguishable.
+
+Coverage and history are separate coordinate systems: `through` describes
+journal continuity only, and older pages never move it. Reconnect resumes the
+journal from `through`; a client that never bootstrapped asks for a bootstrap
+again. **Known limits:** the 12-bubble bound is a row/turn bound, not a byte
+bound — one exceptionally tool-heavy bubble can still be large; only the
+selected page's payload is read, but a settled bubble's complete process input
+travels with it. Bootstrap `context` is maintained from durable events, so a
+gate whose resolution arrives after the page is loaded is closed by the live
+frame, not by rewriting the stored context.
+
+**SDK transcript fallback.** When journal pages are exhausted and the session
+has SDK-only history (rows that predate the control journal), the client asks
+the runner through `workspace.sessions.messages` with `chatBefore` — an
+exclusive SDK-row cursor selecting the 12 newest complete bubbles, never
+enumerating child transcripts. The separate `workspace.sessions.chat-pages`
+capability gates this mode; an old runner is refused rather than silently
+answering with a legacy 100-row page. Existing `limit`/`offset` callers keep
+their head-relative semantics.
+
+The installed SDK exposes only head-relative `limit`/`offset`, so the first
+fallback demand still reads the whole conversation chain. It builds one
+immutable, redacted snapshot and indexes bubble boundaries once. The response
+carries opaque `chatSnapshot`; older requests reuse that session/directory-scoped
+snapshot, select boundaries by binary search, and read only selected rows without
+another SDK chain read. Compaction cannot move those cursors. Forged, expired,
+evicted, cross-session or runner-restart snapshots return `SDK_HISTORY_EXPIRED`;
+a cursor inside a bubble returns `SDK_HISTORY_INVALID_CURSOR`. The browser
+clears its SDK-only layer on expiration and refreshes only on the next demand,
+never merging snapshots. Journal history and live continuity are not reset.
+
+Snapshots expire after 30 minutes and the handler retains at most 8 snapshots
+with a combined serialized-redacted-row budget of 32 MiB, evicting oldest entries
+first. A larger single chain returns `SDK_HISTORY_TOO_LARGE` rather than silently
+truncating it. This bounds retained cache data, not initial SDK disk reads, peak
+heap overhead or a complete tool-heavy bubble's outbound bytes. On demand, the
+browser skips fully journal-covered pages within the same snapshot and retains
+only the first older SDK prefix, stopping rather than prefetching another page.
+
+Async prepend owns native overflow anchoring temporarily and restores the original
+inline declaration/priority on success, failure or route unmount. DOM tests use
+real HTMLElement/CSS/querySelectorAll and Vue unmount hooks with controlled geometry.
+On 2026-11-16, BrowserOS (Chrome 155) also passed 30 real-layout checks in an isolated
+loopback harness mounting the actual EventJournal SFC and generated ScrollArea/theme
+with synthetic turns. The checks cover native anchoring control, 12-bubble cold mount
+without older demand, single-flight button/upward-scroll paging, asynchronous prepend
+with concurrent tail growth and reader movement, CSS priority, rejection/retry and
+unmount/late completion. The rendered screenshot was inspected. This verifies browser
+layout/lifecycle, not a deployed end-to-end run with a real control server or SDK query.
+
+Synthetic-only benchmark: `bun scripts/benchmark-session-history.ts --rows 1000000
+--sessions 20 --repeats 5 --page-reads 10` creates an in-memory database, never opens
+an operator database, and reports seeding separately. On 2026-11-16 with Bun 1.4.4,
+1M raw events across 20 sessions took 7.520s for initial projection reconstruction;
+five repeat migrations took 0.171–0.378ms, newest/older page reads took 0.461/0.140ms,
+and both returned 12 bubbles. These are synthetic observations, not production
+latency guarantees.
+
 ### 12.6. Backpressure và spool limits
 
 - Batch nhỏ theo byte/time thresholds được đo sau.
@@ -944,6 +1040,16 @@ Layout và responsiveness:
 - Backend là persisted source of truth; local drafts có revision metadata.
 - Batch streaming updates; không rerender full chat theo từng delta.
 - Sanitize markdown/links/tool outputs; không chạy raw HTML từ model.
+- Chat history mở mặc định chỉ 12 bubble mới nhất, và mỗi lần kéo lên (hoặc bấm
+  "tải thêm") mới đọc thêm đúng một trang 12 bubble. Trang cũ được server đọc
+  theo cursor (xem §12.5), không phải tải toàn bộ journal rồi cắt ở UI. Cuộn
+  dùng helper `capturePrependAnchor` giữ nguyên bubble đang đọc khi trang cũ
+  được chèn lên, kể cả khi output live vẫn chạy; reduce của các bubble đã settle
+  được cache theo turn nên delta mới chỉ reduce phần đuôi live.
+- Gate chưa trả lời mà `requested` nằm ngoài trang đã tải được render thành
+  `ApprovalCard` riêng từ `historyContext` (`selectPendingGates`), để một run
+  không bị treo sau card người dùng không thấy. Gate đã nằm trong bubble đã tải
+  không bị render hai lần.
 
 ### 16.3. Monaco components
 

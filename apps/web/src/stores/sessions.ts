@@ -96,27 +96,87 @@ export async function loadAccount(): Promise<void> {
   sessions.avatar = body.avatar ?? null;
 }
 
-/**
- * Subscribe to a session's compact journal (§12.5). A cold open starts from
- * zero; reconnect resumes from the machine's received coverage watermark.
- */
+/** Cold subscriptions load a page; reconnect resumes received live coverage. */
+let historyRequestId = "";
+let olderRequest: {
+  requestId: string;
+  promise: Promise<void>;
+  resolve: () => void;
+  timer: ReturnType<typeof setTimeout>;
+} | null = null;
+function finishOlder(): void {
+  if (olderRequest === null) return;
+  clearTimeout(olderRequest.timer);
+  olderRequest.resolve();
+  olderRequest = null;
+}
+
+export function loadEarlierSession(): Promise<void> {
+  if (olderRequest !== null) return olderRequest.promise;
+  const state = machine?.state();
+  if (sessions.activeId === null || !state?.historyHasMore || state.historyBefore === null)
+    return Promise.resolve();
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const requestId = crypto.randomUUID();
+  olderRequest = { requestId, promise, resolve, timer: setTimeout(finishOlder, 15000) };
+  socket.send({
+    type: "history.before",
+    requestId,
+    sessionId: sessions.activeId,
+    before: state.historyBefore,
+    resetSequence: state.resetSequence,
+  });
+  return promise;
+}
+
 export function openSession(sessionId: string): void {
   closeSession();
   sessions.activeId = sessionId;
+  historyRequestId = crypto.randomUUID();
   machine = createSessionStream({
     sessionId,
+    historyRequestId,
     send: (frame: SubscribeFrame) => socket.send(frame),
   });
   sessions.stream = null;
 
   unsubscribeFrames = socket.onFrame((frame) => {
-    if (frame.type !== "session.events" && frame.type !== "session.resync_required") return;
+    if (frame.type === "error" && frame["sessionId"] === sessionId) {
+      if (frame["requestId"] === olderRequest?.requestId) finishOlder();
+      return;
+    }
+    if (frame.type === "session.history") {
+      if (frame["bootstrap"] === true) {
+        // Legacy fixtures may omit the id; production echoes it on every response.
+        if (frame["requestId"] !== undefined && frame["requestId"] !== historyRequestId) return;
+      } else if (olderRequest === null || frame["requestId"] !== olderRequest.requestId) return;
+    }
+    if (
+      frame.type !== "session.events" &&
+      frame.type !== "session.resync_required" &&
+      frame.type !== "session.history"
+    )
+      return;
     if (frame["sessionId"] !== sessionId) return;
     const changed = machine?.apply(frame as Parameters<NonNullable<typeof machine>["apply"]>[0]);
+
+    if (frame.type === "session.history") {
+      if (changed) {
+        clearFlushTimers();
+        mirror();
+      }
+      finishOlder();
+      return;
+    }
+    if (frame.type === "session.resync_required") finishOlder();
 
     // Finish pending replay even if its final frame is empty or deduplicated.
     const isEvents = frame.type === "session.events";
     const events = isEvents && Array.isArray(frame["events"]) ? frame["events"] : [];
+    if (events.some((event) => isConversationReset(event as BrowserReplayEvent))) finishOlder();
     const isIntermediateReplay =
       isEvents &&
       frame["live"] !== true &&
@@ -149,11 +209,14 @@ export function openSession(sessionId: string): void {
     sessionId,
     afterSessionSequence: machine.state().through,
     projection: "journal",
+    history: true,
+    requestId: historyRequestId,
   });
 }
 
 /** Detaches from the active session without touching the socket. */
 export function closeSession(): void {
+  finishOlder();
   clearFlushTimers();
   if (sessions.activeId !== null)
     socket.send({ type: "unsubscribe", sessionId: sessions.activeId });
@@ -214,6 +277,8 @@ function mirror(): void {
       : markRaw([...state.journalEvents]);
   sessions.stream = {
     ...state,
+    historyTurns: markRaw(state.historyTurns),
+    historyContext: markRaw(state.historyContext),
     events:
       previous !== null &&
       previous.events.length === state.events.length &&
@@ -254,6 +319,9 @@ export function startStore(): void {
         sessionId: sessions.activeId,
         afterSessionSequence: machine?.state().through ?? sessions.stream?.through ?? 0,
         projection: "journal",
+        ...(machine?.state().bootstrapped === true
+          ? {}
+          : { history: true, requestId: historyRequestId }),
       });
     }
     void loadSessions();

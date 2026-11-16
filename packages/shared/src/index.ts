@@ -5,6 +5,8 @@
  * be imported by the web bundle. See ARCHITECTURE.md §4.2.
  */
 
+export { cleanChatPrompt } from "./chat-prompt.ts";
+
 /** Canonical JSON: stable key order, used for request fingerprints (§9.1). */
 export function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";

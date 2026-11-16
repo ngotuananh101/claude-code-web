@@ -19,6 +19,7 @@ import { resolve } from "node:path";
 import {
   parseSessionsRequest,
   type RpcResultFrame,
+  SESSION_CHAT_PAGES_CAPABILITY,
   SESSIONS_CAPABILITY,
   SESSIONS_LIST_DEFAULT_LIMIT,
   SESSIONS_LIST_MAX_LIMIT,
@@ -32,6 +33,7 @@ import {
   type SessionsListResult,
 } from "@cc-web/protocol";
 import { redactErrorText, redactSdkMessage } from "../execution/redact.ts";
+import { createSdkChatPages } from "./chat-page.ts";
 import {
   extractAgentIdFromResultText,
   extractWorkflowLaunchMap,
@@ -110,7 +112,7 @@ export type SessionsHandlerOptions = {
 };
 
 /** Advisory: which optional command kinds this runner implements. */
-export const SESSIONS_CAPABILITIES: string[] = [SESSIONS_CAPABILITY];
+export const SESSIONS_CAPABILITIES: string[] = [SESSIONS_CAPABILITY, SESSION_CHAT_PAGES_CAPABILITY];
 
 /** The command kinds this handler owns; anything else is not its to answer. */
 const SESSIONS_KINDS = new Set(["workspace.sessions.list", "workspace.sessions.messages"]);
@@ -118,6 +120,21 @@ const SESSIONS_KINDS = new Set(["workspace.sessions.list", "workspace.sessions.m
 export function createSessionsHandler(
   options: SessionsHandlerOptions,
 ): (command: unknown) => Promise<RpcResultFrame> {
+  // Ephemeral and bounded: pagination keeps one immutable SDK chain across
+  // compaction, but never grows an unbounded process-wide transcript cache.
+  const snapshots = new Map<
+    string,
+    { key: string; expires: number; bytes: number; page: ReturnType<typeof createSdkChatPages> }
+  >();
+  const maxSnapshotBytes = 32 * 1024 * 1024;
+  const snapshotLifetime = 30 * 60 * 1000;
+  let snapshotBytes = 0;
+  function removeSnapshot(id: string): void {
+    const entry = snapshots.get(id);
+    if (entry !== undefined) snapshotBytes -= entry.bytes;
+    snapshots.delete(id);
+  }
+
   function refuse(commandId: string, code: string, message: string): RpcResultFrame {
     return { type: "rpc.result", commandId, ok: false, error: { code, message } };
   }
@@ -200,9 +217,65 @@ export function createSessionsHandler(
           SESSIONS_MESSAGES_MAX_LIMIT,
         );
 
-        // SDK pagination is head-relative. Read the conversation chain once
-        // for a default tail page, then bound the response before redaction and
-        // transport. Keep explicit offsets head-relative for existing callers.
+        if (msgRequest.chatBefore !== undefined) {
+          for (const [id, entry] of snapshots) if (entry.expires <= Date.now()) removeSnapshot(id);
+          const key = JSON.stringify([resolvedDir, msgRequest.sessionId]);
+          let snapshotId = msgRequest.chatSnapshot;
+          let snapshot = snapshotId === undefined ? undefined : snapshots.get(snapshotId);
+          if (snapshotId !== undefined && (snapshot === undefined || snapshot.key !== key))
+            return refuse(
+              commandId,
+              "SDK_HISTORY_EXPIRED",
+              "Chat history snapshot expired. Load earlier again to refresh it.",
+            );
+          if (snapshotId === undefined) {
+            if (msgRequest.chatBefore !== Number.MAX_SAFE_INTEGER)
+              return refuse(
+                commandId,
+                "SDK_HISTORY_EXPIRED",
+                "Chat history continuation requires its snapshot.",
+              );
+            const rows = (
+              await sdk.getSessionMessages(msgRequest.sessionId, {
+                ...(resolvedDir === undefined ? {} : { dir: resolvedDir }),
+                includeSystemMessages: false,
+              })
+            ).map((message) => toSessionMessage(message));
+            const bytes = Buffer.byteLength(JSON.stringify(rows));
+            if (bytes > maxSnapshotBytes)
+              return refuse(
+                commandId,
+                "SDK_HISTORY_TOO_LARGE",
+                "SDK chat snapshot exceeds the 32 MiB cache limit.",
+              );
+            while (snapshots.size >= 8 || snapshotBytes + bytes > maxSnapshotBytes)
+              removeSnapshot(snapshots.keys().next().value!);
+            snapshotId = crypto.randomUUID();
+            snapshot = {
+              key,
+              expires: Date.now() + snapshotLifetime,
+              bytes,
+              page: createSdkChatPages(rows),
+            };
+            snapshots.set(snapshotId, snapshot);
+            snapshotBytes += bytes;
+          }
+          const page = snapshot!.page(msgRequest.chatBefore);
+          if (page === undefined)
+            return refuse(
+              commandId,
+              "SDK_HISTORY_INVALID_CURSOR",
+              "Chat cursor is not a complete-bubble boundary in this snapshot.",
+            );
+          return answer(commandId, {
+            op: "sessions.messages",
+            sessionId: msgRequest.sessionId,
+            ...page,
+            chatSnapshot: snapshotId,
+          });
+        }
+
+        // Legacy SDK offsets are head-relative; default row reads still select the tail.
         const messages = await sdk.getSessionMessages(msgRequest.sessionId, {
           ...(resolvedDir !== undefined ? { dir: resolvedDir } : {}),
           ...(msgRequest.offset !== undefined ? { limit, offset: msgRequest.offset } : {}),

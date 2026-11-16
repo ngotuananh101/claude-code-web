@@ -36,6 +36,8 @@ export const BROWSE_CAPABILITY = "workspace.browse" as const;
  * and `workspace.sessions.messages` session discovery commands.
  */
 export const SESSIONS_CAPABILITY = "workspace.sessions" as const;
+/** Complete chat pages with snapshot-scoped cursors; legacy row readers do not implement this. */
+export const SESSION_CHAT_PAGES_CAPABILITY = "workspace.sessions.chat-pages" as const;
 
 /** Directory listing ceiling; a deeper tree is reported as truncated, not read. */
 export const MAX_LISTING_ENTRIES = 2000;
@@ -233,6 +235,10 @@ export type SessionMessagesRequest = {
   limit?: number;
   /** Explicit offsets count from the start, including zero for the oldest page. */
   offset?: number;
+  /** Opt-in complete twelve-bubble main transcript page, exclusive row cursor. */
+  chatBefore?: number;
+  /** Opaque immutable runner snapshot; required when continuing older chat pages. */
+  chatSnapshot?: string;
 };
 
 /** One Claude Code session discovered for a directory. */
@@ -291,6 +297,9 @@ export type SessionMessagesResult = {
   op: "sessions.messages";
   sessionId: string;
   messages: SessionMessage[];
+  chatBefore?: number | null;
+  hasMore?: boolean;
+  chatSnapshot?: string;
 };
 
 /**
@@ -449,7 +458,27 @@ export function parseSessionsRequest(
       return undefined;
     }
 
+    const chatBefore = record["chatBefore"];
+    if (
+      chatBefore !== undefined &&
+      (typeof chatBefore !== "number" ||
+        !Number.isSafeInteger(chatBefore) ||
+        chatBefore < 0 ||
+        offset !== undefined)
+    )
+      return undefined;
+    const chatSnapshot = record["chatSnapshot"];
+    if (
+      chatSnapshot !== undefined &&
+      (chatBefore === undefined ||
+        typeof chatSnapshot !== "string" ||
+        chatSnapshot === "" ||
+        chatSnapshot.length > 128)
+    )
+      return undefined;
     const request: SessionMessagesRequest = { op: "sessions.messages", sessionId };
+    if (chatBefore !== undefined) request.chatBefore = chatBefore;
+    if (chatSnapshot !== undefined) request.chatSnapshot = chatSnapshot;
     if (dir !== undefined) request.dir = dir;
     if (limit !== undefined) request.limit = limit;
     if (offset !== undefined) request.offset = offset;

@@ -1,17 +1,27 @@
 <script setup lang="ts">
-import type { AttachmentInfo, BrowserReplayEvent, SessionMessage } from "@cc-web/protocol";
+import type {
+  AttachmentInfo,
+  BrowserReplayEvent,
+  HistoryTurn,
+  SessionMessage,
+} from "@cc-web/protocol";
 import { ArrowDown } from "@lucide/vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import ApprovalCard from "@/components/ApprovalCard.vue";
 import AgentChatTurn from "@/components/chat/AgentChatTurn.vue";
 import UserChatBubble from "@/components/chat/UserChatBubble.vue";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ApprovalTerminal } from "@/features/approvals/terminal.ts";
-import { mapApprovalTerminals } from "@/features/approvals/terminal.ts";
+import {
+  mapApprovalTerminals,
+  renderedApprovalIds,
+  selectPendingGates,
+} from "@/features/approvals/terminal.ts";
 import type { BackgroundTask, BackgroundTaskState } from "@/features/journal/background-tasks.ts";
 import { deriveChatTurns } from "@/features/journal/chat-turns.ts";
+import { createPagedTurns } from "@/features/journal/paged-turns.ts";
 import {
-  computeScrollAnchorOffset,
   isNearBottom,
   isNearTop,
   previousPageStart,
@@ -20,11 +30,18 @@ import {
   shouldAutoLoadEarlier,
   shouldFollowAppend,
 } from "@/features/journal/scroll.ts";
+import { usePrependAnchor } from "@/features/journal/use-prepend-anchor.ts";
 import { useI18n } from "@/lib/i18n";
 
 const { t } = useI18n();
+const captureAnchor = usePrependAnchor();
 
 const props = defineProps<{
+  historyTurns?: HistoryTurn[] | undefined;
+  historyHasMore?: boolean;
+  loadEarlier?: () => Promise<void>;
+  /** Gates carried by the bootstrap that the loaded pages do not hold. */
+  historyContext?: BrowserReplayEvent[];
   events: BrowserReplayEvent[];
   /** Preloaded historical messages when resuming an existing session (§16.1, Task 13). */
   historicalMessages?: SessionMessage[];
@@ -43,8 +60,11 @@ const emit = defineEmits<{
 // live `BrowserReplayEvent` stream into a single chronological feed (§16.1).
 // The derivation is pure and deterministic so a resubscribed client's view is
 // identical to a live one — see the unit tests in chat-turns.test.ts.
+const derivePaged = createPagedTurns();
 const turns = computed(() =>
-  deriveChatTurns(props.historicalMessages ?? [], props.events, props.pendingRun),
+  props.historyTurns === undefined
+    ? deriveChatTurns(props.historicalMessages ?? [], props.events, props.pendingRun)
+    : derivePaged(props.historyTurns, props.events, props.pendingRun, props.historicalMessages),
 );
 
 // The journal is the authority on an approval's outcome (§13.2): a card is
@@ -52,7 +72,28 @@ const turns = computed(() =>
 // id is in the transcript. Parsing lives in features/approvals/terminal.ts
 // where it is unit-testable (F4).
 const approvalTerminals = computed(() =>
-  mapApprovalTerminals(props.events.map((event) => ({ type: event.type, payload: event.payload }))),
+  mapApprovalTerminals(
+    [
+      ...(props.historyContext ?? []),
+      ...(props.historyTurns ?? []).flatMap((turn) => turn.events),
+      ...props.events,
+    ].map((event) => ({ type: event.type, payload: event.payload })),
+  ),
+);
+
+/**
+ * A gate whose `requested` row sits before the loaded page would otherwise
+ * hold the run open behind a card nobody can see. Bootstrap context carries
+ * those rows; only the ones no loaded bubble renders become cards here.
+ */
+const pendingGateCards = computed(() =>
+  selectPendingGates(
+    props.historyContext ?? [],
+    renderedApprovalIds(turns.value),
+    [...(props.historyTurns ?? []).flatMap((turn) => turn.events), ...props.events].map(
+      (event) => ({ type: event.type, payload: event.payload }),
+    ),
+  ),
 );
 
 function terminalFor(event: BrowserReplayEvent): ApprovalTerminal | undefined {
@@ -98,10 +139,14 @@ const emptyCopy = computed(() =>
 const pinnedStart = ref<number | null>(null);
 const earliestLoadedIndex = ref<number | null>(null);
 
-const startIndex = computed(() => resolveWindowStart(pinnedStart.value, turns.value.length));
+const startIndex = computed(() =>
+  props.historyTurns === undefined ? resolveWindowStart(pinnedStart.value, turns.value.length) : 0,
+);
 const displayedTurns = computed(() => turns.value.slice(startIndex.value));
-const remainingEarlier = computed(() => startIndex.value);
-const hasEarlierTurns = computed(() => remainingEarlier.value > 0);
+const remainingEarlier = computed(() => (props.historyTurns === undefined ? startIndex.value : 12));
+const hasEarlierTurns = computed(() =>
+  props.historyTurns === undefined ? remainingEarlier.value > 0 : props.historyHasMore === true,
+);
 
 const scrollAreaRef = ref<{ $el?: HTMLElement } | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
@@ -142,7 +187,7 @@ function checkScrollPosition(): void {
 }
 
 function onScroll(): void {
-  if (isProgrammaticScrolling) return;
+  if (!isMountedAndScrolled.value || isProgrammaticScrolling) return;
   checkScrollPosition();
 
   const viewport = getViewport();
@@ -168,7 +213,7 @@ function onScroll(): void {
   }
 }
 
-let isLoadingEarlier = false;
+const isLoadingEarlier = ref(false);
 
 /**
  * Prepend the previous page, then shift `scrollTop` so the turn the reader was
@@ -176,32 +221,36 @@ let isLoadingEarlier = false;
  * total height: content still streaming in at the bottom must not inflate the
  * correction. The height delta is the fallback when no turn is rendered yet.
  */
-function loadEarlierTurns(): void {
-  if (!hasEarlierTurns.value || isLoadingEarlier) return;
+async function loadEarlierTurns(): Promise<void> {
+  if (!hasEarlierTurns.value || isLoadingEarlier.value) return;
   const viewport = getViewport();
   if (!viewport) return;
-
-  const anchor = contentRef.value?.querySelector<HTMLElement>("[data-turn-key]");
-  const anchorTop = anchor?.getBoundingClientRect().top;
-  const previousHeight = viewport.scrollHeight;
-
-  isLoadingEarlier = true;
-  const nextStart = previousPageStart(startIndex.value);
-  earliestLoadedIndex.value = nextStart;
-  pinnedStart.value = nextStart;
-
-  void nextTick(() => {
-    const updated = getViewport();
-    if (updated) {
-      const nextAnchorTop = anchor?.getBoundingClientRect().top;
-      const offset =
-        anchorTop !== undefined && nextAnchorTop !== undefined
-          ? Math.max(nextAnchorTop - anchorTop, 0)
-          : computeScrollAnchorOffset(previousHeight, updated.scrollHeight);
-      updated.scrollTop += offset;
+  const anchor = captureAnchor(
+    viewport,
+    contentRef.value?.querySelectorAll<HTMLElement>("[data-turn-key]") ?? [],
+  );
+  isLoadingEarlier.value = true;
+  userScrolledUp.value = true;
+  try {
+    if (props.historyTurns !== undefined) await props.loadEarlier?.();
+    else {
+      const nextStart = previousPageStart(startIndex.value);
+      earliestLoadedIndex.value = nextStart;
+      pinnedStart.value = nextStart;
     }
-    isLoadingEarlier = false;
-  });
+    await nextTick();
+    const updated = getViewport();
+    if (updated === viewport) {
+      isProgrammaticScrolling = true;
+      anchor.restore();
+      requestAnimationFrame(() => {
+        isProgrammaticScrolling = false;
+      });
+    }
+  } finally {
+    anchor.release();
+    isLoadingEarlier.value = false;
+  }
 }
 
 function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
@@ -325,21 +374,24 @@ watch(
           {{ t("journal.repairing") }}
         </p>
 
-        <p v-else-if="turns.length === 0" class="text-sm text-muted-foreground">
-          {{ emptyCopy }}
-        </p>
-
         <template v-else>
+          <!-- Kept outside the "has turns" branch: SDK-only history can exist
+               for a session whose loaded journal page is empty. -->
           <div v-if="hasEarlierTurns" class="flex justify-center">
             <Button
               variant="ghost"
               size="sm"
               class="text-xs text-muted-foreground hover:text-foreground max-sm:min-h-10 max-sm:text-sm"
+              :disabled="isLoadingEarlier"
               @click="loadEarlierTurns"
             >
               {{ t("journal.loadEarlier", { count: remainingEarlier }) }}
             </Button>
           </div>
+
+          <p v-if="turns.length === 0" class="text-sm text-muted-foreground">
+            {{ emptyCopy }}
+          </p>
 
           <template v-for="turn in displayedTurns" :key="turn.key">
             <UserChatBubble v-if="turn.kind === 'user'" :turn="turn" :data-turn-key="turn.key" />
@@ -352,6 +404,13 @@ watch(
               @inspect-subagent="(id) => emit('inspectSubagent', id)"
             />
           </template>
+
+          <ApprovalCard
+            v-for="gate in pendingGateCards"
+            :key="`gate-${gate.eventId}`"
+            :event="gate"
+            :terminal="terminalFor(gate)"
+          />
         </template>
       </div>
     </ScrollArea>

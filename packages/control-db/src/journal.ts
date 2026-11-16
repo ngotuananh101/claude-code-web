@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import type { EventType } from "@cc-web/protocol";
+import { projectSessionHistory } from "./session-history.ts";
 
 /**
  * The server-side event journal (§12.1, §12.2).
@@ -95,6 +97,16 @@ export function ingestEvent(
       return { status: "conflict" };
     }
 
+    projectSessionHistory(db, {
+      sessionId: event.sessionId,
+      sessionSequence: sequenceRow.next,
+      eventId: event.eventId,
+      runId: event.runId,
+      attemptId: event.attemptId,
+      occurredAt: event.occurredAt,
+      type: event.type as EventType,
+      payload: event.payload,
+    });
     return { status: "stored", sessionSequence: sequenceRow.next };
   });
 

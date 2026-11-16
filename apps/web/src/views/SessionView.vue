@@ -13,7 +13,11 @@ import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
 import { taskStateFromEvents } from "../features/journal/background-tasks.ts";
-import { createSessionHistory, sessionHistoryTarget } from "../features/journal/session-history.ts";
+import {
+  createSdkChatHistory,
+  createSessionHistory,
+  sessionHistoryTarget,
+} from "../features/journal/session-history.ts";
 import {
   deriveSubagentItems,
   resolveSubagentDialogTab,
@@ -27,6 +31,7 @@ import {
 import { fetchSessionMessages } from "../services/sessions-api.ts";
 import {
   closeSession,
+  loadEarlierSession,
   loadSessions,
   openSession,
   resolveSessionLive,
@@ -112,12 +117,37 @@ const activeLive = computed(() =>
 /** Transcript reads are invalidated on route changes and SDK conversation resets. */
 const history = createSessionHistory({
   fetch: fetchSessionMessages,
+  lazy: true,
   onError: (message) => toast.error(message),
 });
 const historicalMessages = history.messages;
+const sdkChat = createSdkChatHistory({
+  fetch: fetchSessionMessages,
+  onError: (message) => toast.error(message),
+});
+const hasEarlier = computed(
+  () =>
+    sessions.stream?.historyHasMore === true ||
+    (historyTarget.value !== null && sdkChat.hasMore.value),
+);
+async function loadEarlier(): Promise<void> {
+  if (sessions.stream?.historyHasMore) await loadEarlierSession();
+  else await sdkChat.load(loadedEvents.value);
+}
 // Telemetry still advances the complete journal's watermark, but its stable
 // render projection must not invalidate chat/subagent reducers (§16.2).
 const journalEvents = computed(() => sessions.stream?.journalEvents ?? []);
+const loadedEvents = computed(() => {
+  const unique = new Map<number, (typeof journalEvents.value)[number]>();
+  for (const event of [
+    ...(sessions.stream?.historyContext ?? []),
+    ...(sessions.stream?.historyTurns ?? []).flatMap((turn) => turn.events),
+    ...journalEvents.value,
+  ]) {
+    unique.set(event.sessionSequence, event);
+  }
+  return [...unique.values()].sort((a, b) => a.sessionSequence - b.sessionSequence);
+});
 
 /** The run this page started, until its terminal event clears it. */
 const startedRun = ref<{ sessionId: string; runId: string } | null>(null);
@@ -142,7 +172,7 @@ const liveRunId = computed(() => {
   if (startedRun.value !== null && startedRun.value.sessionId === currentSessionId) {
     return startedRun.value.runId;
   }
-  const events = journalEvents.value;
+  const events = loadedEvents.value;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
     if (event.type === "run.started") return event.runId;
@@ -174,10 +204,10 @@ const liveRunId = computed(() => {
  * level signal decides liveness, so a missed `task.completed` cannot leave a
  * task stuck as running.
  */
-const backgroundTaskState = computed(() => taskStateFromEvents(journalEvents.value));
+const backgroundTaskState = computed(() => taskStateFromEvents(loadedEvents.value));
 
 const subagentItems = computed(() =>
-  deriveSubagentItems(historicalMessages.value, journalEvents.value, backgroundTaskState.value),
+  deriveSubagentItems(historicalMessages.value, loadedEvents.value, backgroundTaskState.value),
 );
 
 const subagentDialogOpen = ref(false);
@@ -185,6 +215,7 @@ const selectedSubagentId = ref<string | null>(null);
 const subagentDialogTab = ref<SubagentDialogTab>("active");
 
 function openSubagentsDialog(subagentId?: string, tab: SubagentDialogTab = "active"): void {
+  history.load();
   selectedSubagentId.value = subagentId ?? null;
   subagentDialogTab.value = resolveSubagentDialogTab(
     subagentItems.value,
@@ -223,13 +254,14 @@ watch(journalEvents, () => {
 // the previous SDK id. The generation guard rejects every old in-flight read.
 const historyTarget = computed(() =>
   sessions.stream !== null && sessions.activeId === active.value?.sessionId
-    ? sessionHistoryTarget(active.value, journalEvents.value)
+    ? sessionHistoryTarget(active.value, loadedEvents.value)
     : null,
 );
 watch(
   historyTarget,
   (target, previous) => {
     history.update(target);
+    sdkChat.update(target);
     if (target?.resetEventId && target.resetEventId !== previous?.resetEventId) {
       subagentDialogOpen.value = false;
       selectedSubagentId.value = null;
@@ -283,6 +315,7 @@ const greeting = computed(() => {
 function followRoute(): void {
   const id = routeSession.value;
   history.update(null);
+  sdkChat.update(null);
   subagentDialogOpen.value = false;
   selectedSubagentId.value = null;
   subagentDialogTab.value = "active";
@@ -294,7 +327,10 @@ function followRoute(): void {
   history.update(historyTarget.value);
 }
 
-onBeforeUnmount(() => history.update(null));
+onBeforeUnmount(() => {
+  history.update(null);
+  sdkChat.update(null);
+});
 onMounted(followRoute);
 watch(routeSession, followRoute);
 
@@ -350,7 +386,11 @@ async function refreshNow(): Promise<void> {
               :needs-resync="sessions.stream.needsResync"
               :session-live="activeLive"
               :background-task-state="backgroundTaskState"
-              :historical-messages="historicalMessages"
+              :historical-messages="sdkChat.messages.value"
+              :history-turns="sessions.stream.bootstrapped ? sessions.stream.historyTurns : undefined"
+              :history-context="sessions.stream?.historyContext"
+              :history-has-more="hasEarlier"
+              :load-earlier="loadEarlier"
               :pending-run="activePendingRun"
               @inspect-subagent="openSubagentsDialog"
             />
@@ -375,7 +415,7 @@ async function refreshNow(): Promise<void> {
               v-model:selected-id="selectedSubagentId"
               v-model:tab="subagentDialogTab"
               :subagents="subagentItems"
-              :events="journalEvents"
+              :events="loadedEvents"
               :background-task-state="backgroundTaskState"
             />
           </div>

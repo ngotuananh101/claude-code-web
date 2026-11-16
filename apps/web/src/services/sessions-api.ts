@@ -16,16 +16,28 @@
 import type { SessionMessage, SessionSummary } from "@cc-web/protocol";
 import { authFetch } from "./auth-api.ts";
 import { compositeId, request } from "./browse-api.ts";
+import { validSdkChatPage } from "./history-validation.ts";
 
 export type WorkspaceSessionsOutcome =
   | { ok: true; sessions: SessionSummary[] }
   | { ok: false; code: string; message: string };
 
 export type SessionMessagesOutcome =
-  | { ok: true; messages: SessionMessage[] }
+  | {
+      ok: true;
+      messages: SessionMessage[];
+      chatBefore?: number | null;
+      hasMore?: boolean;
+      chatSnapshot?: string;
+    }
   | { ok: false; code: string; message: string };
 
-export type SessionsOptions = { limit?: number; offset?: number };
+export type SessionsOptions = {
+  limit?: number;
+  offset?: number;
+  chatBefore?: number;
+  chatSnapshot?: string;
+};
 
 /**
  * Resolve the workspace id for the URL from either a `(runnerId, workspaceId)`
@@ -58,6 +70,8 @@ function withPagination(url: string, options?: SessionsOptions): string {
   const params = new URLSearchParams();
   if (options?.limit !== undefined) params.set("limit", String(options.limit));
   if (options?.offset !== undefined) params.set("offset", String(options.offset));
+  if (options?.chatBefore !== undefined) params.set("chatBefore", String(options.chatBefore));
+  if (options?.chatSnapshot !== undefined) params.set("chatSnapshot", options.chatSnapshot);
   const query = params.toString();
   return query === "" ? url : `${url}?${query}`;
 }
@@ -94,11 +108,34 @@ export function fetchSessionMessages(
   const id = composeWorkspaceId(runnerId, workspaceId);
   const base = `/api/workspaces/${id}/sessions/${encodeURIComponent(sessionId)}/messages`;
   const url = withPagination(base, options);
-  return request<{ op: string; sessionId: string; messages: SessionMessage[] }>(url).then((r) =>
-    r.ok
-      ? { ok: true, messages: r.value.messages }
-      : { ok: false, code: r.code, message: r.message },
-  );
+  return request<{
+    op: string;
+    sessionId: string;
+    messages: SessionMessage[];
+    chatBefore?: number | null;
+    hasMore?: boolean;
+    chatSnapshot?: string;
+  }>(url).then((r) => {
+    if (!r.ok) return { ok: false, code: r.code, message: r.message };
+    if (
+      options?.chatBefore !== undefined &&
+      (!validSdkChatPage(r.value, options.chatBefore, options.chatSnapshot) ||
+        r.value.op !== "sessions.messages" ||
+        r.value.sessionId !== sessionId)
+    )
+      return {
+        ok: false,
+        code: "INVALID_HISTORY_PAGE",
+        message: "Trang lịch sử không hợp lệ. Hãy thử tải lại.",
+      };
+    return {
+      ok: true,
+      messages: r.value.messages,
+      ...(r.value.chatBefore === undefined ? {} : { chatBefore: r.value.chatBefore }),
+      ...(r.value.hasMore === undefined ? {} : { hasMore: r.value.hasMore }),
+      ...(r.value.chatSnapshot === undefined ? {} : { chatSnapshot: r.value.chatSnapshot }),
+    };
+  });
 }
 
 /**

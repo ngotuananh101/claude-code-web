@@ -23,6 +23,7 @@ import {
   ingestEvent,
   projectScheduleEvent,
   readSessionEvents,
+  readSessionHistory,
   reopenRejectedSchedule,
   Scheduler,
   sessionEarliest,
@@ -225,6 +226,7 @@ export function createServer(options: ServerOptions): ServerHandle {
       readSessionEvents(options.db, sessionId, { after, limit }),
     readJournalReplay: (sessionId, after, through, limit) =>
       readSessionEvents(options.db, sessionId, { after, through, limit, projection: "journal" }),
+    readHistory: (sessionId, readOptions) => readSessionHistory(options.db, sessionId, readOptions),
     replayBounds: (sessionId) => ({
       watermark: sessionWatermark(options.db, sessionId),
       earliest: sessionEarliest(options.db, sessionId),

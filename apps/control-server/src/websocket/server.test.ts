@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate } from "@cc-web/control-db";
-import { type EventType, type SessionEventsFrame, WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
+import {
+  type EventType,
+  type SessionEventsFrame,
+  type SessionHistoryFrame,
+  WS_MAX_PAYLOAD_BYTES,
+} from "@cc-web/protocol";
 import { createSessionStream } from "../../../web/src/services/session-stream.ts";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
@@ -327,6 +332,128 @@ describe("control server routes", () => {
     expect(stream.state().through).toBe(progressSeq);
     expect(stream.state().journalEvents.length).toBe(content.length);
     expect(repairs).toEqual([]);
+  });
+
+  test("lazy history over a real socket loads twelve bubbles per request and preserves live/reset coverage", async () => {
+    const { wsUrl, cookie, db, userId } = await start();
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      userId,
+      1,
+    );
+    let sequence = 0;
+    const commit = (type: EventType, payload: unknown, runId: string, publish = false) => {
+      sequence++;
+      const event = {
+        eventId: `paged-${sequence}`,
+        runnerId: "runner-a",
+        bootId: "boot",
+        sessionId: "session-1",
+        runId,
+        attemptId: runId,
+        localSequence: sequence,
+        occurredAt: "2026-11-16T00:00:00Z",
+        type,
+        payload,
+      };
+      const result = ingestEvent(db, event);
+      if (publish)
+        handle!.browserGateway.publish({ ...event, sessionSequence: result.sessionSequence! });
+    };
+    db.transaction(() => {
+      for (let run = 1; run <= 100; run++) {
+        commit("run.started", { prompt: `prompt ${run}` }, `r-${run}`);
+        for (let delta = 0; delta < 100; delta++)
+          commit("message.delta", { messageId: `m-${run}`, text: "x" }, `r-${run}`);
+        commit("run.finished", {}, `r-${run}`);
+      }
+    })();
+    const client = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    client.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      projection: "journal",
+      history: true,
+      requestId: "cold",
+    });
+    await waitFor(() => client.messages.length >= 2);
+    expect(client.messages.map((frame) => frame["type"])).toEqual([
+      "subscribed",
+      "session.history",
+    ]);
+    const initial = client.messages[1] as SessionHistoryFrame;
+    expect(initial.requestId).toBe("cold");
+    expect(initial.turns).toHaveLength(12);
+    expect(initial.watermark).toBe(10200);
+    const stream = createSessionStream({
+      sessionId: "session-1",
+      send: (frame) => client.send(frame),
+    });
+    stream.apply(initial);
+    expect(
+      stream
+        .state()
+        .historyTurns.filter((turn) => turn.kind === "user")
+        .map((turn) => (turn.events[0]!.payload as { prompt: string }).prompt),
+    ).toEqual(["prompt 95", "prompt 96", "prompt 97", "prompt 98", "prompt 99", "prompt 100"]);
+    client.send({
+      type: "history.before",
+      sessionId: "session-1",
+      before: initial.before,
+      resetSequence: 0,
+      requestId: "older",
+    });
+    await waitFor(() => client.messages.length >= 3);
+    const older = client.messages[2] as SessionHistoryFrame;
+    expect(older.requestId).toBe("older");
+    expect(older.turns).toHaveLength(12);
+    stream.apply(older);
+    expect(stream.state().historyTurns).toHaveLength(24);
+    expect(stream.state().through).toBe(10200);
+    commit("run.started", { prompt: "live" }, "live", true);
+    commit("message.delta", { text: "new tail" }, "live", true);
+    await waitFor(() => client.messages.some((frame) => frame["through"] === 10202));
+    for (const frame of client.messages.filter((frame) => frame["type"] === "session.events"))
+      stream.apply(frame as SessionEventsFrame);
+    expect(stream.state().journalEvents.at(-1)?.payload).toEqual({ text: "new tail" });
+    const reconnect = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    reconnect.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: stream.state().through,
+      projection: "journal",
+    });
+    await waitFor(() => reconnect.messages.some((frame) => frame["replayComplete"] === true));
+    stream.apply(reconnect.messages.at(-1) as SessionEventsFrame);
+    expect(stream.state().historyTurns).toHaveLength(24);
+    commit(
+      "session.updated",
+      { type: "conversation_reset", new_conversation_id: "sdk-new" },
+      "live",
+      true,
+    );
+    await waitFor(() => client.messages.some((frame) => frame["through"] === 10203));
+    stream.apply(client.messages.at(-1) as SessionEventsFrame);
+    expect(stream.state().historyTurns).toEqual([]);
+    expect(stream.apply(older)).toBe(false);
+    client.send({
+      type: "history.before",
+      sessionId: "session-1",
+      before: initial.before,
+      resetSequence: 0,
+      requestId: "stale",
+    });
+    await waitFor(() => client.messages.some((frame) => frame["requestId"] === "stale"));
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "error",
+      reason: "history_reset",
+      requestId: "stale",
+    });
+    const cold = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    cold.send({ type: "subscribe", sessionId: "session-1", projection: "journal", history: true });
+    await waitFor(() => cold.messages.length >= 2);
+    expect((cold.messages[1] as SessionHistoryFrame).turns).toEqual([]);
+    expect(db.query("SELECT COUNT(*) AS n FROM run_events").get()).toEqual({ n: 10203 });
   });
 
   test("clear stays cleared over live delivery, cold reopen and reconnect without deleting durable events", async () => {

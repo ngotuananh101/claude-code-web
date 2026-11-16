@@ -211,6 +211,32 @@ export type BrowserReplayEvent = {
   payload: unknown;
 };
 
+/** A complete chat bubble's compact journal inputs. Its cursor is historical,
+ * not a live sequence acknowledgement. */
+export type HistoryTurn = {
+  cursor: number;
+  kind: "user" | "agent";
+  events: BrowserReplayEvent[];
+};
+
+export type SessionHistoryPage = {
+  turns: HistoryTurn[];
+  before: number | null;
+  hasMore: boolean;
+  resetSequence: number;
+  watermark: number;
+  /** Latest conversation identity, independent of the selected page. */
+  context: BrowserReplayEvent[];
+};
+
+export type SessionHistoryFrame = SessionHistoryPage & {
+  type: "session.history";
+  sessionId: string;
+  bootstrap: boolean;
+  /** Echoed request identity prevents stale pages crossing client visits. */
+  requestId?: string;
+};
+
 export type SessionEventsFrame = {
   type: "session.events";
   sessionId: string;
@@ -400,6 +426,7 @@ export {
   parseRpcResultFrame,
   parseSessionsRequest,
   type RpcResultFrame,
+  SESSION_CHAT_PAGES_CAPABILITY,
   SESSIONS_CAPABILITY,
   SESSIONS_LIST_DEFAULT_LIMIT,
   SESSIONS_LIST_MAX_LIMIT,

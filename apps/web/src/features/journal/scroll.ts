@@ -23,7 +23,7 @@ export function isNearBottom(
 export const DEFAULT_TOP_THRESHOLD_PX = DEFAULT_SCROLL_THRESHOLD_PX;
 
 /** Turns rendered per page by reverse pagination. */
-export const DEFAULT_PAGE_SIZE = 20;
+export const DEFAULT_PAGE_SIZE = 12;
 
 /**
  * First rendered index of the chat window. A pinned start — the reader scrolled
@@ -58,6 +58,58 @@ export function isNearTop(scrollTop: number, threshold = DEFAULT_TOP_THRESHOLD_P
 export function computeScrollAnchorOffset(previousHeight: number, nextHeight: number): number {
   const delta = nextHeight - previousHeight;
   return Math.max(delta, 0);
+}
+
+/** Capture the first visible turn, independently of live growth below it. */
+export function capturePrependAnchor(
+  viewport: Pick<HTMLElement, "scrollTop" | "scrollHeight" | "getBoundingClientRect"> & {
+    style?: Pick<CSSStyleDeclaration, "overflowAnchor"> &
+      Partial<Pick<CSSStyleDeclaration, "getPropertyPriority" | "setProperty" | "removeProperty">>;
+  },
+  turns: Iterable<Pick<HTMLElement, "isConnected" | "getBoundingClientRect">>,
+): { restore: () => void; release: () => void } {
+  // Own the correction while the request is pending. Otherwise browser-native
+  // anchoring changes scrollTop and is mistaken for reader movement below.
+  const style = viewport.style;
+  const overflowAnchor = style?.overflowAnchor;
+  const priority = style?.getPropertyPriority?.("overflow-anchor") ?? "";
+  if (style !== undefined) style.overflowAnchor = "none";
+  let released = false;
+  function release(): void {
+    if (released) return;
+    released = true;
+    if (style === undefined || overflowAnchor === undefined) return;
+    if (overflowAnchor === "" && style.removeProperty !== undefined) {
+      style.removeProperty("overflow-anchor");
+    } else if (style.setProperty !== undefined) {
+      style.setProperty("overflow-anchor", overflowAnchor, priority);
+    } else style.overflowAnchor = overflowAnchor;
+  }
+  const box = viewport.getBoundingClientRect();
+  const anchor = [...turns].find((turn) => {
+    const rect = turn.getBoundingClientRect();
+    return rect.bottom > box.top && rect.top < box.bottom;
+  });
+  const top = anchor?.getBoundingClientRect().top;
+  const scrollTop = viewport.scrollTop;
+  const height = viewport.scrollHeight;
+  return {
+    restore() {
+      if (released) return;
+      try {
+        // Include scrolling during the network wait; exclude growth at the live tail.
+        if (anchor?.isConnected && top !== undefined) {
+          viewport.scrollTop +=
+            anchor.getBoundingClientRect().top - top + viewport.scrollTop - scrollTop;
+        } else {
+          viewport.scrollTop += computeScrollAnchorOffset(height, viewport.scrollHeight);
+        }
+      } finally {
+        release();
+      }
+    },
+    release,
+  };
 }
 
 /**
