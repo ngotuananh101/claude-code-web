@@ -6,6 +6,7 @@ import * as historyModule from "./session-history.ts";
 import {
   createSdkChatHistory,
   createSessionHistory,
+  hasEarlierHistory,
   sessionHistoryTarget,
 } from "./session-history.ts";
 import { deriveSubagentItems } from "./subagent-events.ts";
@@ -262,6 +263,81 @@ describe("session history across /clear", () => {
     ]);
     expect(history.hasMore.value).toBe(false);
     expect(calls).toEqual([Number.MAX_SAFE_INTEGER, 24, 12]);
+  });
+
+  /**
+   * The "load older messages" button is the only way into pre-journal history,
+   * so this is the whole gating decision, pinned as a pure function. It lives
+   * outside the SFC for the reason EventJournal.test.ts documents: Bun cannot
+   * compile a `.vue` file, so the component delegates to a tested helper and
+   * keeps no branch of its own.
+   */
+  test("a brand-new session with an SDK target advertises no earlier page", () => {
+    const fresh = event(1, "run.started", { prompt: "hi" });
+    expect(
+      hasEarlierHistory({
+        historyHasMore: false,
+        bootstrapped: true,
+        target: sessionHistoryTarget(pin, []),
+        sdkHasMore: true,
+        events: [fresh],
+      }),
+    ).toBe(false);
+  });
+
+  test("a resumed conversation advertises the older page the journal no longer holds", () => {
+    const resumed = event(1, "run.started", { prompt: "hi", resumeSessionId: "sdk-ancient" });
+    expect(
+      hasEarlierHistory({
+        historyHasMore: false,
+        bootstrapped: true,
+        target: sessionHistoryTarget(pin, []),
+        sdkHasMore: true,
+        events: [resumed],
+      }),
+    ).toBe(true);
+  });
+
+  test("a journal page left unread wins over every SDK condition", () => {
+    expect(
+      hasEarlierHistory({
+        historyHasMore: true,
+        bootstrapped: false,
+        target: null,
+        sdkHasMore: false,
+        events: [],
+      }),
+    ).toBe(true);
+  });
+
+  test("an unread journal, a missing target, or an exhausted SDK chain hides the button", () => {
+    const resumed = event(1, "run.started", { prompt: "hi", resumeSessionId: "sdk-ancient" });
+    const base = {
+      historyHasMore: false,
+      bootstrapped: true,
+      target: sessionHistoryTarget(pin, []),
+      sdkHasMore: true,
+      events: [resumed],
+    };
+    // The page count is unknown until the bootstrap frame lands.
+    expect(hasEarlierHistory({ ...base, bootstrapped: false })).toBe(false);
+    // No SDK target means the chain cannot be read at all.
+    expect(hasEarlierHistory({ ...base, target: null })).toBe(false);
+    // A chain already read to its end has nothing left to offer.
+    expect(hasEarlierHistory({ ...base, sdkHasMore: false })).toBe(false);
+    // A resume marker that is blank, non-string, or on another event type is not evidence.
+    expect(
+      hasEarlierHistory({
+        ...base,
+        events: [event(1, "run.started", { prompt: "hi", resumeSessionId: "  " })],
+      }),
+    ).toBe(false);
+    expect(
+      hasEarlierHistory({
+        ...base,
+        events: [{ ...resumed, type: "run.status" }],
+      }),
+    ).toBe(false);
   });
 
   test("lazy history performs no read until explicitly opened and reset invalidates it", async () => {

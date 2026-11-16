@@ -24,6 +24,67 @@ function sdkOnlyPrefix(
   return index < 0 ? rows : rows.slice(0, index);
 }
 
+/**
+ * Whether the SDK chain is the only place an older message could live.
+ *
+ * `createSdkChatHistory` starts with `hasMore = true` because a resumed
+ * conversation may predate the control journal, and it never reads the chain
+ * on its own. Advertising the affordance from that flag alone offered "load
+ * older" on a brand-new session, where the journal is the whole conversation
+ * and the SDK has nothing older to give. The evidence that pre-journal history
+ * can exist is a run that *resumed* a conversation: only an explicit resume
+ * can point this session at a transcript that began before its journal, and the
+ * runner records that resume in the `run.started` payload.
+ *
+ * Do not widen this to "the session has an SDK id". Every session that has run
+ * once has one — `sessionHistoryTarget` reads it from `session.updated` or the
+ * listing pin, both derived from the session's own first run — and that SDK
+ * conversation begins with that run, so nothing older can exist behind it.
+ * Widening the check is exactly the bug this function replaced: a brand-new
+ * session offering a page it cannot fill.
+ */
+export function sdkChainHasOlderHistory(events: readonly BrowserReplayEvent[]): boolean {
+  return events.some((event) => {
+    if (event.type !== "run.started") return false;
+    const payload = event.payload as Record<string, unknown> | null;
+    if (typeof payload !== "object" || payload === null) return false;
+    const resume = payload["resumeSessionId"];
+    return typeof resume === "string" && resume.trim() !== "";
+  });
+}
+
+/**
+ * Whether the journal offers an earlier page — the single decision behind the
+ * "load older messages" button.
+ *
+ * Two independent sources can hold older messages, and the button must appear
+ * exactly when at least one of them exists:
+ *
+ * - The paged journal still has a previous page (`historyHasMore`).
+ * - The paged journal is exhausted, but the session resumed an SDK
+ *   conversation, so the SDK chain may hold messages older than the journal
+ *   (see `sdkChainHasOlderHistory`).
+ *
+ * The second branch additionally requires a bootstrapped stream and
+ * `sdkHasMore`: the journal's own page count is unknown before the bootstrap
+ * frame, and a chain already read to its end has nothing left to offer.
+ */
+export function hasEarlierHistory(input: {
+  historyHasMore: boolean;
+  bootstrapped: boolean;
+  target: SessionHistoryTarget | null;
+  sdkHasMore: boolean;
+  events: readonly BrowserReplayEvent[];
+}): boolean {
+  if (input.historyHasMore) return true;
+  return (
+    input.target !== null &&
+    input.bootstrapped &&
+    input.sdkHasMore &&
+    sdkChainHasOlderHistory(input.events)
+  );
+}
+
 export type SessionHistoryTarget = {
   sessionId: string;
   sdkSessionId: string;

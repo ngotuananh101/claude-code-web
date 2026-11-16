@@ -144,6 +144,17 @@ const startIndex = computed(() =>
 );
 const displayedTurns = computed(() => turns.value.slice(startIndex.value));
 const remainingEarlier = computed(() => (props.historyTurns === undefined ? startIndex.value : 12));
+/**
+ * The paged history always advances by twelve, but whether another page exists
+ * is known only from `historyHasMore` — a fresh session has none. The copy
+ * therefore names what the action does, not a remaining count this view cannot
+ * observe without fetching the older page first.
+ */
+const earlierLabel = computed(() =>
+  props.historyTurns === undefined
+    ? t("journal.loadEarlier", { count: remainingEarlier.value })
+    : t("journal.loadEarlierPaged"),
+);
 const hasEarlierTurns = computed(() =>
   props.historyTurns === undefined ? remainingEarlier.value > 0 : props.historyHasMore === true,
 );
@@ -385,7 +396,7 @@ watch(
               :disabled="isLoadingEarlier"
               @click="loadEarlierTurns"
             >
-              {{ t("journal.loadEarlier", { count: remainingEarlier }) }}
+              {{ earlierLabel }}
             </Button>
           </div>
 

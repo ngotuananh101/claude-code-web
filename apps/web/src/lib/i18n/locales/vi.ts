@@ -840,6 +840,7 @@ export const vi: TranslationDictionary = {
     repairing:
       "Journal đang được sửa chữa. Retention đã xoá phần lịch sử mà view này đang giữ, bản ghi sẽ bắt đầu lại từ sự kiện còn sót sớm nhất.",
     loadEarlier: "Tải thêm tin nhắn cũ (còn {count})",
+    loadEarlierPaged: "Tải thêm tin nhắn cũ",
     scrollDown: "Cuộn xuống dưới",
   },
   sessionView: {

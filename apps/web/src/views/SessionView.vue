@@ -16,6 +16,7 @@ import { taskStateFromEvents } from "../features/journal/background-tasks.ts";
 import {
   createSdkChatHistory,
   createSessionHistory,
+  hasEarlierHistory,
   sessionHistoryTarget,
 } from "../features/journal/session-history.ts";
 import {
@@ -125,10 +126,21 @@ const sdkChat = createSdkChatHistory({
   fetch: fetchSessionMessages,
   onError: (message) => toast.error(message),
 });
-const hasEarlier = computed(
-  () =>
-    sessions.stream?.historyHasMore === true ||
-    (historyTarget.value !== null && sdkChat.hasMore.value),
+/**
+ * Where the "load older messages" affordance comes from, decided in
+ * `session-history.ts` so the branch is unit-tested rather than living only in
+ * this SFC: an unread journal page, or a resumed SDK conversation behind an
+ * exhausted journal. A brand-new session has neither, which is why it no
+ * longer offers history it cannot have.
+ */
+const hasEarlier = computed(() =>
+  hasEarlierHistory({
+    historyHasMore: sessions.stream?.historyHasMore === true,
+    bootstrapped: sessions.stream?.bootstrapped === true,
+    target: historyTarget.value,
+    sdkHasMore: sdkChat.hasMore.value,
+    events: loadedEvents.value,
+  }),
 );
 async function loadEarlier(): Promise<void> {
   if (sessions.stream?.historyHasMore) await loadEarlierSession();

@@ -824,6 +824,8 @@ export type TranslationDictionary = {
     emptyIdle: string;
     repairing: string;
     loadEarlier: string;
+    /** Paged history: the remaining count is unknown until the page is read. */
+    loadEarlierPaged: string;
     scrollDown: string;
   };
   sessionView: {

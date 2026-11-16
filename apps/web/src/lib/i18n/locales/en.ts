@@ -841,6 +841,7 @@ export const en: TranslationDictionary = {
     repairing:
       "The journal is being repaired. Retention deleted part of the history this view was holding, so the record will restart from the earliest surviving event.",
     loadEarlier: "Load older messages ({count} left)",
+    loadEarlierPaged: "Load older messages",
     scrollDown: "Scroll to bottom",
   },
   sessionView: {
