@@ -9,6 +9,19 @@ export type SlashCommandItem = {
   pluginName?: string | undefined;
 };
 
+/**
+ * The i18n key naming where a command comes from. The badge is the operator's
+ * only cue that a row is a runner plugin rather than something cc-web itself
+ * ships, so the mapping lives here where it can be tested — the SFC that draws
+ * it cannot be compiled by Bun.
+ */
+export const SLASH_CATEGORY_LABEL_KEY: Record<SlashCommandItem["category"], string> = {
+  builtin: "composer.slashCategoryBuiltin",
+  skill: "composer.slashCategorySkill",
+  plugin: "composer.slashCategoryPlugin",
+  agent: "composer.slashCategoryAgent",
+};
+
 export function getAvailableCommands(runnerCapabilities?: RunnerCapabilities): SlashCommandItem[] {
   const builtinCommands: SlashCommandItem[] = [
     {

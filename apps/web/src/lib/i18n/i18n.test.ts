@@ -66,6 +66,22 @@ describe("i18n module", () => {
     expect(t("profiles.profileDeletedSuccess")).toBe("Profile deleted.");
   });
 
+  test("translates the slash-command menu labels in vi and en", () => {
+    setLocale("vi");
+    expect(t("composer.slashCommandsAria")).toBe("Lệnh slash");
+    expect(t("composer.slashCommandsEmpty")).toBe("Không có lệnh phù hợp");
+    expect(t("composer.slashCategoryBuiltin")).toBe("Có sẵn");
+
+    setLocale("en");
+    expect(t("composer.slashCommandsAria")).toBe("Slash commands");
+    expect(t("composer.slashCommandsEmpty")).toBe("No matching commands");
+    expect(t("composer.slashCategoryBuiltin")).toBe("Built-in");
+    // A technical surface name stays as the runner spells it in both locales.
+    expect(t("composer.slashCategoryPlugin")).toBe("Plugin");
+    expect(t("composer.slashCategorySkill")).toBe("Skill");
+    expect(t("composer.slashCategoryAgent")).toBe("Agent");
+  });
+
   test("translates language and provider profile menu labels in vi and en", () => {
     setLocale("vi");
     expect(t("user.languageVi")).toBe("Tiếng Việt");

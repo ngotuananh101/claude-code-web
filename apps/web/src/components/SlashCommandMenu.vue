@@ -1,41 +1,57 @@
 <template>
   <div
     v-if="visible"
-    class="slash-command-menu absolute z-[1000] max-h-[min(300px,40dvh)] w-[calc(100vw-2rem)] max-w-[400px] overflow-y-auto rounded-md border bg-background shadow-md"
+    ref="rootEl"
+    class="slash-command-menu absolute z-[1000] w-[calc(100vw-2rem)] max-w-[26rem] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
     role="listbox"
+    :aria-label="t('composer.slashCommandsAria')"
   >
-    <div
-      v-for="(command, index) in filteredCommands"
-      :key="`${command.category}:${command.name}`"
-      role="option"
-      :aria-selected="index === selectedIndex"
-      :class="[
-        'command-item flex min-h-11 cursor-pointer items-center gap-2 px-3 py-2.5 sm:min-h-0 sm:py-2',
-        index === selectedIndex ? 'bg-accent' : 'hover:bg-accent',
-      ]"
-      @click="selectCommand(command)"
+    <ScrollArea
+      class="[&>[data-slot=scroll-area-viewport]]:max-h-[min(17rem,40dvh)] [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
     >
-      <span class="command-name shrink-0 font-bold text-foreground">/{{ command.name }}</span>
-      <span
-        class="command-badge shrink-0 rounded px-1.5 py-0.5 text-xs font-bold"
-        :class="{
-          'bg-primary/10 text-primary': command.category === 'skill',
-          'bg-secondary text-secondary-foreground': command.category === 'builtin',
-          'bg-muted text-muted-foreground': command.category === 'plugin',
-          'bg-accent text-accent-foreground': command.category === 'agent',
-        }"
-      >
-        {{ command.category === 'builtin' ? 'Built-in' : command.category.charAt(0).toUpperCase() + command.category.slice(1) }}
-      </span>
-      <span class="command-description min-w-0 truncate text-sm text-muted-foreground">{{ command.description }}</span>
-    </div>
+      <div class="min-w-0 p-1">
+        <button
+          v-for="(command, index) in filteredCommands"
+          :key="`${command.category}:${command.name}`"
+          type="button"
+          role="option"
+          :aria-selected="index === selectedIndex"
+          :data-active="index === selectedIndex"
+          :class="[
+            'flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors sm:min-h-0 sm:py-1.5',
+            index === selectedIndex ? 'bg-accent' : 'hover:bg-accent/60',
+          ]"
+          @click="selectCommand(command)"
+        >
+          <span class="shrink-0 font-mono text-xs font-medium text-foreground">
+            /{{ command.name }}
+          </span>
+          <span
+            class="shrink-0 rounded border border-border px-1 py-px font-mono text-[9px] font-semibold uppercase tracking-wider text-muted-foreground"
+          >
+            {{ categoryLabel(command.category) }}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {{ command.description }}
+          </span>
+        </button>
+        <p
+          v-if="filteredCommands.length === 0"
+          class="px-2.5 py-6 text-center text-xs text-muted-foreground"
+        >
+          {{ t("composer.slashCommandsEmpty") }}
+        </p>
+      </div>
+    </ScrollArea>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useI18n } from "@/lib/i18n";
 import type { SlashCommandItem } from "../features/composer/slash-commands";
-import { filterCommands } from "../features/composer/slash-commands";
+import { filterCommands, SLASH_CATEGORY_LABEL_KEY } from "../features/composer/slash-commands";
 
 interface Props {
   commands: SlashCommandItem[];
@@ -50,6 +66,14 @@ const emit = defineEmits<{
   (e: "close"): void;
 }>();
 
+const { t } = useI18n();
+
+/** The badge says which surface the command comes from; the runner decides it. */
+function categoryLabel(category: SlashCommandItem["category"]): string {
+  return t(SLASH_CATEGORY_LABEL_KEY[category]);
+}
+
+const rootEl = ref<HTMLElement | null>(null);
 const selectedIndex = ref(0);
 
 const filteredCommands = computed(() => filterCommands(props.commands, props.query));
@@ -72,6 +96,17 @@ watch(
   },
 );
 
+/**
+ * Keep the highlighted row inside the viewport. The list can be longer than the
+ * menu, so arrow keys would otherwise walk the selection off-screen.
+ */
+async function revealSelected(): Promise<void> {
+  await nextTick();
+  rootEl.value
+    ?.querySelector<HTMLElement>('[data-active="true"]')
+    ?.scrollIntoView({ block: "nearest" });
+}
+
 function selectCommand(command: SlashCommandItem) {
   emit("select", command);
 }
@@ -83,11 +118,13 @@ function handleKeyDown(event: KeyboardEvent) {
     case "ArrowUp":
       event.preventDefault();
       selectedIndex.value = Math.max(0, selectedIndex.value - 1);
+      void revealSelected();
       break;
     case "ArrowDown":
       event.preventDefault();
       if (filteredCommands.value.length > 0) {
         selectedIndex.value = Math.min(filteredCommands.value.length - 1, selectedIndex.value + 1);
+        void revealSelected();
       }
       break;
     case "Enter":

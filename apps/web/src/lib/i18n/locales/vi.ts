@@ -699,6 +699,12 @@ export const vi: TranslationDictionary = {
     viewSubagents: "Xem chi tiết",
     subagentHistory: "Lịch sử subagent ({count})",
     subagentHistoryShort: "Lịch sử ({count})",
+    slashCommandsAria: "Lệnh slash",
+    slashCommandsEmpty: "Không có lệnh phù hợp",
+    slashCategoryBuiltin: "Có sẵn",
+    slashCategorySkill: "Skill",
+    slashCategoryPlugin: "Plugin",
+    slashCategoryAgent: "Agent",
   },
   modelPicker: {
     default: "Mặc định",

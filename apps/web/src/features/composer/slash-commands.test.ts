@@ -1,11 +1,18 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { RunnerCapabilities } from "@cc-web/protocol";
+import { setLocale, t } from "../../lib/i18n";
 import {
   applyCommandToPrompt,
   filterCommands,
   getAvailableCommands,
+  SLASH_CATEGORY_LABEL_KEY,
   type SlashCommandItem,
 } from "./slash-commands";
+
+// The locale is module state shared with every other suite.
+afterEach(() => {
+  setLocale("vi");
+});
 
 describe("slash-commands", () => {
   describe("getAvailableCommands", () => {
@@ -38,6 +45,23 @@ describe("slash-commands", () => {
         description: "A test command",
         category: "plugin",
       });
+    });
+  });
+
+  describe("SLASH_CATEGORY_LABEL_KEY", () => {
+    // The copy itself is pinned in the i18n suite; this pins that every
+    // category has a key at all, so the badge cannot leak "composer.slash…".
+    const categories = ["builtin", "skill", "plugin", "agent"] as const;
+
+    it("resolves every category to copy in vi and en", () => {
+      for (const locale of ["vi", "en"] as const) {
+        setLocale(locale);
+        for (const category of categories) {
+          const key = SLASH_CATEGORY_LABEL_KEY[category];
+          expect(key.startsWith("composer.")).toBe(true);
+          expect(t(key)).not.toBe(key);
+        }
+      }
     });
   });
 

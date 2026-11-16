@@ -700,6 +700,12 @@ export const en: TranslationDictionary = {
     viewSubagents: "View details",
     subagentHistory: "Subagent history ({count})",
     subagentHistoryShort: "History ({count})",
+    slashCommandsAria: "Slash commands",
+    slashCommandsEmpty: "No matching commands",
+    slashCategoryBuiltin: "Built-in",
+    slashCategorySkill: "Skill",
+    slashCategoryPlugin: "Plugin",
+    slashCategoryAgent: "Agent",
   },
   modelPicker: {
     default: "Default",

@@ -684,6 +684,14 @@ export type TranslationDictionary = {
     viewSubagents: string;
     subagentHistory: string;
     subagentHistoryShort: string;
+    /** The slash-command menu's listbox label. */
+    slashCommandsAria: string;
+    slashCommandsEmpty: string;
+    /** Badges naming where a slash command comes from. */
+    slashCategoryBuiltin: string;
+    slashCategorySkill: string;
+    slashCategoryPlugin: string;
+    slashCategoryAgent: string;
   };
   modelPicker: {
     default: string;
