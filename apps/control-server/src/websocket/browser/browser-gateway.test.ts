@@ -113,6 +113,19 @@ async function setup(overrides: { allowedOrigins?: string[]; replay?: ReplayHarn
     resolveOwner: replay.owner ?? (() => userId),
     readReplay: (_sessionId, after, limit) =>
       events.filter((e) => e.sessionSequence > after).slice(0, limit),
+    readJournalReplay: (_sessionId, after, through, limit) =>
+      events
+        .filter(
+          (e) =>
+            e.sessionSequence > after &&
+            e.sessionSequence <= through &&
+            !(
+              e.type === "run.status" &&
+              (e.payload as Record<string, unknown> | null)?.["type"] === "system" &&
+              (e.payload as Record<string, unknown>)["subtype"] === "thinking_tokens"
+            ),
+        )
+        .slice(0, limit),
     replayBounds: () => bounds,
   };
 
@@ -251,6 +264,7 @@ describe("session subscription and replay", () => {
     sessionId: string,
     after?: number,
     sendStatus: number | (() => number) = 1,
+    projection?: "journal",
   ) {
     const made = makeSocket(sendStatus);
     await gateway.attach(made.socket, { origin, cookie });
@@ -261,6 +275,7 @@ describe("session subscription and replay", () => {
         type: "subscribe",
         sessionId,
         ...(after === undefined ? {} : { afterSessionSequence: after }),
+        ...(projection === undefined ? {} : { projection }),
       }),
     );
     return made;
@@ -302,6 +317,210 @@ describe("session subscription and replay", () => {
       through: 4,
     });
     expect(socket.data.subscriptions.has("session-1")).toBe(true);
+  });
+
+  test("opt-in journal replay covers omitted telemetry through the committed tail", async () => {
+    const progress = (seq: number) =>
+      replayEvent(seq, {
+        type: "run.status",
+        payload: { type: "system", subtype: "thinking_tokens", estimated_tokens: seq },
+      });
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: [replayEvent(1), progress(2), progress(3), replayEvent(4), progress(5)],
+      },
+    });
+    const compact = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+    expect(compact.sent[1]).toEqual({
+      type: "session.events",
+      sessionId: "session-1",
+      live: false,
+      projection: "journal",
+      fromSequence: 1,
+      through: 5,
+      replayComplete: true,
+      events: [replayEvent(1), replayEvent(4)],
+    });
+    const raw = await subscribe(gateway, cookie, "session-1");
+    expect((raw.sent[1]!["events"] as unknown[]).length).toBe(5);
+    gateway.publish({ sessionId: "session-1", ...progress(6) });
+    expect(compact.sent.at(-1)).toMatchObject({
+      projection: "journal",
+      fromSequence: 6,
+      through: 6,
+      events: [],
+      live: true,
+    });
+    expect(raw.sent.at(-1)!["events"]).toEqual([progress(6)]);
+    gateway.publish({ sessionId: "session-1", ...replayEvent(7, { type: "question.requested" }) });
+    expect(compact.sent.at(-1)!["events"]).toEqual([
+      replayEvent(7, { type: "question.requested" }),
+    ]);
+  });
+
+  test("journal replay chains full content pages and finishes trailing telemetry explicitly", async () => {
+    const content = Array.from({ length: 200 }, (_, i) => replayEvent(i * 2 + 1));
+    const progress = Array.from({ length: 200 }, (_, i) =>
+      replayEvent(i * 2 + 2, {
+        type: "run.status",
+        payload: { type: "system", subtype: "thinking_tokens" },
+      }),
+    );
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: [...content, ...progress].sort((a, b) => a.sessionSequence - b.sessionSequence),
+      },
+    });
+    const { sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+    const frames = sent.filter((frame) => frame["type"] === "session.events");
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({
+      fromSequence: 1,
+      through: 399,
+      replayComplete: false,
+      events: content,
+    });
+    expect(frames[1]).toMatchObject({
+      fromSequence: 400,
+      through: 400,
+      replayComplete: true,
+      events: [],
+    });
+  });
+
+  test("compact subscriptions retain ownership checks and the retention rewind contract", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: [replayEvent(4), replayEvent(5)],
+        bounds: { watermark: 5, earliest: 4 },
+        owner: (sessionId) => (sessionId === "other" ? "someone-else" : undefined),
+      },
+    });
+    const forbidden = await subscribe(gateway, cookie, "other", 0, 1, "journal");
+    const unknown = await subscribe(gateway, cookie, "unknown", 0, 1, "journal");
+    expect(forbidden.sent).toEqual(unknown.sent);
+    expect(forbidden.socket.data.subscriptions.size).toBe(0);
+
+    const owned = await setup({
+      replay: {
+        events: [replayEvent(4), replayEvent(5)],
+        bounds: { watermark: 5, earliest: 4 },
+      },
+    });
+    const { socket, sent } = await subscribe(
+      owned.gateway,
+      owned.cookie,
+      "session-1",
+      0,
+      1,
+      "journal",
+    );
+    expect(sent[1]).toEqual({
+      type: "session.resync_required",
+      sessionId: "session-1",
+      fromSequence: 4,
+    });
+    owned.gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "subscribe",
+        sessionId: "session-1",
+        afterSessionSequence: 3,
+        projection: "journal",
+      }),
+    );
+    expect(sent.at(-1)).toMatchObject({ fromSequence: 4, through: 5, replayComplete: true });
+  });
+
+  test("journal subscription mode is per session and resets on unsubscribe", async () => {
+    const { gateway, cookie } = await setup();
+    const { socket, sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+    expect(sent[1]).toMatchObject({
+      fromSequence: 1,
+      through: 0,
+      replayComplete: true,
+      events: [],
+    });
+    gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-2" }));
+    const progress = replayEvent(1, {
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens" },
+    });
+    gateway.publish({ sessionId: "session-2", ...progress });
+    expect(sent.at(-1)!["events"]).toEqual([progress]);
+    gateway.handleMessage(socket, JSON.stringify({ type: "unsubscribe", sessionId: "session-1" }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
+    gateway.publish({ sessionId: "session-1", ...progress });
+    expect(sent.at(-1)!["projection"]).toBeUndefined();
+    expect(sent.at(-1)!["events"]).toEqual([progress]);
+  });
+
+  test("journal replay resumes content after the cursor and certifies a telemetry-only tail", async () => {
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: [
+          replayEvent(1),
+          replayEvent(2, {
+            type: "run.status",
+            payload: { type: "system", subtype: "thinking_tokens" },
+          }),
+        ],
+      },
+    });
+    const { sent } = await subscribe(gateway, cookie, "session-1", 1, 1, "journal");
+    expect(sent[1]).toMatchObject({
+      fromSequence: 2,
+      through: 2,
+      replayComplete: true,
+      events: [],
+    });
+    const ahead = await subscribe(gateway, cookie, "session-1", 9, 1, "journal");
+    expect(ahead.sent[1]).toMatchObject({
+      fromSequence: 3,
+      through: 2,
+      replayComplete: true,
+      events: [],
+    });
+  });
+
+  test("a failed subscription send does not read any replay pages", async () => {
+    let reads = 0;
+    const gateway = new BrowserGateway({
+      resolveSession: async () => "owner",
+      allowedOrigins: [origin],
+      resolveOwner: () => "owner",
+      replayBounds: () => ({ watermark: 1000, earliest: 1 }),
+      readReplay: () => {
+        reads++;
+        return [];
+      },
+    });
+    const { socket } = makeSocket(0);
+    await gateway.attach(socket, { origin });
+    gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
+    expect(reads).toBe(0);
+  });
+
+  test("replay stops querying as soon as a page cannot be delivered", async () => {
+    let reads = 0;
+    let sends = 0;
+    const gateway = new BrowserGateway({
+      resolveSession: async () => "owner",
+      allowedOrigins: [origin],
+      resolveOwner: () => "owner",
+      replayBounds: () => ({ watermark: 1000, earliest: 1 }),
+      readReplay: (_sessionId, after, limit) => {
+        reads++;
+        return Array.from({ length: after < 1000 ? limit : 0 }, (_, i) =>
+          replayEvent(after + i + 1),
+        );
+      },
+    });
+    const { socket, closed } = makeSocket(() => (++sends === 1 ? 1 : 0));
+    await gateway.attach(socket, { origin });
+    gateway.handleMessage(socket, JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
+    expect(reads).toBe(1);
+    expect(closed).toEqual([4002]);
   });
 
   test("replay resumes from afterSessionSequence, not from zero", async () => {

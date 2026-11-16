@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
 
 /**
  * Control database migrations.
@@ -178,6 +179,14 @@ export function migrate(db: Database): void {
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS run_events_session_order
       ON run_events (session_id, session_sequence);
+  `);
+
+  // Build once over existing history; future writes maintain it automatically.
+  // Telemetry remains durable but opening a browser does not walk its payloads.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS run_events_journal_order
+      ON run_events (session_id, session_sequence)
+      WHERE ${JOURNAL_EVENT_SQL};
   `);
 
   db.exec(`

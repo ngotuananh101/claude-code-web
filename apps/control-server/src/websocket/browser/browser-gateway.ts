@@ -22,7 +22,7 @@
  * subscription streaming events to a login that has been revoked.
  */
 
-import type { BrowserReplayEvent } from "@cc-web/protocol";
+import { type BrowserReplayEvent, isThinkingTokenEstimate } from "@cc-web/protocol";
 
 /**
  * Resolves a raw Cookie header to a user id, or null when unauthenticated.
@@ -65,6 +65,14 @@ export type BrowserGatewayOptions = {
   resolveOwner: (sessionId: string) => string | undefined;
   /** Committed history for replay, in session order, bounded by `limit`. */
   readReplay: (sessionId: string, after: number, limit: number) => BrowserReplayEvent[];
+  /** Opt-in content projection, bounded by both count and a captured watermark.
+   * Every omitted sequence in that range must be thinking-token telemetry. */
+  readJournalReplay?: (
+    sessionId: string,
+    after: number,
+    through: number,
+    limit: number,
+  ) => BrowserReplayEvent[];
   /** The highest committed sequence and the lowest surviving one. */
   replayBounds: (sessionId: string) => { watermark: number; earliest: number };
 };
@@ -86,6 +94,7 @@ export class BrowserGateway {
   readonly #resolveSession: SessionResolver;
   readonly #allowedOrigins: Set<string>;
   readonly #sockets = new Map<string, Set<BrowserSocket>>();
+  readonly #journalSubscriptions = new WeakMap<BrowserSocket, Set<string>>();
 
   constructor(options: BrowserGatewayOptions) {
     this.#options = options;
@@ -167,7 +176,9 @@ export class BrowserGateway {
       case "subscribe": {
         const sessionId = record["sessionId"];
         const after = record["afterSessionSequence"];
+        const projection = record["projection"];
         if (
+          (projection !== undefined && projection !== "journal") ||
           typeof sessionId !== "string" ||
           sessionId === "" ||
           (after !== undefined &&
@@ -191,7 +202,12 @@ export class BrowserGateway {
         // (so it is in the replay) or after registration (so its live push
         // finds the subscriber). There is no window between the two.
         socket.data.subscriptions.add(sessionId);
-        this.#send(socket, { type: "subscribed", sessionId });
+        const journal = this.#journalSubscriptions.get(socket) ?? new Set<string>();
+        const readJournal = projection === "journal" ? this.#options.readJournalReplay : undefined;
+        if (readJournal !== undefined) journal.add(sessionId);
+        else journal.delete(sessionId);
+        this.#journalSubscriptions.set(socket, journal);
+        if (!this.#send(socket, { type: "subscribed", sessionId })) return;
 
         const offset = after ?? 0;
         const { watermark, earliest } = this.#options.replayBounds(sessionId);
@@ -208,6 +224,40 @@ export class BrowserGateway {
           return;
         }
 
+        if (readJournal !== undefined) {
+          // Stay synchronous: no yield means no unbounded live buffer or new
+          // replay/live race. The fixed boundary also makes coverage explicit.
+          let cursor = Math.min(offset, watermark);
+          for (;;) {
+            const events = readJournal(
+              sessionId,
+              cursor,
+              watermark,
+              BrowserGateway.REPLAY_BATCH_LIMIT,
+            );
+            const last = events.at(-1)?.sessionSequence ?? cursor;
+            const replayComplete =
+              events.length < BrowserGateway.REPLAY_BATCH_LIMIT || last === watermark;
+            const through = replayComplete ? watermark : last;
+            if (
+              !this.#send(socket, {
+                type: "session.events",
+                sessionId,
+                live: false,
+                projection: "journal",
+                fromSequence: cursor + 1,
+                through,
+                replayComplete,
+                events,
+              })
+            )
+              return;
+            if (replayComplete) break;
+            cursor = through;
+          }
+          return;
+        }
+
         // Bounded frames, chained until a short one (§12.6). An empty final
         // frame is honest about the journal's tail rather than the client's
         // claim: `through` is what the server can vouch for.
@@ -219,13 +269,16 @@ export class BrowserGateway {
             BrowserGateway.REPLAY_BATCH_LIMIT,
           );
           const through = batch.length > 0 ? batch[batch.length - 1]!.sessionSequence : watermark;
-          this.#send(socket, {
-            type: "session.events",
-            sessionId,
-            live: false,
-            through,
-            events: batch,
-          });
+          if (
+            !this.#send(socket, {
+              type: "session.events",
+              sessionId,
+              live: false,
+              through,
+              events: batch,
+            })
+          )
+            return;
           if (batch.length < BrowserGateway.REPLAY_BATCH_LIMIT) break;
           cursor = through;
         }
@@ -234,7 +287,10 @@ export class BrowserGateway {
 
       case "unsubscribe": {
         const sessionId = record["sessionId"];
-        if (typeof sessionId === "string") socket.data.subscriptions.delete(sessionId);
+        if (typeof sessionId === "string") {
+          socket.data.subscriptions.delete(sessionId);
+          this.#journalSubscriptions.get(socket)?.delete(sessionId);
+        }
         this.#send(socket, { type: "unsubscribed", sessionId });
         return;
       }
@@ -274,7 +330,18 @@ export class BrowserGateway {
 
     for (const sockets of this.#sockets.values()) {
       for (const socket of sockets) {
-        if (socket.data.subscriptions.has(event.sessionId)) this.#send(socket, frame);
+        if (!socket.data.subscriptions.has(event.sessionId)) continue;
+        this.#send(
+          socket,
+          this.#journalSubscriptions.get(socket)?.has(event.sessionId)
+            ? {
+                ...frame,
+                projection: "journal",
+                fromSequence: event.sessionSequence,
+                events: isThinkingTokenEstimate(event) ? [] : frame.events,
+              }
+            : frame,
+        );
       }
     }
   }
@@ -366,7 +433,7 @@ export class BrowserGateway {
    * the gap. There is deliberately no buffer here; Bun's own is bounded, and a
    * second one would only hide the same problem behind more memory.
    */
-  #send(socket: BrowserSocket, payload: Record<string, unknown>): void {
+  #send(socket: BrowserSocket, payload: Record<string, unknown>): boolean {
     let status: number;
     try {
       status = socket.send(JSON.stringify(payload));
@@ -375,6 +442,7 @@ export class BrowserGateway {
       status = 0;
     }
     if (status === 0) this.#disconnect(socket);
+    return status !== 0;
   }
 
   #disconnect(socket: BrowserSocket): void {

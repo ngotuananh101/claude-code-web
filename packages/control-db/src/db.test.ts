@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "./db.ts";
+import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
 
 function tableNames(db: Database): string[] {
   return (
@@ -71,6 +72,30 @@ describe("scheduled_tasks migration (§5.3)", () => {
       "scheduled_tasks_due",
       "scheduled_tasks_origin_cli",
     ]);
+  });
+});
+
+describe("journal replay index", () => {
+  test("existing history gains an idempotent partial index used by the projected range query", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    // Model an older database with rows but no projected replay index.
+    db.exec("DROP INDEX run_events_journal_order");
+    db.query(`INSERT INTO run_events (event_id, runner_id, boot_id, session_id, run_id, attempt_id,
+      local_sequence, session_sequence, type, payload, occurred_at, ingested_at)
+      VALUES ('e', 'r', 'b', 's', 'run', 'a', 1, 1, 'run.status', ?, 'now', 1)`).run(
+      JSON.stringify({ type: "system", subtype: "thinking_tokens" }),
+    );
+    migrate(db);
+    migrate(db);
+    const plan = db
+      .query(`EXPLAIN QUERY PLAN
+      SELECT session_sequence, event_id, run_id, attempt_id, occurred_at, type, payload
+      FROM run_events WHERE session_id = ? AND session_sequence > ? AND session_sequence <= ?
+        AND ${JOURNAL_EVENT_SQL} ORDER BY session_sequence LIMIT ?`)
+      .all("s", 0, 100_000, 200) as Array<{ detail: string }>;
+    expect(plan.map((item) => item.detail).join("\n")).toContain("run_events_journal_order");
+    expect(db.query("SELECT COUNT(*) AS count FROM run_events").get()).toEqual({ count: 1 });
   });
 });
 

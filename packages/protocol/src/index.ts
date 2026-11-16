@@ -219,7 +219,29 @@ export type SessionEventsFrame = {
   /** The highest session sequence this frame's stream has reached. */
   through: number;
   events: BrowserReplayEvent[];
-};
+} & (
+  | { projection?: undefined; fromSequence?: never; replayComplete?: never }
+  | {
+      /** Opt-in: only thinking-token estimates may be omitted from events. */
+      projection: "journal";
+      /** Inclusive coverage through `through`, including omitted telemetry.
+       * An empty completion frame may cover no range: fromSequence = through+1. */
+      fromSequence: number;
+      /** Explicit replay completion; event count is not a completion signal. */
+      replayComplete?: boolean;
+    }
+);
+
+/** Shared by live projection and the client render journal. The SQL read model
+ * uses the same exact classification; unknown status payloads are never dropped. */
+export function isThinkingTokenEstimate(
+  event: Pick<BrowserReplayEvent, "type" | "payload">,
+): boolean {
+  if (event.type !== "run.status" || typeof event.payload !== "object" || event.payload === null)
+    return false;
+  const payload = event.payload as Record<string, unknown>;
+  return payload["type"] === "system" && payload["subtype"] === "thinking_tokens";
+}
 
 /**
  * Retention has deleted the range a subscription's offset points into; the

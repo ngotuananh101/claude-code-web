@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { EventType } from "@cc-web/protocol";
+import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
 
 /**
  * The browser's read model over the journal (§12.5).
@@ -50,18 +51,24 @@ export function sessionEarliest(db: Database, sessionId: string): number {
 export function readSessionEvents(
   db: Database,
   sessionId: string,
-  options: { after: number; limit?: number },
+  options: { after: number; limit?: number; through?: number; projection?: "journal" },
 ): ReplayEvent[] {
   const limit = options.limit ?? 200;
   const rows = db
     .prepare(
       `SELECT session_sequence, event_id, run_id, attempt_id, occurred_at, type, payload
        FROM run_events
-       WHERE session_id = ? AND session_sequence > ?
+       WHERE session_id = ? AND session_sequence > ? AND session_sequence <= ?
+         ${options.projection === "journal" ? `AND ${JOURNAL_EVENT_SQL}` : ""}
        ORDER BY session_sequence
        LIMIT ?`,
     )
-    .all(sessionId, options.after, limit) as Array<StoredRow>;
+    .all(
+      sessionId,
+      options.after,
+      options.through ?? Number.MAX_SAFE_INTEGER,
+      limit,
+    ) as Array<StoredRow>;
 
   return rows.map((row) => ({
     sessionSequence: row.session_sequence,

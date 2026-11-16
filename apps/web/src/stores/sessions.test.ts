@@ -226,6 +226,43 @@ describe("the sessions store's reactive mirror", () => {
     expect(sessions.stream).toBeNull();
   });
 
+  test("compact replay waits for explicit completion even when a projected page is short", () => {
+    deliver({
+      ...replayBatch(1, 1),
+      projection: "journal",
+      fromSequence: 1,
+      through: 100_000,
+      replayComplete: false,
+    });
+    expect(sessions.stream).toBeNull();
+    deliver({
+      ...replayBatch(100_001, 0),
+      projection: "journal",
+      fromSequence: 100_001,
+      through: 200_000,
+      replayComplete: true,
+    });
+    expect(sessions.stream?.through).toBe(200_000);
+    expect(sessions.stream?.events.length).toBe(1);
+  });
+
+  test("telemetry-only compact live ranges reuse both immutable event snapshots", async () => {
+    deliver({ ...replayFrame(1), projection: "journal", fromSequence: 1, replayComplete: true });
+    const firstEvents = sessions.stream?.events;
+    const firstJournal = sessions.stream?.journalEvents;
+    deliver({
+      ...replayBatch(2, 0, true),
+      projection: "journal",
+      fromSequence: 2,
+      through: 100_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(sessions.stream?.through).toBe(100_000);
+    expect(sessions.stream?.events).toBe(firstEvents);
+    expect(sessions.stream?.journalEvents).toBe(firstJournal);
+    expect(firstEvents?.length).toBe(1);
+  });
+
   test("an empty final replay frame publishes an exact-size backlog", () => {
     deliver(replayBatch(1, 200, false));
     expect(sessions.stream).toBeNull();
@@ -239,7 +276,9 @@ describe("the sessions store's reactive mirror", () => {
     deliver(replayBatch(1, 1, true));
     deliver(replayBatch(3, 1, true));
     expect(sessions.stream).toBeNull();
-    expect(sent).toEqual([{ type: "subscribe", sessionId: "s-1", afterSessionSequence: 1 }]);
+    expect(sent).toEqual([
+      { type: "subscribe", sessionId: "s-1", afterSessionSequence: 1, projection: "journal" },
+    ]);
   });
 
   test("a terminal event publishes the buffered tail immediately", () => {
@@ -277,14 +316,21 @@ describe("session subscription lifecycle", () => {
   });
   afterEach(() => closeSession());
 
+  test("every open opts into compact replay", () => {
+    openSession("s-1");
+    expect(sent).toEqual([
+      { type: "subscribe", sessionId: "s-1", afterSessionSequence: 0, projection: "journal" },
+    ]);
+  });
+
   test("switch and close unsubscribe the sessions no longer observed", () => {
     openSession("first");
     openSession("second");
     closeSession();
     expect(sent).toEqual([
-      { type: "subscribe", sessionId: "first", afterSessionSequence: 0 },
+      { type: "subscribe", sessionId: "first", afterSessionSequence: 0, projection: "journal" },
       { type: "unsubscribe", sessionId: "first" },
-      { type: "subscribe", sessionId: "second", afterSessionSequence: 0 },
+      { type: "subscribe", sessionId: "second", afterSessionSequence: 0, projection: "journal" },
       { type: "unsubscribe", sessionId: "second" },
     ]);
   });
@@ -306,7 +352,9 @@ describe("session subscription lifecycle", () => {
       expect(sessions.stream).toBeNull();
       sent.length = 0;
       reopen?.();
-      expect(sent).toEqual([{ type: "subscribe", sessionId: "s-1", afterSessionSequence: 200 }]);
+      expect(sent).toEqual([
+        { type: "subscribe", sessionId: "s-1", afterSessionSequence: 200, projection: "journal" },
+      ]);
     } finally {
       reopenSpy.mockRestore();
       fetchSpy.mockRestore();

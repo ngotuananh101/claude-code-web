@@ -738,6 +738,29 @@ Client subscribe session với `afterSessionSequence`. Server kiểm tra ownersh
 
 Không tự resubmit prompt sau reconnect. Multiple browser tabs chỉ là nhiều observers, không phải nhiều run owners.
 
+**Implemented browser journal projection.** The web opts in with
+`projection: "journal"` on every initial, repair and reconnect subscription.
+Legacy subscriptions still receive the raw journal. Projected `session.events`
+frames certify inclusive coverage from `fromSequence` through `through`; only
+`run.status` payloads with `type: "system"` and `subtype: "thinking_tokens"`
+may be omitted. Content, unknown statuses, approvals/questions, tasks, usage and
+terminal events remain unchanged. The client validates range/order before
+advancing its contiguous coverage watermark; a raw frame's `through` cannot
+hide a missing event. `replayComplete` explicitly ends projected replay, including
+an empty completion frame (`fromSequence = through + 1`).
+
+The control database maintains a partial `(session_id, session_sequence)` index
+for this projection. It is built once over existing rows at startup and then
+maintained by SQLite; omitted telemetry is neither parsed nor sent during
+replay, but stays in the durable journal and runner ACK/dedup source of truth.
+Replay captures a fixed committed watermark and remains synchronous, so runner
+callbacks cannot interleave with it; introducing asynchronous pacing requires a
+separate bounded live-tail/cancellation design. A failed socket send stops
+further replay reads immediately. This removes telemetry-dependent cold-open
+work, **not** an overall bound on content history or outbound frame bytes;
+checkpoint bootstrap, byte budgets and partial-retention snapshots remain
+separate work.
+
 ### 12.6. Backpressure và spool limits
 
 - Batch nhỏ theo byte/time thresholds được đo sau.

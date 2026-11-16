@@ -1,4 +1,9 @@
-import type { BrowserReplayEvent, SessionEventsFrame, SessionResyncFrame } from "@cc-web/protocol";
+import {
+  type BrowserReplayEvent,
+  isThinkingTokenEstimate,
+  type SessionEventsFrame,
+  type SessionResyncFrame,
+} from "@cc-web/protocol";
 
 /**
  * The client half of §12.5: how a browser absorbs replay frames into one
@@ -28,12 +33,13 @@ export type SubscribeFrame = {
   type: "subscribe";
   sessionId: string;
   afterSessionSequence: number;
+  projection: "journal";
 };
 
 export type SessionStreamState = {
-  /** Highest contiguous session_sequence held. Next event must be through+1. */
+  /** Highest contiguous covered session sequence (raw events or projected ranges). */
   through: number;
-  /** Complete accepted journal, including progress telemetry. */
+  /** Accepted events; journal projection omits non-content progress telemetry. */
   events: BrowserReplayEvent[];
   /** Render projection: excludes only non-content thinking-token estimates. */
   journalEvents: BrowserReplayEvent[];
@@ -47,13 +53,6 @@ export type SessionStreamOptions = {
   sessionId: string;
   send: (frame: SubscribeFrame) => void;
 };
-
-function isThinkingTokenEstimate(event: BrowserReplayEvent): boolean {
-  if (event.type !== "run.status" || typeof event.payload !== "object" || event.payload === null)
-    return false;
-  const payload = event.payload as Record<string, unknown>;
-  return payload["type"] === "system" && payload["subtype"] === "thinking_tokens";
-}
 
 export function createSessionStream(options: SessionStreamOptions): {
   apply: (frame: SessionEventsFrame | SessionResyncFrame) => boolean;
@@ -71,7 +70,12 @@ export function createSessionStream(options: SessionStreamOptions): {
 
   function subscribe(after: number): void {
     awaitingReplay = true;
-    options.send({ type: "subscribe", sessionId: options.sessionId, afterSessionSequence: after });
+    options.send({
+      type: "subscribe",
+      sessionId: options.sessionId,
+      afterSessionSequence: after,
+      projection: "journal",
+    });
   }
 
   function apply(frame: SessionEventsFrame | SessionResyncFrame): boolean {
@@ -86,6 +90,42 @@ export function createSessionStream(options: SessionStreamOptions): {
       needsResync = true;
       subscribe(through);
       return true;
+    }
+
+    if (frame.projection === "journal") {
+      // Validate the entire range before changing continuity or appending any
+      // content. Only this negotiated projection may certify omitted sequences.
+      let previous = frame.fromSequence - 1;
+      const valid =
+        Number.isSafeInteger(frame.fromSequence) &&
+        frame.fromSequence > 0 &&
+        Number.isSafeInteger(frame.through) &&
+        frame.through >= 0 &&
+        frame.fromSequence <= frame.through + 1 &&
+        frame.events.every((event) => {
+          const seq = event.sessionSequence;
+          const ordered = Number.isSafeInteger(seq) && seq > previous && seq <= frame.through;
+          previous = seq;
+          return ordered && !isThinkingTokenEstimate(event);
+        });
+      if (!valid || frame.fromSequence > through + 1) {
+        if (!awaitingReplay) subscribe(through);
+        return false;
+      }
+      let changed = live !== frame.live;
+      live = frame.live;
+      if (frame.through <= through) return changed;
+      for (const event of frame.events) {
+        if (event.sessionSequence > through) {
+          events.push(event);
+          journalEvents.push(event);
+        }
+      }
+      through = frame.through;
+      needsResync = false;
+      awaitingReplay = false;
+      changed = true;
+      return changed;
     }
 
     let changed = live !== frame.live;

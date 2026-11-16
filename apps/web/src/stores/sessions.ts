@@ -97,9 +97,8 @@ export async function loadAccount(): Promise<void> {
 }
 
 /**
- * Subscribe to a session's journal, resuming from the watermark this client
- * already holds (§12.5) — reopening a session the machine was following
- * mid-stream costs only the events past `through`.
+ * Subscribe to a session's compact journal (§12.5). A cold open starts from
+ * zero; reconnect resumes from the machine's received coverage watermark.
  */
 export function openSession(sessionId: string): void {
   closeSession();
@@ -118,7 +117,10 @@ export function openSession(sessionId: string): void {
     // Finish pending replay even if its final frame is empty or deduplicated.
     const isEvents = frame.type === "session.events";
     const events = isEvents && Array.isArray(frame["events"]) ? frame["events"] : [];
-    const isIntermediateReplay = isEvents && frame["live"] !== true && events.length >= 200;
+    const isIntermediateReplay =
+      isEvents &&
+      frame["live"] !== true &&
+      (frame["projection"] === "journal" ? frame["replayComplete"] !== true : events.length >= 200);
     if (!changed && !(replayFlushTimer !== null && !isIntermediateReplay)) return;
 
     if (isIntermediateReplay) {
@@ -142,7 +144,12 @@ export function openSession(sessionId: string): void {
     }
   });
 
-  socket.send({ type: "subscribe", sessionId, afterSessionSequence: machine.state().through });
+  socket.send({
+    type: "subscribe",
+    sessionId,
+    afterSessionSequence: machine.state().through,
+    projection: "journal",
+  });
 }
 
 /** Detaches from the active session without touching the socket. */
@@ -206,7 +213,12 @@ function mirror(): void {
       : markRaw([...state.journalEvents]);
   sessions.stream = {
     ...state,
-    events: markRaw([...state.events]),
+    events:
+      previous !== null &&
+      previous.events.length === state.events.length &&
+      previous.events.at(-1) === state.events.at(-1)
+        ? previous.events
+        : markRaw([...state.events]),
     journalEvents,
   };
 }
@@ -240,6 +252,7 @@ export function startStore(): void {
         type: "subscribe",
         sessionId: sessions.activeId,
         afterSessionSequence: machine?.state().through ?? sessions.stream?.through ?? 0,
+        projection: "journal",
       });
     }
     void loadSessions();

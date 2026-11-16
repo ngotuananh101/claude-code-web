@@ -96,6 +96,107 @@ describe("reading a session for replay", () => {
     expect(batch.map((e) => e.sessionSequence)).toEqual([1, 2]);
   });
 
+  test("journal replay excludes only thinking-token estimates and preserves every other event", () => {
+    const db = setup();
+    const kept = [
+      { type: "run.started", payload: { commandId: "cmd-1" } },
+      { type: "run.status", payload: { type: "system", subtype: "future" } },
+      { type: "run.status", payload: { subtype: "thinking_tokens" } },
+      { type: "run.status", payload: null },
+      {
+        type: "message.delta",
+        payload: {
+          type: "system",
+          subtype: "thinking_tokens",
+          agent_id: "child-1",
+          parent_tool_use_id: "tool-1",
+        },
+      },
+      { type: "tool.started", payload: { name: "Agent" } },
+      { type: "approval.requested", payload: { approvalId: "approval-1" } },
+      { type: "question.requested", payload: { questionId: "question-1" } },
+      { type: "task.started", payload: { taskId: "task-1" } },
+      { type: "run.finished", payload: { result: "ok" } },
+    ] as const;
+    let sequence = 0;
+    for (const item of kept) {
+      for (const observation of [
+        item,
+        {
+          type: "run.status",
+          payload: { type: "system", subtype: "thinking_tokens", estimated_tokens: 12 },
+        },
+      ] as const) {
+        sequence++;
+        ingestEvent(
+          db,
+          event({
+            ...observation,
+            eventId: `evt-${sequence}`,
+            localSequence: sequence,
+          }),
+        );
+      }
+    }
+    seedSession(db, "other-session", 3);
+
+    const projected = readSessionEvents(db, "session-1", {
+      after: 0,
+      through: sequence,
+      projection: "journal",
+    });
+    expect(projected.map((item) => ({ type: item.type, payload: item.payload }))).toEqual([
+      ...kept,
+    ]);
+    expect(projected.map((item) => item.sessionSequence)).toEqual([
+      1, 3, 5, 7, 9, 11, 13, 15, 17, 19,
+    ]);
+    // Projection is a read model, not retention or a change to the durable ACK source.
+    expect(readSessionEvents(db, "session-1", { after: 0 })).toHaveLength(sequence);
+    expect(sessionWatermark(db, "session-1")).toBe(sequence);
+    migrate(db);
+    expect(readSessionEvents(db, "session-1", { after: 0, projection: "journal" })).toEqual(
+      projected,
+    );
+  });
+
+  test("journal page limits count content and honor both exclusive cursor and captured watermark", () => {
+    const db = setup();
+    for (let seq = 1; seq <= 10; seq++) {
+      ingestEvent(
+        db,
+        event({
+          eventId: `evt-${seq}`,
+          localSequence: seq,
+          type: seq % 3 === 0 ? "message.delta" : "run.status",
+          payload:
+            seq % 3 === 0
+              ? { text: `content-${seq}` }
+              : { type: "system", subtype: "thinking_tokens" },
+        }),
+      );
+    }
+    expect(
+      readSessionEvents(db, "session-1", {
+        after: 0,
+        through: 8,
+        limit: 2,
+        projection: "journal",
+      }).map((item) => item.sessionSequence),
+    ).toEqual([3, 6]);
+    expect(
+      readSessionEvents(db, "session-1", { after: 3, through: 8, projection: "journal" }).map(
+        (item) => item.sessionSequence,
+      ),
+    ).toEqual([6]);
+    expect(
+      readSessionEvents(db, "session-1", { after: 6, through: 8, projection: "journal" }),
+    ).toEqual([]);
+    expect(
+      readSessionEvents(db, "session-1", { after: 0, through: 0, projection: "journal" }),
+    ).toEqual([]);
+  });
+
   test("the watermark is the highest committed sequence, 0 when empty", () => {
     const db = setup();
     expect(sessionWatermark(db, "session-1")).toBe(0);

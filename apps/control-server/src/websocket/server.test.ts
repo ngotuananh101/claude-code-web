@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ingestEvent, migrate } from "@cc-web/control-db";
-import { WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
+import { type EventType, type SessionEventsFrame, WS_MAX_PAYLOAD_BYTES } from "@cc-web/protocol";
+import { createSessionStream } from "../../../web/src/services/session-stream.ts";
 import { AuthService } from "../auth/auth-service.ts";
 import { createSigner } from "../auth/tokens.ts";
 import { createServer, type ServerHandle } from "../server.ts";
@@ -209,6 +210,123 @@ describe("control server routes", () => {
       live: false,
       through: 0,
     });
+  });
+
+  test("compact replay over a real socket preserves content, lifecycle and reconnect coverage", async () => {
+    const { wsUrl, cookie, db, userId } = await start();
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      userId,
+      1,
+    );
+    const content: Array<{ type: EventType; payload: unknown }> = [
+      { type: "run.started", payload: { commandId: "cmd-1" } },
+      { type: "session.updated", payload: { session_id: "sdk-1" } },
+      {
+        type: "message.delta",
+        payload: { text: "latest answer", agent_id: "child-1", parent_tool_use_id: "tool-1" },
+      },
+      { type: "approval.requested", payload: { approvalId: "approval-1" } },
+      { type: "question.requested", payload: { questionId: "question-1" } },
+      { type: "task.started", payload: { task_id: "task-1", description: "child work" } },
+      { type: "run.status", payload: { type: "system", subtype: "future" } },
+      { type: "run.finished", payload: { result: "ok" } },
+    ];
+    let seq = 0;
+    db.transaction(() => {
+      for (const item of content) {
+        for (let progress = 0; progress < 500; progress++) {
+          seq++;
+          ingestEvent(db, {
+            eventId: `progress-${seq}`,
+            runnerId: "runner-a",
+            bootId: "boot-1",
+            sessionId: "session-1",
+            runId: "run-1",
+            attemptId: "attempt-1",
+            localSequence: seq,
+            occurredAt: "2026-11-16T00:00:00.000Z",
+            type: "run.status",
+            payload: { type: "system", subtype: "thinking_tokens", estimated_tokens: seq },
+          });
+        }
+        seq++;
+        ingestEvent(db, {
+          eventId: `content-${seq}`,
+          runnerId: "runner-a",
+          bootId: "boot-1",
+          sessionId: "session-1",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          localSequence: seq,
+          occurredAt: "2026-11-16T00:00:00.000Z",
+          ...item,
+        });
+      }
+    })();
+    const client = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    client.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: 0,
+      projection: "journal",
+    });
+    await waitFor(() => client.messages.some((frame) => frame["replayComplete"] === true));
+    const frame = client.messages.find(
+      (item) => item["type"] === "session.events",
+    ) as SessionEventsFrame;
+    const repairs: unknown[] = [];
+    const stream = createSessionStream({
+      sessionId: "session-1",
+      send: (item) => repairs.push(item),
+    });
+    stream.apply(frame);
+    expect(stream.state().through).toBe(seq);
+    expect(
+      stream.state().journalEvents.map((item) => ({ type: item.type, payload: item.payload })),
+    ).toEqual(content);
+    expect(repairs).toEqual([]);
+
+    const progressSeq = seq + 1;
+    ingestEvent(db, {
+      eventId: "live-progress",
+      runnerId: "runner-a",
+      bootId: "boot-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      localSequence: progressSeq,
+      occurredAt: "2026-11-16T00:00:01.000Z",
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens" },
+    });
+    handle!.browserGateway.publish({
+      sessionId: "session-1",
+      sessionSequence: progressSeq,
+      eventId: "live-progress",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      occurredAt: "2026-11-16T00:00:01.000Z",
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens" },
+    });
+    await waitFor(() => client.messages.some((item) => item["through"] === progressSeq));
+    stream.apply(client.messages.at(-1) as SessionEventsFrame);
+    expect(stream.state().through).toBe(progressSeq);
+    expect(stream.state().events.length).toBe(content.length);
+
+    const reconnect = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    reconnect.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: seq,
+      projection: "journal",
+    });
+    await waitFor(() => reconnect.messages.some((item) => item["replayComplete"] === true));
+    stream.apply(reconnect.messages.at(-1) as SessionEventsFrame);
+    expect(stream.state().through).toBe(progressSeq);
+    expect(stream.state().journalEvents.length).toBe(content.length);
+    expect(repairs).toEqual([]);
   });
 
   test("signing out closes the owner's live socket with the revocation code", async () => {

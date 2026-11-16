@@ -223,6 +223,8 @@ export function createServer(options: ServerOptions): ServerHandle {
     resolveOwner: (sessionId) => sessionOwner(options.db, sessionId),
     readReplay: (sessionId, after, limit) =>
       readSessionEvents(options.db, sessionId, { after, limit }),
+    readJournalReplay: (sessionId, after, through, limit) =>
+      readSessionEvents(options.db, sessionId, { after, through, limit, projection: "journal" }),
     replayBounds: (sessionId) => ({
       watermark: sessionWatermark(options.db, sessionId),
       earliest: sessionEarliest(options.db, sessionId),

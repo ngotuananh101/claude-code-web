@@ -164,6 +164,96 @@ describe("the session stream state machine", () => {
     expect(stream.state().journalEvents).toEqual([]);
   });
 
+  test("compact replay covers telemetry gaps without retaining telemetry or losing content", () => {
+    const { stream, sent } = harness();
+    stream.apply({
+      ...batch([replayEvent(1), replayEvent(100_001)]),
+      projection: "journal",
+      fromSequence: 1,
+      through: 100_002,
+    } as SessionEventsFrame);
+    expect(stream.state().through).toBe(100_002);
+    expect(stream.state().events.map((event) => event.sessionSequence)).toEqual([1, 100_001]);
+    expect(stream.state().journalEvents.map((event) => event.sessionSequence)).toEqual([
+      1, 100_001,
+    ]);
+    expect(sent).toEqual([]);
+
+    stream.apply({
+      ...batch([], true),
+      projection: "journal",
+      fromSequence: 100_003,
+      through: 200_000,
+    } as SessionEventsFrame);
+    stream.apply(batch([replayEvent(200_001)], true));
+    expect(stream.state().through).toBe(200_001);
+    expect(stream.state().events.map((event) => event.sessionSequence)).toEqual([
+      1, 100_001, 200_001,
+    ]);
+    expect(sent).toEqual([]);
+  });
+
+  test("compact replay overlap deduplicates without accepting an uncovered range", () => {
+    const { stream, sent } = harness();
+    stream.apply(batch([replayEvent(1), replayEvent(2)]));
+    stream.apply({
+      ...batch([replayEvent(2), replayEvent(4)]),
+      projection: "journal",
+      fromSequence: 2,
+      through: 5,
+    } as SessionEventsFrame);
+    stream.apply({
+      ...batch([replayEvent(8)]),
+      projection: "journal",
+      fromSequence: 7,
+      through: 9,
+    } as SessionEventsFrame);
+    expect(stream.state().through).toBe(5);
+    expect(stream.state().events.map((event) => event.sessionSequence)).toEqual([1, 2, 4]);
+    expect(sent).toEqual([{ type: "subscribe", afterSessionSequence: 5 }]);
+  });
+
+  test("legacy frames cannot use through to hide a missing content event", () => {
+    const { stream, sent } = harness();
+    stream.apply({ ...batch([replayEvent(1), replayEvent(3)]), through: 100 });
+    expect(stream.state().through).toBe(1);
+    expect(sent).toEqual([{ type: "subscribe", afterSessionSequence: 1 }]);
+  });
+
+  test("malformed compact ranges cannot move the watermark or partially append content", () => {
+    for (const invalid of [
+      { fromSequence: 0, through: 4, events: [replayEvent(2)] },
+      { fromSequence: 2.5, through: 4, events: [replayEvent(3)] },
+      { fromSequence: 2, through: 4, events: [replayEvent(3), replayEvent(2)] },
+      { fromSequence: 2, through: 3, events: [replayEvent(4)] },
+      { fromSequence: 2, through: 4, events: [replayEvent(1)] },
+    ]) {
+      const { stream, sent } = harness();
+      stream.apply(batch([replayEvent(1)]));
+      stream.apply({
+        ...batch([]),
+        projection: "journal",
+        ...invalid,
+      } as SessionEventsFrame);
+      expect(stream.state().through).toBe(1);
+      expect(stream.state().events.map((event) => event.sessionSequence)).toEqual([1]);
+      expect(sent).toEqual([{ type: "subscribe", afterSessionSequence: 1 }]);
+    }
+  });
+
+  test("compact replay still clears retention repair on a telemetry-only range", () => {
+    const { stream } = harness();
+    stream.apply(resync(100));
+    stream.apply({
+      ...batch([]),
+      projection: "journal",
+      fromSequence: 100,
+      through: 200,
+    } as SessionEventsFrame);
+    expect(stream.state().through).toBe(200);
+    expect(stream.state().needsResync).toBe(false);
+  });
+
   test("unknown status frames stay in the render journal", () => {
     const { stream } = harness();
     stream.apply(batch([replayEvent(1, { type: "run.status", payload: { subtype: "future" } })]));
