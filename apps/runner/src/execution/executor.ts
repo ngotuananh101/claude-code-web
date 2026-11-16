@@ -15,7 +15,12 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { AttachmentInfo, RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
+import {
+  type AttachmentInfo,
+  conversationResetId,
+  type RunnerAttachmentItem,
+  type RunProfilePayload,
+} from "@cc-web/protocol";
 import {
   appendEvent,
   finishAttempt,
@@ -569,6 +574,16 @@ export async function executeRun(
           sdkSessionId = id;
           recordSdkSessionId(db, attemptId, id);
         }
+      }
+
+      const resetId = conversationResetId(sdkMessage);
+      if (resetId !== undefined) {
+        // /clear can name the old session_id; subsequent runs must resume the
+        // new conversation even if no further init frame arrives this turn.
+        sdkSessionId = resetId;
+        recordSdkSessionId(db, attemptId, resetId);
+        append("session.updated", redactSdkMessage(sdkMessage));
+        continue;
       }
 
       // §12.3: task-lifecycle frames carry their own semantics — journal them as

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { AttachmentInfo, SessionMessage } from "@cc-web/protocol";
+import type { AttachmentInfo } from "@cc-web/protocol";
 import { Loader2, PanelRightOpen } from "@lucide/vue";
 import { useMediaQuery } from "@vueuse/core";
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
 import { taskStateFromEvents } from "../features/journal/background-tasks.ts";
+import { createSessionHistory, sessionHistoryTarget } from "../features/journal/session-history.ts";
 import {
   deriveSubagentItems,
   resolveSubagentDialogTab,
@@ -108,8 +109,12 @@ const activeLive = computed(() =>
   resolveSessionLive(active.value?.live, sessions.stream?.live ?? null),
 );
 
-/** Preloaded historical messages when resuming an existing session (§16.1, Task 13). */
-const historicalMessages = ref<SessionMessage[]>([]);
+/** Transcript reads are invalidated on route changes and SDK conversation resets. */
+const history = createSessionHistory({
+  fetch: fetchSessionMessages,
+  onError: (message) => toast.error(message),
+});
+const historicalMessages = history.messages;
 // Telemetry still advances the complete journal's watermark, but its stable
 // render projection must not invalidate chat/subagent reducers (§16.2).
 const journalEvents = computed(() => sessions.stream?.journalEvents ?? []);
@@ -192,82 +197,47 @@ function openSubagentsDialog(subagentId?: string, tab: SubagentDialogTab = "acti
 
 // A terminal event for the run this page started is the honest "it is over":
 // the composer's stop button disappears with it, not on a timer.
+// A reset can shrink the projection to the same length it previously had;
+// observe its immutable identity, not only the count, to see the terminal.
+watch(journalEvents, () => {
+  const run = startedRun.value;
+  if (run === null) return;
+  const currentSessionId = active.value?.sessionId;
+  if (run.sessionId !== currentSessionId) return;
+  const terminal = journalEvents.value.some(
+    (event) =>
+      event.runId === run.runId &&
+      (event.type === "run.finished" ||
+        event.type === "run.failed" ||
+        event.type === "run.interrupted"),
+  );
+  if (terminal) {
+    startedRun.value = null;
+    if (pendingRun.value?.runId === run.runId) {
+      pendingRun.value = null;
+    }
+  }
+});
+
+// A reset starts a new transcript, even while the session listing still names
+// the previous SDK id. The generation guard rejects every old in-flight read.
+const historyTarget = computed(() =>
+  sessions.stream !== null && sessions.activeId === active.value?.sessionId
+    ? sessionHistoryTarget(active.value, journalEvents.value)
+    : null,
+);
 watch(
-  () => journalEvents.value.length,
-  () => {
-    const run = startedRun.value;
-    if (run === null) return;
-    const currentSessionId = active.value?.sessionId;
-    if (run.sessionId !== currentSessionId) return;
-    const terminal = journalEvents.value.some(
-      (event) =>
-        event.runId === run.runId &&
-        (event.type === "run.finished" ||
-          event.type === "run.failed" ||
-          event.type === "run.interrupted"),
-    );
-    if (terminal) {
-      startedRun.value = null;
-      if (pendingRun.value?.runId === run.runId) {
-        pendingRun.value = null;
-      }
+  historyTarget,
+  (target, previous) => {
+    history.update(target);
+    if (target?.resetEventId && target.resetEventId !== previous?.resetEventId) {
+      subagentDialogOpen.value = false;
+      selectedSubagentId.value = null;
+      subagentDialogTab.value = "active";
+      if (pendingRun.value?.runId === journalEvents.value[0]?.runId) pendingRun.value = null;
     }
   },
-);
-
-// When a resumed session's first `run.started` event carries a `resumeSessionId`,
-// fetch the historical messages from the runner so they render above the live
-// journal (§16.1, Task 13). Gated on the pin being available so the runner can
-// resolve the workspace path.
-const fetchedResume = ref<string | null>(null);
-watch(
-  [
-    () => active.value?.sessionId,
-    () => active.value?.sdkSessionId,
-    () => active.value?.runnerId,
-    () => active.value?.workspaceId,
-    () => journalEvents.value.length,
-  ],
-  () => {
-    const stream = sessions.stream;
-    if (stream === null) return;
-    // Find the first run.started event's resumeSessionId.
-    const started = journalEvents.value.find((e) => e.type === "run.started");
-    const resumeSessionId =
-      started !== undefined
-        ? ((started.payload ?? {}) as Record<string, unknown>)["resumeSessionId"]
-        : undefined;
-    const payloadResume =
-      typeof resumeSessionId === "string" && resumeSessionId.trim() !== ""
-        ? resumeSessionId.trim()
-        : undefined;
-
-    // Prefer the session's own pin; fall back to the first run.started's
-    // resumeSessionId. Avoid re-fetching the same session.
-    const targetResume = active.value?.sdkSessionId ?? payloadResume;
-    if (targetResume === undefined || targetResume === "") return;
-    if (fetchedResume.value === targetResume) return;
-    // Capture the session and its ids for the continuation: the fetch must
-    // read the session this effect saw, and property narrowing does not
-    // survive into an async closure.
-    const targetSession = active.value;
-    if (!targetSession?.runnerId || !targetSession.workspaceId) return;
-    const expectedSessionId = targetSession.sessionId;
-    const workspaceId = targetSession.workspaceId;
-    const runnerId = targetSession.runnerId;
-
-    fetchedResume.value = targetResume;
-    void (async () => {
-      const result = await fetchSessionMessages(workspaceId, targetResume, runnerId);
-      if (active.value?.sessionId !== expectedSessionId) return;
-      if (result.ok) {
-        historicalMessages.value = result.messages;
-      } else {
-        toast.error(result.message);
-      }
-    })();
-  },
-  { immediate: true },
+  { immediate: true, flush: "sync" },
 );
 
 const activePendingRun = computed(() => {
@@ -312,8 +282,7 @@ const greeting = computed(() => {
 /** Follows the URL in one direction: route → held session. */
 function followRoute(): void {
   const id = routeSession.value;
-  historicalMessages.value = [];
-  fetchedResume.value = null;
+  history.update(null);
   subagentDialogOpen.value = false;
   selectedSubagentId.value = null;
   subagentDialogTab.value = "active";
@@ -322,8 +291,10 @@ function followRoute(): void {
     return;
   }
   if (id !== sessions.activeId) openSession(id);
+  history.update(historyTarget.value);
 }
 
+onBeforeUnmount(() => history.update(null));
 onMounted(followRoute);
 watch(routeSession, followRoute);
 
@@ -373,7 +344,7 @@ async function refreshNow(): Promise<void> {
 
             <EventJournal
               v-if="sessions.stream !== null"
-              :key="active.sessionId"
+              :key="`${active.sessionId}:${historyTarget?.resetEventId ?? 'initial'}`"
               class="z-10"
               :events="journalEvents"
               :needs-resync="sessions.stream.needsResync"

@@ -893,6 +893,67 @@ describe("the SDK session id", () => {
   });
 });
 
+describe("conversation reset", () => {
+  test("journals the reset and resumes the new SDK conversation on the next run", async () => {
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+    const reset = {
+      type: "conversation_reset",
+      new_conversation_id: "sdk-new",
+      session_id: "sdk-old",
+      uuid: "reset-1",
+      trigger: "clear",
+      user_message_uuid: "user-clear",
+    };
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-old" };
+        yield reset;
+        yield { type: "result", subtype: "success", result: "" };
+      })();
+    const outcome = await executeRun(
+      db,
+      { ...COMMAND, payload: { prompt: "/clear" } },
+      {
+        workspacePath: WORKSPACES.get("workspace-1")!,
+        sdk,
+      },
+    );
+    expect(outcome.sdkSessionId).toBe("sdk-new");
+    const row = events(db).find((e) => JSON.parse(e.payload).type === "conversation_reset");
+    expect(row?.type).toBe("session.updated");
+    expect(JSON.parse(row!.payload)).toEqual(reset);
+
+    beginAttempt(db, {
+      attemptId: "attempt-2",
+      sessionId: "session-1",
+      runId: "run-2",
+      workspacePath: "/home/runner/project",
+      now: Date.now() + 1,
+    });
+    let resumed: string | undefined;
+    await executeRun(
+      db,
+      { ...COMMAND, attemptId: "attempt-2", runId: "run-2" },
+      {
+        workspacePath: WORKSPACES.get("workspace-1")!,
+        sdk: (options) => {
+          resumed = options.resume;
+          return (async function* () {
+            yield { type: "result", subtype: "success", result: "ok" };
+          })();
+        },
+      },
+    );
+    expect(resumed).toBe("sdk-new");
+  });
+});
+
 describe("the resumeSessionId payload", () => {
   test("an explicit resumeSessionId is forwarded to the SDK as resume", async () => {
     const { db } = setup();

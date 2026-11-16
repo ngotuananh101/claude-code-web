@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { EventType } from "@cc-web/protocol";
+import { conversationResetId, type EventType } from "@cc-web/protocol";
 import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
 
 /**
@@ -295,6 +295,8 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
  * from a different runner version readable.
  */
 function sdkSessionIdFromEventPayload(payload: Record<string, unknown>): string | undefined {
+  const resetId = conversationResetId(payload);
+  if (resetId !== undefined) return resetId;
   for (const key of ["session_id", "sdkSessionId"]) {
     const value = payload[key];
     if (typeof value === "string" && value !== "") return value;

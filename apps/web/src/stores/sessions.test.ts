@@ -202,6 +202,23 @@ describe("the sessions store's reactive mirror", () => {
     expect(sessions.stream).toBe(first);
   });
 
+  test("a live clear immediately publishes an empty chat and subagent projection", () => {
+    deliver(replayFrame(1));
+    const before = sessions.stream?.journalEvents;
+    const frame = replayBatch(2, 1, true);
+    const reset = (frame["events"] as Record<string, unknown>[])[0]!;
+    reset["type"] = "session.updated";
+    reset["payload"] = {
+      type: "conversation_reset",
+      new_conversation_id: "sdk-new",
+      trigger: "clear",
+    };
+    deliver(frame);
+    expect(sessions.stream?.through).toBe(2);
+    expect(sessions.stream?.journalEvents.map((event) => event.sessionSequence)).toEqual([2]);
+    expect(before?.map((event) => event.sessionSequence)).toEqual([1]);
+  });
+
   test("approvals flush the buffered live tail without waiting", () => {
     deliver(replayFrame(1));
     deliver(replayBatch(2, 1, true));

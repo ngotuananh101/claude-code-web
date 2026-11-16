@@ -1,5 +1,6 @@
 import {
   type BrowserReplayEvent,
+  isConversationReset,
   isThinkingTokenEstimate,
   type SessionEventsFrame,
   type SessionResyncFrame,
@@ -41,7 +42,7 @@ export type SessionStreamState = {
   through: number;
   /** Accepted events; journal projection omits non-content progress telemetry. */
   events: BrowserReplayEvent[];
-  /** Render projection: excludes only non-content thinking-token estimates. */
+  /** Current conversation's render projection, starting at its latest reset. */
   journalEvents: BrowserReplayEvent[];
   /** Live-ness of the last frame seen; null before the first one. */
   live: boolean | null;
@@ -118,6 +119,7 @@ export function createSessionStream(options: SessionStreamOptions): {
       for (const event of frame.events) {
         if (event.sessionSequence > through) {
           events.push(event);
+          if (isConversationReset(event)) journalEvents.length = 0;
           journalEvents.push(event);
         }
       }
@@ -136,6 +138,7 @@ export function createSessionStream(options: SessionStreamOptions): {
         events.push(event);
         // Progress estimates do not alter chat or subagent content. Keep them
         // in the complete journal and advance continuity before projecting.
+        if (isConversationReset(event)) journalEvents.length = 0;
         if (!isThinkingTokenEstimate(event)) journalEvents.push(event);
         changed = true;
         through = event.sessionSequence;

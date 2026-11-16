@@ -254,6 +254,81 @@ describe("the session stream state machine", () => {
     expect(stream.state().needsResync).toBe(false);
   });
 
+  test("a conversation reset clears rendered history without rewinding replay continuity", () => {
+    const { stream, sent } = harness();
+    const reset = replayEvent(3, {
+      type: "session.updated",
+      payload: {
+        type: "conversation_reset",
+        session_id: "sdk-old",
+        new_conversation_id: "sdk-new",
+        trigger: "clear",
+      },
+    });
+    stream.apply(batch([replayEvent(1), replayEvent(2), reset, replayEvent(4)]));
+    expect(stream.state().through).toBe(4);
+    expect(stream.state().events.map((e) => e.sessionSequence)).toEqual([1, 2, 3, 4]);
+    expect(stream.state().journalEvents.map((e) => e.sessionSequence)).toEqual([3, 4]);
+    // A reconnect overlap must not clear content that arrived after the reset.
+    stream.apply(batch([reset, replayEvent(4), replayEvent(5)], true));
+    expect(stream.state().journalEvents.map((e) => e.sessionSequence)).toEqual([3, 4, 5]);
+    expect(stream.state().through).toBe(5);
+    expect(sent).toEqual([]);
+    // A cold reopen reconstructs exactly the same cleared transcript.
+    const cold = harness().stream;
+    cold.apply(batch([replayEvent(1), replayEvent(2), reset, replayEvent(4), replayEvent(5)]));
+    expect(cold.state().journalEvents.map((e) => e.sessionSequence)).toEqual([3, 4, 5]);
+  });
+
+  test("compact replay resets even with legacy run.status reset frames and omitted trigger", () => {
+    const { stream } = harness();
+    stream.apply({
+      ...batch([
+        replayEvent(1),
+        replayEvent(100, {
+          type: "run.status",
+          payload: { type: "conversation_reset", new_conversation_id: "sdk-new" },
+        }),
+        replayEvent(102),
+      ]),
+      projection: "journal",
+      fromSequence: 1,
+      through: 200,
+      replayComplete: true,
+    });
+    expect(stream.state().through).toBe(200);
+    expect(stream.state().journalEvents.map((e) => e.sessionSequence)).toEqual([100, 102]);
+    stream.apply(resync(201));
+    expect(stream.state().journalEvents).toEqual([]);
+  });
+
+  test("unrelated status payloads cannot clear conversation history", () => {
+    const { stream } = harness();
+    stream.apply(
+      batch([
+        replayEvent(1),
+        replayEvent(2, {
+          type: "message.delta",
+          payload: { type: "conversation_reset", new_conversation_id: "sdk-new" },
+        }),
+        replayEvent(3, {
+          type: "run.status",
+          payload: { type: "conversation_reset", new_conversation_id: "" },
+        }),
+        replayEvent(4, { type: "run.status", payload: { new_conversation_id: "sdk-new" } }),
+        replayEvent(5, {
+          type: "session.updated",
+          payload: {
+            type: "conversation_reset",
+            new_conversation_id: "child-new",
+            parent_tool_use_id: "parent-tool",
+          },
+        }),
+      ]),
+    );
+    expect(stream.state().journalEvents.map((e) => e.sessionSequence)).toEqual([1, 2, 3, 4, 5]);
+  });
+
   test("unknown status frames stay in the render journal", () => {
     const { stream } = harness();
     stream.apply(batch([replayEvent(1, { type: "run.status", payload: { subtype: "future" } })]));

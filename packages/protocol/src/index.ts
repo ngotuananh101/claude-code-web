@@ -243,6 +243,26 @@ export function isThinkingTokenEstimate(
   return payload["type"] === "system" && payload["subtype"] === "thinking_tokens";
 }
 
+/** The SDK reset target, not `session_id` (which can still name the old
+ * conversation). Subagent resets cannot reset the main transcript. */
+export function conversationResetId(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+  if (record["type"] !== "conversation_reset") return undefined;
+  for (const key of ["parent_tool_use_id", "parentToolUseId", "agent_id", "agentId"]) {
+    if (typeof record[key] === "string" && record[key] !== "") return undefined;
+  }
+  const id = record["new_conversation_id"];
+  return typeof id === "string" && id.trim() !== "" ? id.trim() : undefined;
+}
+
+export function isConversationReset(event: Pick<BrowserReplayEvent, "type" | "payload">): boolean {
+  return (
+    (event.type === "session.updated" || event.type === "run.status") &&
+    conversationResetId(event.payload) !== undefined
+  );
+}
+
 /**
  * Retention has deleted the range a subscription's offset points into; the
  * client resynchronizes from `fromSequence` (or a snapshot, once those exist).

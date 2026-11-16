@@ -761,6 +761,18 @@ work, **not** an overall bound on content history or outbound frame bytes;
 checkpoint bootstrap, byte budgets and partial-retention snapshots remain
 separate work.
 
+**Conversation reset (`/clear`).** The runner maps the SDK's
+`conversation_reset` message to `session.updated` and persists
+`new_conversation_id` as the next run's resume target; the reset frame's
+`session_id` may still name the previous conversation. The browser clears its
+current chat/subagent render projection at that committed event, resets the
+journal's scroll window and invalidates pending transcript reads. History reads
+use the new SDK conversation even if a cached session listing is stale.
+Duplicate delivery cannot clear newer content, and cold replay reconstructs the
+same boundary. Older runners' `run.status` reset payloads are recognized too.
+Neither the durable event journal/ACK identities nor the SDK transcript files
+are deleted by `/clear`; transcript cleanup remains the separate §18.5 policy.
+
 ### 12.6. Backpressure và spool limits
 
 - Batch nhỏ theo byte/time thresholds được đo sau.

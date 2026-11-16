@@ -1,4 +1,4 @@
-import type { BrowserReplayEvent } from "@cc-web/protocol";
+import { type BrowserReplayEvent, isConversationReset } from "@cc-web/protocol";
 import { markRaw, reactive } from "vue";
 import { clearComposerSettings } from "../features/composer/composer-storage.ts";
 import { authFetch } from "../services/auth-api.ts";
@@ -188,12 +188,13 @@ function hasUrgentEvent(events: Record<string, unknown>[]): boolean {
   return events.some((event) => {
     const type = event["type"];
     return (
-      typeof type === "string" &&
-      (type.startsWith("approval.") ||
-        type.startsWith("question.") ||
-        type === "run.finished" ||
-        type === "run.failed" ||
-        type === "run.interrupted")
+      isConversationReset(event as Pick<BrowserReplayEvent, "type" | "payload">) ||
+      (typeof type === "string" &&
+        (type.startsWith("approval.") ||
+          type.startsWith("question.") ||
+          type === "run.finished" ||
+          type === "run.failed" ||
+          type === "run.interrupted"))
     );
   });
 }

@@ -329,6 +329,99 @@ describe("control server routes", () => {
     expect(repairs).toEqual([]);
   });
 
+  test("clear stays cleared over live delivery, cold reopen and reconnect without deleting durable events", async () => {
+    const { wsUrl, url, cookie, db, userId } = await start();
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      userId,
+      1,
+    );
+    let sequence = 0;
+    function commit(type: EventType, payload: unknown, publish = false) {
+      sequence++;
+      const event = {
+        eventId: `clear-${sequence}`,
+        runnerId: "runner-a",
+        bootId: "boot-1",
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        localSequence: sequence,
+        occurredAt: "2026-11-16T00:00:00.000Z",
+        type,
+        payload,
+      };
+      const result = ingestEvent(db, event);
+      if (publish)
+        handle!.browserGateway.publish({ ...event, sessionSequence: result.sessionSequence! });
+    }
+    commit("session.updated", { type: "system", subtype: "init", session_id: "sdk-old" });
+    commit("message.delta", { messageId: "old-message", text: "Old answer" });
+    const client = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    client.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: 0,
+      projection: "journal",
+    });
+    await waitFor(() => client.messages.some((item) => item["replayComplete"] === true));
+    const repairs: unknown[] = [];
+    const stream = createSessionStream({
+      sessionId: "session-1",
+      send: (item) => repairs.push(item),
+    });
+    stream.apply(client.messages.at(-1) as SessionEventsFrame);
+    expect(stream.state().journalEvents.map((item) => item.sessionSequence)).toEqual([1, 2]);
+
+    commit(
+      "session.updated",
+      {
+        type: "conversation_reset",
+        new_conversation_id: "sdk-new",
+        session_id: "sdk-old",
+        trigger: "clear",
+      },
+      true,
+    );
+    commit("run.finished", { result: "" }, true);
+    await waitFor(() => client.messages.some((item) => item["through"] === 4));
+    for (const frame of client.messages.filter((item) => item["type"] === "session.events"))
+      stream.apply(frame as SessionEventsFrame);
+    expect(stream.state().journalEvents.map((item) => item.sessionSequence)).toEqual([3, 4]);
+    expect(stream.state().through).toBe(4);
+
+    const cold = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    cold.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: 0,
+      projection: "journal",
+    });
+    await waitFor(() => cold.messages.some((item) => item["replayComplete"] === true));
+    const coldStream = createSessionStream({
+      sessionId: "session-1",
+      send: (item) => repairs.push(item),
+    });
+    coldStream.apply(cold.messages.at(-1) as SessionEventsFrame);
+    expect(coldStream.state().journalEvents.map((item) => item.sessionSequence)).toEqual([3, 4]);
+    const response = await fetch(`${url}/api/sessions`, { headers: { Cookie: cookie } });
+    const body = (await response.json()) as { sessions: Array<{ sdkSessionId: string }> };
+    expect(body.sessions[0]?.sdkSessionId).toBe("sdk-new");
+    cold.send({
+      type: "subscribe",
+      sessionId: "session-1",
+      afterSessionSequence: 4,
+      projection: "journal",
+    });
+    await waitFor(
+      () => cold.messages.filter((item) => item["replayComplete"] === true).length === 2,
+    );
+    coldStream.apply(cold.messages.at(-1) as SessionEventsFrame);
+    expect(coldStream.state().journalEvents.map((item) => item.sessionSequence)).toEqual([3, 4]);
+    expect(db.query("SELECT COUNT(*) AS count FROM run_events").get()).toEqual({ count: 4 });
+    expect(repairs).toEqual([]);
+  });
+
   test("signing out closes the owner's live socket with the revocation code", async () => {
     const { url, wsUrl, cookie, db, userId } = await start();
 

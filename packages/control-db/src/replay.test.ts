@@ -453,6 +453,29 @@ describe("listing an owner's sessions", () => {
     expect(summary?.sdkSessionId).toBe("sdk-new");
   });
 
+  test("a reset points history at the new conversation, not the frame's old session_id", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "owner-1");
+    ingestEvent(db, event({ type: "session.updated", payload: { session_id: "sdk-old" } }));
+    ingestEvent(
+      db,
+      event({
+        type: "session.updated",
+        payload: {
+          type: "conversation_reset",
+          session_id: "sdk-old",
+          new_conversation_id: "sdk-new",
+          trigger: "clear",
+        },
+        eventId: "evt-reset",
+        localSequence: 2,
+      }),
+    );
+    expect(listSessions(db, "owner-1")[0]?.sdkSessionId).toBe("sdk-new");
+    // Clearing the conversation does not delete ACK/dedup history.
+    expect(readSessionEvents(db, "session-1", { after: 0 })).toHaveLength(2);
+  });
+
   test("a session with no session.updated reports no SDK id", () => {
     const db = setup();
     registerRunner(db, "runner-a", "owner-1");
