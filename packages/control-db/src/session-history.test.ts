@@ -133,6 +133,38 @@ describe("indexed session history", () => {
     db.close();
   });
 
+  test("a reset discards the previous generation's rows instead of orphaning them", () => {
+    const { db, append } = fixture();
+    append("run.started", { prompt: "old" });
+    append("message.delta", { messageId: "m-old", text: "answer" });
+    append("run.finished", {});
+    // Two clears, each producing rows only the superseded generation can name.
+    for (const round of ["second", "third"]) {
+      append("session.updated", { type: "conversation_reset", new_conversation_id: round });
+      append("run.started", { prompt: round }, `run-${round}`);
+      append("run.finished", {}, `run-${round}`);
+    }
+    const current = read(db);
+    const resetSequence = current.resetSequence;
+    // Reads filter by `reset_sequence`, so every other row is unreachable — it
+    // would stay in the file forever, paying index and page-read cost for
+    // nothing. Only the live generation may remain.
+    expect(
+      db
+        .query("SELECT COUNT(*) AS n FROM session_history_turns WHERE reset_sequence <> ?")
+        .get(resetSequence),
+    ).toEqual({ n: 0 });
+    expect(
+      db
+        .query(
+          `SELECT COUNT(*) AS n FROM session_history_chunks
+         WHERE cursor NOT IN (SELECT cursor FROM session_history_turns WHERE session_id = ?)`,
+        )
+        .get("session"),
+    ).toEqual({ n: 0 });
+    db.close();
+  });
+
   test("child activity cannot create main bubbles and telemetry is not delivered", () => {
     const { db, append } = fixture();
     append("run.started", { prompt: "main" });

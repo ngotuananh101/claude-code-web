@@ -64,6 +64,20 @@ export function projectSessionHistory(db: Database, event: ProjectionEvent): voi
     state.agent_cursor = null;
     state.active = 0;
     state.context = JSON.stringify([input]);
+    // Reads filter by `reset_sequence`, so the previous generation's rows can
+    // never be named again — leaving them would grow the read model forever and
+    // widen the index every page scan touches. The durable journal is the
+    // record of what happened; this table is only the current conversation's
+    // read model, so a reset drops the superseded generation here. Turns go
+    // first, so the chunk sweep can key on what is left.
+    db.query("DELETE FROM session_history_turns WHERE session_id = ? AND reset_sequence <> ?").run(
+      sessionId,
+      state.reset_sequence,
+    );
+    db.query(
+      `DELETE FROM session_history_chunks WHERE session_id = ? AND cursor NOT IN
+        (SELECT cursor FROM session_history_turns WHERE session_id = ?)`,
+    ).run(sessionId, sessionId);
   } else if (event.type === "session.updated" && !routed(payload)) {
     const context = JSON.parse(state.context) as BrowserReplayEvent[];
     state.context = JSON.stringify([
