@@ -134,6 +134,14 @@ export function resolveDeclaredWorkspaces(
 }
 
 /**
+ * Parses the advertised runner concurrency. A positive integer keeps the
+ * configured value; anything else falls back to one run at a time.
+ */
+export function resolveMaxConcurrentRuns(value: string | undefined): number {
+  return value !== undefined && /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : 1;
+}
+
+/**
  * The hello a runner sends after authentication (§6.2), built here so the
  * composition and its shape are testable without a socket.
  */
@@ -151,6 +159,8 @@ export function helloFrame(input: {
    * means discovery never ran.
    */
   runnerCapabilities?: RunnerCapabilities;
+  /** The concurrent-run limit this runner advertises. */
+  maxConcurrentRuns?: number;
 }): Record<string, unknown> {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -161,7 +171,9 @@ export function helloFrame(input: {
     runnerVersion: input.runnerVersion,
     sdkVersion: input.sdkVersion,
     platform: `${process.platform}/${process.arch}`,
-    maxConcurrentRuns: 1,
+    // The server clamps the declared value by policy (4); the default keeps an
+    // existing installation at today's single-run behaviour.
+    maxConcurrentRuns: input.maxConcurrentRuns ?? 1,
     activeRuns: [],
     eventOffsets: [],
     workspaces: input.declaredWorkspaces ?? [],
@@ -201,6 +213,11 @@ export type DaemonOptions = {
    * absent means discovery never ran.
    */
   runnerCapabilities?: RunnerCapabilities;
+  /**
+   * The concurrent-run limit this runner advertises in its hello. Defaults to
+   * one run at a time.
+   */
+  maxConcurrentRuns?: number;
   /**
    * Resolves a workspace id to its canonical path. A command naming a workspace
    * this runner does not know is refused rather than run in an arbitrary
@@ -470,6 +487,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         ...(options.runnerCapabilities === undefined
           ? {}
           : { runnerCapabilities: options.runnerCapabilities }),
+        ...(options.maxConcurrentRuns === undefined
+          ? {}
+          : { maxConcurrentRuns: options.maxConcurrentRuns }),
       });
     },
     inventory: options.inventory ?? (() => runs.inventory()),

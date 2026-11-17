@@ -17,7 +17,7 @@ import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { claudeCliKind } from "@cc-web/agent-adapter";
 import { migrateRunnerDb } from "@cc-web/runner-db";
-import { startDaemon } from "../daemon.ts";
+import { resolveMaxConcurrentRuns, startDaemon } from "../daemon.ts";
 import { discoverCapabilities } from "../execution/capability-catalog.ts";
 import { hostClaudeCli, skippedCheckWarning } from "../execution/claude-cli.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
@@ -319,6 +319,16 @@ async function start(options?: Record<string, string>, claudeCliPath?: string): 
     `discovered ${capabilities.commands.length} command${capabilities.commands.length === 1 ? "" : "s"}, ${capabilities.plugins.length} plugin${capabilities.plugins.length === 1 ? "" : "s"}, ${capabilities.agents.length} agent${capabilities.agents.length === 1 ? "" : "s"}, ${capabilities.mcpServers.length} MCP server${capabilities.mcpServers.length === 1 ? "" : "s"}`,
   );
 
+  const maxConcurrentRunsEnv = process.env["CC_WEB_RUNNER_MAX_CONCURRENT_RUNS"];
+  if (
+    maxConcurrentRunsEnv !== undefined &&
+    (!/^\d+$/.test(maxConcurrentRunsEnv) || Number(maxConcurrentRunsEnv) <= 0)
+  ) {
+    console.warn(
+      `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS=${JSON.stringify(maxConcurrentRunsEnv)} is not a positive integer; defaulting to 1`,
+    );
+  }
+
   const daemon = await startDaemon({
     identityDir: dir,
     runnerVersion: "0.0.0",
@@ -336,6 +346,7 @@ async function start(options?: Record<string, string>, claudeCliPath?: string): 
           ...(head === undefined ? {} : { currentBranch: head }),
         };
       }),
+    maxConcurrentRuns: resolveMaxConcurrentRuns(maxConcurrentRunsEnv),
     onEvent: (event) => {
       // Connection lifecycle only. Never log the credential, and never log
       // command payloads — they can contain prompt text (§19.4).

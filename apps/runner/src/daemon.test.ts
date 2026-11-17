@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerCapabilities } from "@cc-web/protocol";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
-import { type Daemon, helloFrame, startDaemon } from "./daemon.ts";
+import {
+  type Daemon,
+  helloFrame,
+  resolveMaxConcurrentRuns,
+  startDaemon,
+} from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { saveIdentity } from "./identity/identity-store.ts";
 
@@ -338,6 +343,28 @@ describe("the hello frame (M4 branches)", () => {
       workspaces: [{ workspaceId: "default", path: "/srv/proj", branches: ["main", "dev"] }],
     });
   });
+});
+
+const helloInput = {
+  runnerId: "runner-a",
+  runnerVersion: "0.0.0",
+  sdkVersion: "0.3.309",
+  bootId: "boot-1",
+};
+
+test("the hello advertises the configured concurrency", () => {
+  expect(helloFrame({ ...helloInput, maxConcurrentRuns: 3 })["maxConcurrentRuns"]).toBe(3);
+});
+
+test("the hello advertises one when nothing was configured", () => {
+  expect(helloFrame(helloInput)["maxConcurrentRuns"]).toBe(1);
+});
+
+test("the env override parses to a positive integer, otherwise one", () => {
+  expect(resolveMaxConcurrentRuns("4")).toBe(4);
+  for (const bad of [undefined, "", "0", "-2", "2.5", "many"]) {
+    expect(resolveMaxConcurrentRuns(bad)).toBe(1);
+  }
 });
 
 describe("the hello frame advertises capabilities", () => {
