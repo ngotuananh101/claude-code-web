@@ -1063,4 +1063,30 @@ describe("scheduler promote, release, and queued cancel (Task 3)", () => {
     if (!decision.ok || decision.queued) throw new Error("expected an admitted active-run cancel");
     expect(decision.commandId).toMatch(/^cmd_/);
   });
+
+  test("a non-uniqueness admission error propagates instead of being skipped", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity()); // run-1 admitted
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity()); // queued
+    scheduler.release("run-1");
+
+    const original = CommandOutbox.prototype.markPromoted;
+    CommandOutbox.prototype.markPromoted = () => {
+      throw new TypeError("non-constraint failure mentioning UNIQUE in text");
+    };
+    try {
+      expect(() => scheduler.promote("runner-a", capacity())).toThrow(TypeError);
+    } finally {
+      CommandOutbox.prototype.markPromoted = original;
+    }
+
+    // The admission transaction rolled back, so the queued row was not consumed and
+    // no active run was inserted.
+    expect(
+      db.query("SELECT delivery_state FROM command_outbox WHERE run_id = 'run-2'").get(),
+    ).toEqual({ delivery_state: "queued" });
+    expect(db.query("SELECT COUNT(*) AS n FROM active_runs WHERE run_id = 'run-2'").get()).toEqual({
+      n: 0,
+    });
+  });
 });
