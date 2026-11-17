@@ -17,10 +17,17 @@
  * is a run the operator believes was started.
  */
 
-import type { Database } from "bun:sqlite";
+import { type Database, SQLiteError } from "bun:sqlite";
 import type { RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
 import { CommandOutbox, fingerprintOf } from "./command-outbox.ts";
 import { ensureSessionPin, sessionPin } from "./sessions.ts";
+
+function isActiveRunUniquenessConflict(error: unknown): boolean {
+  return (
+    error instanceof SQLiteError &&
+    (error.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || error.code === "SQLITE_CONSTRAINT_UNIQUE")
+  );
+}
 
 export type RunnerState = "offline" | "connected" | "ready" | "draining" | "revoked";
 
@@ -538,7 +545,7 @@ export class Scheduler {
           this.#outbox.markPromoted(row.commandId);
         })();
       } catch (error) {
-        if (String(error).includes("UNIQUE")) {
+        if (isActiveRunUniquenessConflict(error)) {
           continue;
         }
         throw error;
