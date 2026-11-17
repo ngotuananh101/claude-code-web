@@ -1237,3 +1237,82 @@ describe("attachment wiring (§4.4)", () => {
     }
   });
 });
+
+test("two attempts in different workspaces run concurrently", async () => {
+  const { db } = setup();
+  const releases: Array<() => void> = [];
+  const sdk: SdkStream = () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    releases.push(release);
+    return (async function* () {
+      await gate;
+      yield { type: "result", subtype: "success", result: "ok" };
+    })();
+  };
+  const controller = new RunController({
+    db,
+    localRunnerId: "runner-a",
+    workspacePathFor: (id) =>
+      id === "workspace-1"
+        ? "/home/runner/project"
+        : id === "workspace-2"
+          ? "/home/runner/project-2"
+          : undefined,
+    sdk,
+  });
+
+  const r1 = await controller.handle(command);
+  const r2 = await controller.handle({
+    ...command,
+    commandId: "cmd-2",
+    runId: "run-2",
+    attemptId: "attempt-2",
+    sessionId: "session-2",
+    workspaceId: "workspace-2",
+  });
+
+  expect(r1.accepted).toBe(true);
+  expect(r2.accepted).toBe(true);
+
+  releases[0]?.();
+  releases[1]?.();
+  await controller.settle();
+
+  expect(attemptState(db, "attempt-1")).toBe("finished");
+  expect(attemptState(db, "attempt-2")).toBe("finished");
+  expect(lockHolder(db, "/home/runner/project")).toBeUndefined();
+  expect(lockHolder(db, "/home/runner/project-2")).toBeUndefined();
+});
+
+test("two attempts in the same workspace do not run concurrently", async () => {
+  const { db } = setup();
+  const { sdk, release } = holdableStream();
+  const controller = new RunController({
+    db,
+    localRunnerId: "runner-a",
+    workspacePathFor: (id) => WORKSPACES.get(id),
+    sdk,
+  });
+
+  await controller.handle(command);
+  const second = await controller.handle({
+    ...command,
+    commandId: "cmd-2",
+    runId: "run-2",
+    attemptId: "attempt-2",
+    sessionId: "session-2",
+  });
+
+  expect(second).toEqual({
+    commandId: "cmd-2",
+    attemptId: "attempt-2",
+    accepted: false,
+    reason: "workspace_busy",
+  });
+
+  release();
+  await controller.settle();
+});
