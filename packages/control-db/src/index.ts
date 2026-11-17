@@ -67,6 +67,7 @@ export {
   sessionOwner,
   sessionWatermark,
 } from "./replay.ts";
+export { type QueuedRunSummary, queuedRunsForSession } from "./run-queue.ts";
 export {
   issueRunnerCredential,
   revokeRunner,

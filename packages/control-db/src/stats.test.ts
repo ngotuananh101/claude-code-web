@@ -208,3 +208,36 @@ test("a session dispatched but not yet journaled still counts", () => {
   expect(stats.sessions).toBe(1);
   expect(stats.runs).toBe(1);
 });
+
+test("a queued run counts in usage stats", () => {
+  // same fixture as the sidebar test
+  const db = new Database(":memory:");
+  migrate(db);
+  db.prepare("INSERT INTO runners (id, owner_id, created_at) VALUES ('runner-a', 'user-1', ?)").run(
+    NOW - 10 * DAY,
+  );
+  db.prepare(
+    `INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at)
+     VALUES ('session-queued', 'user-1', 'ws-1', 'runner-a', ?)`,
+  ).run(NOW);
+  db.prepare(
+    `INSERT INTO command_outbox
+       (command_id, runner_id, kind, payload, fingerprint, issued_at,
+        session_id, run_id, attempt_id, workspace_id, delivery_state,
+        attempt_count, requeue_count, created_at)
+     VALUES (?, ?, 'run.start', ?, ?, '2026-10-24T00:00:00.000Z',
+             ?, ?, ?, ?, 'queued', 0, 0, ?)`,
+  ).run(
+    "cmd-q",
+    "runner-a",
+    JSON.stringify({ prompt: "queued prompt" }),
+    "fp-q",
+    "session-queued",
+    "run-q",
+    "attempt-q",
+    "ws-1",
+    1,
+  );
+
+  expect(usageStats(db, "user-1", { now: NOW })).toMatchObject({ sessions: 1, runs: 1 });
+});

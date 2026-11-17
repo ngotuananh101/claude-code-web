@@ -389,7 +389,10 @@ describe("command outbox", () => {
     );
 
     expect(o.requeue("cmd-1")).toBe("ceiling");
-    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "rejected", requeueCount: MAX_REQUEUES + 1 });
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "rejected",
+      requeueCount: MAX_REQUEUES + 1,
+    });
   });
 
   test("promotion flips a queued command to deliverable", async () => {

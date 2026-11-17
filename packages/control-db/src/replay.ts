@@ -206,9 +206,19 @@ export function listSessions(db: Database, ownerId: string): SessionSummary[] {
        FROM active_runs a
        JOIN runners r ON r.id = a.runner_id
        LEFT JOIN sessions s ON s.id = a.session_id
-       WHERE r.owner_id = ?`,
+       WHERE r.owner_id = ?
+       UNION
+       SELECT DISTINCT c.session_id AS session_id, c.created_at AS dispatched_at,
+              s.runner_id AS runner_id, s.workspace_id AS workspace_id, s.title AS title
+       FROM command_outbox c
+       JOIN runners r ON r.id = c.runner_id
+       LEFT JOIN sessions s ON s.id = c.session_id
+       WHERE r.owner_id = ?
+         AND c.kind = 'run.start'
+         AND c.delivery_state IN ('queued', 'pending', 'sent')
+         AND c.session_id IS NOT NULL`,
     )
-    .all(ownerId) as Array<{
+    .all(ownerId, ownerId) as Array<{
     session_id: string;
     dispatched_at: number;
     runner_id: string | null;
