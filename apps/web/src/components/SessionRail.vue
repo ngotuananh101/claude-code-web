@@ -61,7 +61,6 @@ import { stopTokenRefreshTimer } from "../services/auth-api.ts";
 import { deleteSession, renameSession } from "../services/sessions-api.ts";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
 import {
-  closeSession,
   disconnectSocket,
   removeSession,
   type SessionSummary,
@@ -265,10 +264,9 @@ watch(
   () => void refreshWorkspaces(),
 );
 
-// "New session" leaves the held journal for the composer page: §11's dispatch
-// API is what will let a prompt create a session from there.
+// The route owns the held journal. Keep it until navigation succeeds; the
+// SessionView route watcher closes it once /sessions becomes the destination.
 function newSession(): void {
-  closeSession();
   void router.push("/sessions");
 }
 
