@@ -884,3 +884,183 @@ describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
     expect(sealed).toContain("sk-env-secret");
   });
 });
+
+describe("scheduler promote, release, and queued cancel (Task 3)", () => {
+  test("promote admits a queued run when the session's slot frees", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity()); // run-1 admitted
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity()); // queued
+    expect(scheduler.release("run-1")).toBe("runner-a");
+
+    expect(scheduler.promote("runner-a", capacity())).toEqual(["run-2"]);
+    expect(scheduler.activeRunFor("session-1")).toMatchObject({ runId: "run-2" });
+    expect(
+      db.query("SELECT delivery_state FROM command_outbox WHERE run_id = 'run-2'").get(),
+    ).toEqual({ delivery_state: "pending" });
+  });
+
+  test("promotion is FIFO and skips an ineligible head", async () => {
+    const { scheduler } = setup();
+    const twoSlots = capacity({ maxConcurrentRuns: 2 });
+    await scheduler.dispatch(request, scheduler.capacityFor("runner-a", twoSlots)); // run-1 admitted, session-1
+    await scheduler.dispatch(
+      {
+        ...request,
+        sessionId: "session-9",
+        workspaceId: "workspace-9",
+        runId: "run-9",
+        attemptId: "attempt-9",
+      },
+      scheduler.capacityFor("runner-a", twoSlots),
+    ); // capacity now full
+
+    const full = capacity({ maxConcurrentRuns: 2, activeRuns: 2 });
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, full); // queued, session-1
+    await scheduler.dispatch(
+      {
+        ...request,
+        sessionId: "session-2",
+        workspaceId: "workspace-2",
+        runId: "run-3",
+        attemptId: "attempt-3",
+      },
+      full,
+    ); // queued, session-2
+
+    // run-2 is older, but session-1 is still running run-1, so a freed slot must go to run-3.
+    scheduler.release("run-9");
+    expect(scheduler.promote("runner-a", twoSlots)).toEqual(["run-3"]);
+
+    scheduler.release("run-1");
+    expect(scheduler.promote("runner-a", twoSlots)).toEqual(["run-2"]);
+  });
+
+  test("promotion admits only as many runs as the freed slots allow", async () => {
+    const { db, scheduler } = setup();
+    const threeSlots = capacity({ maxConcurrentRuns: 3 });
+    await scheduler.dispatch(request, scheduler.capacityFor("runner-a", threeSlots)); // session-1 / workspace-1, admitted
+    await scheduler.dispatch(
+      {
+        ...request,
+        sessionId: "session-2",
+        workspaceId: "workspace-2",
+        runId: "run-2",
+        attemptId: "attempt-2",
+      },
+      scheduler.capacityFor("runner-a", threeSlots),
+    ); // admitted
+    await scheduler.dispatch(
+      {
+        ...request,
+        sessionId: "session-3",
+        workspaceId: "workspace-3",
+        runId: "run-3",
+        attemptId: "attempt-3",
+      },
+      scheduler.capacityFor("runner-a", threeSlots),
+    ); // admitted, capacity now full
+    const full = capacity({ maxConcurrentRuns: 3, activeRuns: 3 });
+    for (const [index, session] of ["session-4", "session-5", "session-6"].entries()) {
+      await scheduler.dispatch(
+        {
+          ...request,
+          sessionId: session,
+          workspaceId: `workspace-${index + 4}`,
+          runId: `run-${index + 4}`,
+          attemptId: `attempt-${index + 4}`,
+        },
+        full,
+      );
+    } // three queued
+    const base = Date.now();
+    db.query("UPDATE command_outbox SET created_at = ? WHERE run_id = 'run-4'").run(base);
+    db.query("UPDATE command_outbox SET created_at = ? WHERE run_id = 'run-5'").run(base + 1);
+    db.query("UPDATE command_outbox SET created_at = ? WHERE run_id = 'run-6'").run(base + 2);
+
+    scheduler.release("run-1"); // one slot free, three candidates
+    expect(scheduler.promote("runner-a", threeSlots)).toEqual(["run-4"]); // exactly one, not three
+  });
+
+  test("promotion skips a run whose workspace is busy", async () => {
+    const { db, scheduler } = setup();
+    // Sessions 1 and 2 both pinned to workspace-1, capacity 2.
+    await scheduler.dispatch(request, capacity({ maxConcurrentRuns: 2 })); // run-1 admitted, workspace-1
+    await scheduler.dispatch(
+      { ...request, sessionId: "session-2", runId: "run-2", attemptId: "attempt-2" },
+      capacity({ maxConcurrentRuns: 2 }),
+    ); // queued: another session, same workspace
+
+    expect(scheduler.promote("runner-a", capacity({ maxConcurrentRuns: 2 }))).toEqual([]);
+    expect(db.query("SELECT COUNT(*) AS n FROM active_runs").get()).toEqual({ n: 1 });
+  });
+
+  test("promotion admits nothing while the runner is not ready", () => {
+    const { scheduler } = setup();
+    expect(scheduler.promote("runner-a", capacity({ state: "offline" }))).toEqual([]);
+    expect(scheduler.promote("runner-a", capacity({ state: "connected" }))).toEqual([]);
+  });
+
+  test("promoting twice admits a queued run once", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity()); // run-1 admitted
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity()); // queued
+    scheduler.release("run-1");
+
+    expect(scheduler.promote("runner-a", capacity())).toEqual(["run-2"]);
+    expect(scheduler.promote("runner-a", capacity())).toEqual([]);
+    expect(db.query("SELECT COUNT(*) AS n FROM active_runs WHERE run_id = 'run-2'").get()).toEqual({
+      n: 1,
+    });
+  });
+
+  test("a fresh scheduler promotes durable queue state after a restart", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity());
+    scheduler.release("run-1");
+
+    const restarted = new Scheduler(db); // same database, new in-memory state
+    expect(restarted.promote("runner-a", capacity())).toEqual(["run-2"]);
+  });
+
+  test("cancelling a queued run retires it without touching the runner", async () => {
+    const { db, scheduler } = setup();
+    await scheduler.dispatch(request, capacity()); // run-1 admitted
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity()); // queued
+
+    expect(await scheduler.cancel("run-2")).toEqual({ ok: true, queued: true });
+    expect(
+      db
+        .query("SELECT delivery_state, rejection_reason FROM command_outbox WHERE run_id = 'run-2'")
+        .get(),
+    ).toEqual({ delivery_state: "rejected", rejection_reason: "cancelled" });
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM command_outbox WHERE kind = 'run.cancel'").get(),
+    ).toEqual({ n: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM active_runs").get()).toEqual({ n: 1 });
+  });
+
+  test("another owner cannot cancel this run", async () => {
+    const { scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+    await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity());
+
+    expect(await scheduler.cancel("run-2", { ownerId: "user-2" })).toEqual({
+      ok: false,
+      reason: "unknown_run",
+    });
+    expect(await scheduler.cancel("run-2", { ownerId: "user-1" })).toEqual({
+      ok: true,
+      queued: true,
+    });
+  });
+
+  test("cancelling an active run is unchanged and carries its command id", async () => {
+    const { scheduler } = setup();
+    await scheduler.dispatch(request, capacity());
+    const decision = await scheduler.cancel("run-1");
+    expect(decision).toMatchObject({ ok: true, queued: false });
+    if (!decision.ok || decision.queued) throw new Error("expected an admitted active-run cancel");
+    expect(decision.commandId).toMatch(/^cmd_/);
+  });
+});

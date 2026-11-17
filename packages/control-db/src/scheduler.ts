@@ -407,42 +407,151 @@ export class Scheduler {
   }
 
   /** Frees the session and the runner slot once a run reaches a terminal state. */
-  release(runId: string): void {
+  release(runId: string): string | undefined {
+    const row = this.#db.query("SELECT runner_id FROM active_runs WHERE run_id = ?").get(runId) as {
+      runner_id: string;
+    } | null;
+    if (row === null) return undefined;
     this.#db.query("DELETE FROM active_runs WHERE run_id = ?").run(runId);
+    return row.runner_id;
   }
 
   /**
-   * A durable cancel for an active run (§14.2).
+   * A durable cancel for an active run (§14.2), and a direct retirement for a
+   * queued run.
    *
-   * Enqueued like a start, so it inherits the same delivery guarantees: if the
-   * runner is away, the cancel waits in the outbox and goes out on reconnect.
-   * The active run is deliberately untouched — a cancel is a request, not an
-   * outcome, and the slot frees only when the terminal event arrives. Releasing
-   * here instead would let a lost cancel wedge a second run onto a workspace
-   * the first run is still holding.
+   * An active run is cancelled by enqueuing `run.cancel` like a start, so it
+   * inherits the same delivery guarantees: if the runner is away, the cancel
+   * waits in the outbox and goes out on reconnect. The active run is
+   * deliberately untouched — a cancel is a request, not an outcome, and the
+   * slot frees only when the terminal event arrives.
+   *
+   * A queued run never entered the journal and never reached a runner, so
+   * cancelling it retires the outbox row only: `markRejected(commandId,
+   * "cancelled")`, no `run.cancel` command, no `onDispatched`, and nothing is
+   * journaled.
    */
   async cancel(
     runId: string,
-  ): Promise<{ ok: true; commandId: string } | { ok: false; reason: "unknown_run" }> {
-    const row = this.#db
+    options?: { ownerId?: string },
+  ): Promise<
+    | { ok: true; queued: false; commandId: string }
+    | { ok: true; queued: true }
+    | { ok: false; reason: "unknown_run" }
+  > {
+    const active = this.#db
       .query("SELECT session_id, runner_id, attempt_id FROM active_runs WHERE run_id = ?")
       .get(runId) as { session_id: string; runner_id: string; attempt_id: string } | null;
-    if (row === null) return { ok: false, reason: "unknown_run" };
+    if (active !== null) {
+      if (options?.ownerId !== undefined) {
+        const pin = sessionPin(this.#db, active.session_id);
+        if (pin === undefined || pin.ownerId !== options.ownerId) {
+          return { ok: false, reason: "unknown_run" };
+        }
+      }
 
-    const commandId = `cmd_${crypto.randomUUID()}`;
-    await this.#outbox.enqueue({
-      commandId,
-      runnerId: row.runner_id,
-      kind: "run.cancel",
-      issuedAt: new Date().toISOString(),
-      sessionId: row.session_id,
-      runId,
-      attemptId: row.attempt_id,
-      payload: {},
-    });
+      const commandId = `cmd_${crypto.randomUUID()}`;
+      await this.#outbox.enqueue({
+        commandId,
+        runnerId: active.runner_id,
+        kind: "run.cancel",
+        issuedAt: new Date().toISOString(),
+        sessionId: active.session_id,
+        runId,
+        attemptId: active.attempt_id,
+        payload: {},
+      });
 
-    this.#onDispatched?.(row.runner_id, commandId);
-    return { ok: true, commandId };
+      this.#onDispatched?.(active.runner_id, commandId);
+      return { ok: true, queued: false, commandId };
+    }
+
+    const queued = this.#db
+      .query(
+        "SELECT command_id, session_id FROM command_outbox WHERE run_id = ? AND delivery_state = 'queued' AND kind = 'run.start'",
+      )
+      .get(runId) as { command_id: string; session_id: string | null } | null;
+    if (queued === null) return { ok: false, reason: "unknown_run" };
+
+    if (options?.ownerId !== undefined) {
+      const sessionId = queued.session_id;
+      const pin = sessionId === null ? undefined : sessionPin(this.#db, sessionId);
+      if (pin === undefined || pin.ownerId !== options.ownerId) {
+        return { ok: false, reason: "unknown_run" };
+      }
+    }
+
+    this.#outbox.markRejected(queued.command_id, "cancelled");
+    return { ok: true, queued: true };
+  }
+
+  /**
+   * Admits queued `run.start` rows for `runnerId` into `active_runs` in FIFO
+   * order, skipping rows whose session or `(runner, workspace)` is already
+   * occupied, until the runner reaches its negotiated `maxConcurrentRuns` or no
+   * eligible row remains.
+   *
+   * Fully synchronous: every read and write is `bun:sqlite`, so no `await` can
+   * interleave a second pass inside this one and a subsequent sequential call
+   * finds nothing to admit because the rows it admitted are no longer `queued`.
+   */
+  promote(runnerId: string, capacity: RunnerCapacity): string[] {
+    if (capacity.state !== "ready") return [];
+
+    const activeCount = (
+      this.#db.query("SELECT COUNT(*) AS n FROM active_runs WHERE runner_id = ?").get(runnerId) as {
+        n: number;
+      }
+    ).n;
+    let slots = capacity.maxConcurrentRuns - activeCount;
+    if (slots <= 0) return [];
+
+    const admitted: Array<{ runId: string; commandId: string }> = [];
+    for (const row of this.#outbox.queuedFor(runnerId)) {
+      if (slots <= 0) break;
+
+      const sessionId = row.sessionId;
+      const runId = row.runId;
+      const attemptId = row.attemptId;
+      if (sessionId === undefined || runId === undefined || attemptId === undefined) {
+        continue;
+      }
+
+      const queueWorkspaceId = row.queueSnapshot?.workspaceId ?? row.workspaceId;
+      const sessionBusy =
+        this.#db.query("SELECT 1 AS one FROM active_runs WHERE session_id = ?").get(sessionId) !==
+        null;
+      if (sessionBusy) continue;
+
+      const workspaceBusy =
+        queueWorkspaceId !== undefined && this.#workspaceBusy(runnerId, queueWorkspaceId);
+      if (workspaceBusy) continue;
+
+      try {
+        this.#db.transaction(() => {
+          this.#db
+            .query(
+              `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(runId, sessionId, runnerId, attemptId, Date.now());
+          this.#outbox.markPromoted(row.commandId);
+        })();
+      } catch (error) {
+        if (String(error).includes("UNIQUE")) {
+          continue;
+        }
+        throw error;
+      }
+
+      admitted.push({ runId, commandId: row.commandId });
+      slots -= 1;
+    }
+
+    if (admitted.length > 0) {
+      this.#onDispatched?.(runnerId, admitted[0]!.commandId);
+    }
+    return admitted.map((entry) => entry.runId);
   }
 
   activeRunFor(
