@@ -85,13 +85,6 @@ function onCancel(): void {
           {{ t("dialogs.saveChanges") }}
         </Button>
       </DialogFooter>
-        <Button variant="outline" type="button" class="max-sm:h-11" @click="onCancel">
-          {{ t("dialogs.cancel") }}
-        </Button>
-        <Button type="button" class="max-sm:h-11" @click="onConfirm">
-          {{ t("dialogs.saveChanges") }}
-        </Button>
-      </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
