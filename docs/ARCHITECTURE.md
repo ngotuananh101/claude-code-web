@@ -94,7 +94,7 @@ Repo, model output, tool output và preview application vẫn có thể không �
 
 ### 2.3. Các invariant bắt buộc
 
-1. Một session có tối đa một active run.
+1. Một session có tối đa một **accepted** run; session có thể giữ thêm bất kỳ số lượng run **queued** nào, được phục vụ theo FIFO.
 2. Một workspace có tối đa một writer do hệ thống quản lý.
 3. Session thuộc đúng Runner và workspace đã đăng ký.
 4. Start command chỉ thực thi khi authority/assignment còn hợp lệ.
@@ -499,6 +499,8 @@ Nếu command đã tồn tại: trả receipt/state cũ; không gọi SDK lần 
 
 Start command sau durable acceptance không còn cần gửi vô hạn từ Server. Reconciliation và run state theo dõi completion, không coi timeout delivery là permission tạo execution attempt mới.
 
+Ngoại lệ: run **queued** bị huỷ không bao giờ đi vào journal — run chưa tới Runner nên không có attempt trên bất kỳ máy nào, vì vậy không phát sinh synthetic terminal event.
+
 ### 9.5. Start authorization
 
 Runner chỉ bắt đầu **run mới** khi đã reconcile và có authority hiện hành. Command accepted nhưng chờ capacity không được tự khởi chạy sau nhiều giờ offline chỉ vì còn trong inbox.
@@ -626,12 +628,13 @@ Execution không xác minh được sau crash → interrupted / unknown observat
 
 User chọn workspace đã gắn Runner; Server kiểm tra Runner ready/capacity rồi enqueue. Không cần scheduler thông minh hoặc worker pool tùy ý.
 
-Runner có local queue và tự kiểm tra limits. Mặc định `maxConcurrentRuns = 1` mỗi Runner; tăng sau khi đo RAM/CPU/workload.
+Runner khai báo `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS` (mặc định `1`) trong `hello`; Server clamp giá trị này theo policy (`maxConcurrentRuns: 4`). Capacity tính theo từng Runner, không phải pool toàn cục. Queue của run nằm trong `command_outbox` (không có bảng queue riêng). Promotion được kích hoạt bởi: terminal event commit, start bị runner từ chối, reconcile interruption, và runner chuyển sang `ready`.
 
 ### 11.4. Locks và assignment epochs
 
 - Server có unique active execution/assignment constraints.
 - Runner có atomic local lock cho canonical workspace.
+- Server mirror workspace lock của Runner như admission rule trên `(runner_id, workspace_id)`, nên xung đột cùng workspace được **queued** thay vì bị phát hiện muộn thành rejection `workspace_busy`.
 - Epoch tăng khi ownership được chuyển có chủ đích.
 - Server/Runner RPC reject stale epoch.
 - Local lock áp dụng cả editor save và Git mutation do ứng dụng thực hiện.
@@ -650,7 +653,7 @@ Vì vậy lịch thuộc Control Server — nơi đã sở hữu scheduling (§1
 
 - **Nguồn sự thật:** bảng `scheduled_tasks` (SQLite): `schedule_id`, session/owner/workspace/runner, `origin_attempt_id`, `cli_task_id`, `cron`, `timezone`, `recurring`, `prompt`, `next_fire_at`, `state` (`active` / `done` / `cancelled` / `orphaned`), `created_at`, `last_fired_at`.
 - **Mirror event:** Runner mirror `CronCreate`/`CronDelete` từ raw SDK frame rồi gửi `schedule.created` / `schedule.cancelled`; `cron` lấy từ tool input (`humanSchedule` chỉ là fallback khi CLI trả lời text), vì server parse chính biểu thức đó. Server project vào bảng với `INSERT OR IGNORE` trên `sched_<attemptId>_<toolCallId>`, nên replay hay frame trùng là idempotent, và chỉ runner sở hữu pin của session mới được tạo/huỷ row. Lịch chỉ được tạo trong hội thoại; web không có UI tạo.
-- **Tick:** `setInterval` 15 giây trong server (khoảng tick injectable cho test); một vòng chạy tuần tự và không chồng lấn. Mỗi row `active` có `next_fire_at <= now` được dispatch như một run bình thường qua `Scheduler.dispatch` — cùng capacity 1/Runner, cùng pin và workspace của session gốc.
+- **Tick:** `setInterval` 15 giây trong server (khoảng tick injectable cho test); một vòng chạy tuần tự và không chồng lấn. Mỗi row `active` có `next_fire_at <= now` được dispatch như một run bình thường qua `Scheduler.dispatch` — theo negotiated capacity của Runner, cùng pin và workspace của session gốc. Tick không bao giờ queue (truyền `queue: false`): session bận thì row giữ nguyên due để tick sau thử lại, thay vì enqueue trùng.
 - **Fire:** `runId` cố định theo slot (`run_sched_<schedule_id>_<fire_at>`); `run.started` mang `scheduleId` + `scheduleCron` để web render lượt đó là tác vụ theo lịch. Dispatch thành công thì one-shot sang `done`, recurring sang slot kế tiếp sau slot vừa fire (không catch-up slot lỡ). Nếu runner **từ chối** run đã dispatch (`workspace_busy`, `unknown_workspace`, …), command bị retire và server mở lại one-shot về `active` với nguyên `next_fire_at` để tick sau chạy lại — lần fire duy nhất không mất im lặng; recurring coi slot đó là slot lỡ.
 
 **Chính sách lỗi:**
@@ -964,6 +967,8 @@ Sau reconnect, Runner chưa ready ngay:
 5. Resolve conflicts theo assignment/attempt identity và local process evidence.
 6. Mark ready rồi mới dispatch việc mới.
 
+Run được reconcile về trạng thái terminal giải phóng slot và kích hoạt promotion queue. Run **queued** bị huỷ chưa bao giờ tới Runner nên không đi vào journal (không phát sinh synthetic terminal event); xem ngoại lệ nêu tại §9.4.
+
 Nếu inventory lớn phải pagination/chunking, không nhét toàn bộ history vào hello.
 
 ### 14.4. Conflict matrix
@@ -1131,9 +1136,10 @@ HTTP là command entrypoint từ browser; WSS chủ yếu phục vụ subscribe/
 | POST | `/api/runners/:id/workspaces` | Request registration có local validation |
 | POST | `/api/workspaces/:id/sessions` | Tạo app session pin location |
 | GET | `/api/sessions/:id` | Metadata/messages/checkpoint |
-| POST | `/api/sessions/:id/runs` | Submit prompt, trả 202/run ID |
+| POST | `/api/sessions/:id/runs` | Submit prompt, trả `202 { …, queued: boolean }` |
+| GET | `/api/sessions/:id/queue` | Danh sách run đang chờ theo FIFO: `{ runs: [{ runId, attemptId, prompt, enqueuedAt }] }`, owner-scoped, `Cache-Control: no-store` |
 | GET | `/api/runs/:id` | Desired + observed state và freshness |
-| POST | `/api/runs/:id/cancel` | Durable cancel request |
+| POST | `/api/runs/:id/cancel` | Durable cancel request; mở rộng cho run queued, trả `202 { runId, queued: true }` (không có `commandId`) |
 | GET | `/api/sessions/:id/events?after=N` | Replay phân trang |
 | POST | `/api/approvals/:id/decision` | Persist decision + delivery |
 | GET | `/api/workspaces/:id/files?path=...` | Authorized Runner read RPC |
@@ -1169,6 +1175,8 @@ type ApiError = {
 ```
 
 Mã lỗi: `RUNNER_UNAVAILABLE`, `RUNNER_NOT_RECONCILED`, `SESSION_BUSY`, `WORKSPACE_BUSY`, `COMMAND_EXPIRED`, `STALE_ASSIGNMENT`, `FILE_CONFLICT`, `APPROVAL_STALE`, `TRANSCRIPT_MISSING`, `SDK_AUTH_ERROR`, `CONFIG_INVALID`, `JOURNAL_FULL`.
+
+`409 session_busy` hiện chỉ còn với caller tắt queueing (schedule tick). Route dành cho operator không trả mã này.
 
 Không trả raw stack traces, credentials hoặc environment. Retryable transport error không có nghĩa được tạo execution attempt mới.
 
