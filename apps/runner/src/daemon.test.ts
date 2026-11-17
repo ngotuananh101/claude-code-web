@@ -5,12 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerCapabilities } from "@cc-web/protocol";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
-import {
-  type Daemon,
-  helloFrame,
-  resolveMaxConcurrentRuns,
-  startDaemon,
-} from "./daemon.ts";
+import { type Daemon, helloFrame, resolveMaxConcurrentRuns, startDaemon } from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { saveIdentity } from "./identity/identity-store.ts";
 

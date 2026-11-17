@@ -354,9 +354,9 @@ describe("apply return values", () => {
       runnerId: "runner-a",
     });
 
-    expect(
-      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
-    ).toEqual(["run-1"]);
+    expect(r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" })).toEqual([
+      "run-1",
+    ]);
   });
 
   test("an action for a non-current attempt reports nothing", () => {
@@ -368,9 +368,9 @@ describe("apply return values", () => {
       runnerId: "runner-a",
     });
 
-    expect(
-      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-9" }),
-    ).toEqual([]);
+    expect(r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-9" })).toEqual(
+      [],
+    );
   });
 
   test("a terminal run is not reported twice, and quarantine reports nothing", () => {
@@ -382,12 +382,12 @@ describe("apply return values", () => {
       runnerId: "runner-a",
     });
 
-    expect(
-      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
-    ).toEqual(["run-1"]);
-    expect(
-      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
-    ).toEqual([]);
+    expect(r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" })).toEqual([
+      "run-1",
+    ]);
+    expect(r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" })).toEqual(
+      [],
+    );
     expect(
       r.apply({
         kind: "quarantine",
