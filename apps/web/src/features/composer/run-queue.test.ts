@@ -27,11 +27,14 @@ describe("pruneQueuedRuns", () => {
   test("prunes multiple started runs and ignores unknown run ids", () => {
     const c = { runId: "run-c", attemptId: "attempt-c", prompt: "C", enqueuedAt: 3 };
     expect(
-      pruneQueuedRuns([a, b, c], [
-        { type: "run.started", runId: "run-c" },
-        { type: "run.started", runId: "run-missing" },
-        { type: "run.started", runId: "run-a" },
-      ]),
+      pruneQueuedRuns(
+        [a, b, c],
+        [
+          { type: "run.started", runId: "run-c" },
+          { type: "run.started", runId: "run-missing" },
+          { type: "run.started", runId: "run-a" },
+        ],
+      ),
     ).toEqual([b]);
   });
 });
