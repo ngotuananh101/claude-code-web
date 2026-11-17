@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { CommandOutbox } from "./command-outbox.ts";
+import { CommandOutbox, MAX_REQUEUES } from "./command-outbox.ts";
 
 /**
  * The central command outbox (§18.1, §9.3, §12.2).
@@ -324,5 +324,106 @@ describe("command outbox", () => {
 
     expect(row.payload_secure).toBeNull();
     expect(o.get("cmd-1")?.payloadSecure).toBeUndefined();
+  });
+
+  test("a queued command is never offered for delivery", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({
+      ...command,
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+    });
+
+    expect(o.pendingFor("runner-a")).toEqual([]);
+    expect(o.queuedFor("runner-a")).toMatchObject([
+      {
+        commandId: "cmd-1",
+        deliveryState: "queued",
+        queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+        requeueCount: 0,
+      },
+    ]);
+  });
+
+  test("a queued command is retired when it expires, like any other", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({
+      ...command,
+      deliveryState: "queued",
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+
+    expect(o.pendingFor("runner-a")).toEqual([]);
+    expect(o.retireExpired("runner-a")).toEqual(["cmd-1"]);
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "rejected", rejectionReason: "expired" });
+  });
+
+  test("requeue returns a rejected run.start to the queue and counts the attempt", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, workspaceId: "workspace-1" });
+    o.markRejected("cmd-1", "workspace_busy");
+
+    expect(o.requeue("cmd-1")).toBe("requeued");
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "queued",
+      requeueCount: 1,
+      rejectionReason: undefined,
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+    });
+  });
+
+  test("requeue only moves a rejected command", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue(command); // pending
+    expect(o.requeue("cmd-1")).toBe("not_rejected");
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "pending", requeueCount: 0 });
+  });
+
+  test("requeue refuses past the ceiling and leaves the row rejected", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue(command);
+    o.markRejected("cmd-1", "workspace_busy");
+    // The spec's ceiling test is `requeue_count > 50`, so 51 is the first refusal.
+    db.query("UPDATE command_outbox SET requeue_count = ? WHERE command_id = 'cmd-1'").run(
+      MAX_REQUEUES + 1,
+    );
+
+    expect(o.requeue("cmd-1")).toBe("ceiling");
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "rejected", requeueCount: MAX_REQUEUES + 1 });
+  });
+
+  test("promotion flips a queued command to deliverable", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, deliveryState: "queued" });
+    o.markPromoted("cmd-1");
+
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "pending", queueSnapshot: undefined });
+    expect(o.pendingFor("runner-a").map((c) => c.commandId)).toEqual(["cmd-1"]);
+  });
+
+  test("queuedForSession lists one session's queue oldest first", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({ ...command, sessionId: "session-1", deliveryState: "queued" }); // created_at earlier
+    await o.enqueue({
+      ...command,
+      commandId: "cmd-2",
+      runId: "run-2",
+      sessionId: "session-2",
+      deliveryState: "queued",
+    });
+    await o.enqueue({
+      ...command,
+      commandId: "cmd-3",
+      runId: "run-3",
+      sessionId: "session-1",
+      deliveryState: "queued",
+    });
+    await o.enqueue({ ...command, commandId: "cmd-4", runId: "run-4", sessionId: "session-1" }); // accepted later
+
+    // created_at is a millisecond clock; force a deterministic order instead of racing it.
+    db.query("UPDATE command_outbox SET created_at = 1 WHERE command_id = 'cmd-1'").run();
+    db.query("UPDATE command_outbox SET created_at = 3 WHERE command_id = 'cmd-3'").run();
+
+    expect(o.queuedForSession("session-1").map((c) => c.commandId)).toEqual(["cmd-1", "cmd-3"]);
   });
 });
