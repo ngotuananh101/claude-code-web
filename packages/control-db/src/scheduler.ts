@@ -209,7 +209,8 @@ export class Scheduler {
     const existingPin = sessionPin(this.#db, request.sessionId);
     if (
       existingPin !== undefined &&
-      (existingPin.runnerId !== capacity.runnerId || existingPin.workspaceId !== request.workspaceId)
+      (existingPin.runnerId !== capacity.runnerId ||
+        existingPin.workspaceId !== request.workspaceId)
     ) {
       return { ok: false, reason: "session_pinned" };
     }
@@ -258,8 +259,7 @@ export class Scheduler {
         : queuedClear;
       raceRequeueRewrite = {
         payload: queuedPersisted,
-        payloadSecure:
-          hasProfile && sealer !== undefined ? sealer(queuedClear) : undefined,
+        payloadSecure: hasProfile && sealer !== undefined ? sealer(queuedClear) : undefined,
         fingerprint: await fingerprintOf({
           commandId,
           runnerId: capacity.runnerId,

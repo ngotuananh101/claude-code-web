@@ -90,7 +90,7 @@ describe("scheduler", () => {
   });
 
   test("capacity zero queues the run by default, since it cannot be admitted now", async () => {
-    const { db, scheduler } = setup();
+    const { scheduler } = setup();
 
     const decision = await scheduler.dispatch(request, capacity({ maxConcurrentRuns: 0 }));
 
@@ -98,7 +98,7 @@ describe("scheduler", () => {
   });
 
   test("capacity zero is refused with queue: false", async () => {
-    const { db, scheduler } = setup();
+    const { scheduler } = setup();
 
     const decision = await scheduler.dispatch(request, capacity({ maxConcurrentRuns: 0 }), {
       queue: false,
@@ -296,7 +296,7 @@ describe("scheduler", () => {
   });
 
   test("a runner at capacity queues the run, and queue: false refuses it", async () => {
-    const { db, scheduler } = setup();
+    const { scheduler } = setup();
     const full = capacity({ activeRuns: 1, maxConcurrentRuns: 1 });
     expect(await scheduler.dispatch(request, full)).toMatchObject({ ok: true, queued: true });
     expect(
@@ -307,7 +307,7 @@ describe("scheduler", () => {
   });
 
   test("another session running on the same workspace is queued", async () => {
-    const { db, scheduler } = setup();
+    const { scheduler } = setup();
     const twoSlots = capacity({ maxConcurrentRuns: 2 });
     expect(await scheduler.dispatch(request, twoSlots)).toMatchObject({ ok: true, queued: false });
 
@@ -315,11 +315,9 @@ describe("scheduler", () => {
     expect(await scheduler.dispatch(sibling, twoSlots)).toMatchObject({ ok: true, queued: true });
     // A distinct run id, or the persistence check would answer duplicate_run first.
     expect(
-      await scheduler.dispatch(
-        { ...sibling, runId: "run-3", attemptId: "attempt-3" },
-        twoSlots,
-        { queue: false },
-      ),
+      await scheduler.dispatch({ ...sibling, runId: "run-3", attemptId: "attempt-3" }, twoSlots, {
+        queue: false,
+      }),
     ).toEqual({ ok: false, reason: "workspace_busy" });
   });
 
@@ -332,9 +330,9 @@ describe("scheduler", () => {
     const payloadOf = (runId: string) =>
       JSON.parse(
         (
-          db
-            .query("SELECT payload FROM command_outbox WHERE run_id = ?")
-            .get(runId) as { payload: string }
+          db.query("SELECT payload FROM command_outbox WHERE run_id = ?").get(runId) as {
+            payload: string;
+          }
         ).payload,
       ) as Record<string, unknown>;
 
@@ -367,7 +365,7 @@ describe("scheduler", () => {
   });
 
   test("duplicate_run sees a queued run", async () => {
-    const { db, scheduler } = setup();
+    const { scheduler } = setup();
     await scheduler.dispatch(request, capacity()); // run-1 admitted
     await scheduler.dispatch({ ...request, runId: "run-2", attemptId: "attempt-2" }, capacity()); // queued
 
@@ -457,7 +455,9 @@ describe("scheduler", () => {
       capacity({ runnerId: "runner-b" }),
     );
     expect(decision).toEqual({ ok: false, reason: "session_pinned" });
-    expect(db.query("SELECT COUNT(*) AS n FROM command_outbox WHERE run_id = 'run-2'").get()).toEqual({
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM command_outbox WHERE run_id = 'run-2'").get(),
+    ).toEqual({
       n: 0,
     });
 
