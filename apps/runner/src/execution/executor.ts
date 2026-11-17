@@ -18,6 +18,8 @@ import type { Database } from "bun:sqlite";
 import {
   type AttachmentInfo,
   conversationResetId,
+  type EventType,
+  isThinkingTokenEstimate,
   type RunnerAttachmentItem,
   type RunProfilePayload,
 } from "@cc-web/protocol";
@@ -268,6 +270,15 @@ export async function executeRun(
   let sdkSessionId: string | undefined;
 
   const append = (type: string, payload: unknown): void => {
+    // Thinking-token telemetry is not journaled at all. The SDK emits one
+    // `system/thinking_tokens` frame per estimation tick — 93% of every row in
+    // a real spool — and nothing downstream consumes the estimate: the journal
+    // projection, history and the UI all omit it again. Dropping it here is the
+    // only place that saves the durable write, the outbox and the socket send.
+    // It is not a sequence skip: no number is consumed, so continuity (§12.2)
+    // is untouched and the ACK watermark advances exactly as before.
+    if (isThinkingTokenTelemetry(type, payload)) return;
+
     // The counter advances only after the row is committed. Incrementing first
     // and then failing leaves a hole in `local_sequence`, and the ACK watermark
     // stops at the first hole (§12.2) — every later event for this attempt would
@@ -682,6 +693,23 @@ function withoutPrompt(message: Record<string, unknown>): Record<string, unknown
   const copy = { ...message };
   delete copy["prompt"];
   return copy;
+}
+
+/**
+ * The SDK's thinking-token estimation tick — the one event the runner drops
+ * before it is durable (§12.6).
+ *
+ * It is exactly `type: "system"` with `subtype: "thinking_tokens"`, the same
+ * shape the journal projection and the history model already omit — the
+ * protocol's own `isThinkingTokenEstimate` is the classifier here too, so the
+ * runner and the readers cannot drift apart. Any other status stays on the
+ * generic path and is journaled unchanged.
+ */
+function isThinkingTokenTelemetry(type: string, payload: unknown): boolean {
+  // The type is not yet narrowed to `EventType` at this boundary — `append` is
+  // an open sink for any classification — so the cast restates the wire
+  // invariant the SDK frames and this executor's callers already hold.
+  return isThinkingTokenEstimate({ type: type as EventType, payload });
 }
 
 function eventTypeOf(message: Record<string, unknown>): string {

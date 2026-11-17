@@ -217,6 +217,58 @@ describe("control server routes", () => {
     });
   });
 
+  test("one runner ingest batch reaches a browser subscription as one live frame", async () => {
+    const { wsUrl, cookie, db, userId } = await start();
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      userId,
+      1,
+    );
+    db.query(
+      "INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("run-1", "session-1", "runner-a", "attempt-1", 1);
+
+    const browser = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
+    browser.send({ type: "subscribe", sessionId: "session-1", projection: "journal" });
+    await waitFor(() => browser.messages.some((item) => item["replayComplete"] === true));
+    const before = browser.messages.length;
+
+    const runner = await connect(`${wsUrl}/ws/runner`, { Authorization: "Bearer cck_valid" });
+    runner.send({ type: "hello", hello });
+    await waitFor(() => runner.messages.some((item) => item["type"] === "hello.ok"));
+    runner.send({ type: "reconcile", runner: [] });
+    await waitFor(() => runner.messages.some((item) => item["type"] === "reconcile.ok"));
+
+    const occurredAt = "2026-11-17T00:00:00.000Z";
+    runner.send({
+      type: "events",
+      events: [1, 2, 3].map((localSequence) => ({
+        protocolVersion: 1,
+        eventId: `batch-${localSequence}`,
+        runnerId: "runner-a",
+        bootId: "boot-1",
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        localSequence,
+        occurredAt,
+        type: localSequence === 3 ? "run.finished" : "message.delta",
+        payload: { n: localSequence },
+      })),
+    });
+    await waitFor(() => browser.messages.some((item) => item["through"] === 3));
+
+    // §12.6: the batch is one frame. Three frames for one committed transaction
+    // was per-event fan-out the browser never needed — every socket subscribed
+    // to the session receives the whole batch.
+    const frames = browser.messages
+      .slice(before)
+      .filter((item) => item["type"] === "session.events");
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ live: true, projection: "journal", fromSequence: 1 });
+    expect((frames[0]!["events"] as unknown[]).length).toBe(3);
+  });
+
   test("compact replay over a real socket preserves content, lifecycle and reconnect coverage", async () => {
     const { wsUrl, cookie, db, userId } = await start();
     db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
@@ -277,6 +329,20 @@ describe("control server routes", () => {
       projection: "journal",
     });
     await waitFor(() => client.messages.some((frame) => frame["replayComplete"] === true));
+    // The replay ends on the last content page, not an empty frame that only
+    // certifies the telemetry tail: the page reads one row ahead to prove the
+    // remaining range carries nothing a projected subscriber needs. Matched
+    // against a copy — Bun's `toMatchObject` leaves `{}` shells in the received
+    // array, and the same frame is fed to the stream below.
+    expect(structuredClone(client.messages.at(-1))).toMatchObject({
+      type: "session.events",
+      projection: "journal",
+      through: seq,
+      replayComplete: true,
+      events: content.map((item) =>
+        expect.objectContaining({ type: item.type, payload: item.payload }),
+      ),
+    });
     const frame = client.messages.find(
       (item) => item["type"] === "session.events",
     ) as SessionEventsFrame;
@@ -315,10 +381,45 @@ describe("control server routes", () => {
       type: "run.status",
       payload: { type: "system", subtype: "thinking_tokens" },
     });
-    await waitFor(() => client.messages.some((item) => item["through"] === progressSeq));
+    // §12.5: telemetry alone no longer buys a frame of its own. The socket's
+    // watermark stays put until content arrives, and that frame's fromSequence
+    // reaches back over the omitted sequence — coverage unbroken, one frame.
+    await Bun.sleep(50);
+    expect(client.messages.some((item) => item["through"] === progressSeq)).toBe(false);
+
+    const contentSeq = progressSeq + 1;
+    ingestEvent(db, {
+      eventId: "live-content",
+      runnerId: "runner-a",
+      bootId: "boot-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      localSequence: contentSeq,
+      occurredAt: "2026-11-16T00:00:02.000Z",
+      type: "message.delta",
+      payload: { text: "live answer" },
+    });
+    handle!.browserGateway.publish({
+      sessionId: "session-1",
+      sessionSequence: contentSeq,
+      eventId: "live-content",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      occurredAt: "2026-11-16T00:00:02.000Z",
+      type: "message.delta",
+      payload: { text: "live answer" },
+    });
+    await waitFor(() => client.messages.some((item) => item["through"] === contentSeq));
+    expect(structuredClone(client.messages.at(-1))).toMatchObject({
+      projection: "journal",
+      fromSequence: progressSeq,
+      through: contentSeq,
+      events: [expect.objectContaining({ eventId: "live-content" })],
+    });
     stream.apply(client.messages.at(-1) as SessionEventsFrame);
-    expect(stream.state().through).toBe(progressSeq);
-    expect(stream.state().events.length).toBe(content.length);
+    expect(stream.state().through).toBe(contentSeq);
+    expect(stream.state().events.length).toBe(content.length + 1);
 
     const reconnect = await connect(`${wsUrl}/ws/browser`, { Origin: origin, Cookie: cookie });
     reconnect.send({
@@ -329,8 +430,8 @@ describe("control server routes", () => {
     });
     await waitFor(() => reconnect.messages.some((item) => item["replayComplete"] === true));
     stream.apply(reconnect.messages.at(-1) as SessionEventsFrame);
-    expect(stream.state().through).toBe(progressSeq);
-    expect(stream.state().journalEvents.length).toBe(content.length);
+    expect(stream.state().through).toBe(contentSeq);
+    expect(stream.state().journalEvents.length).toBe(content.length + 1);
     expect(repairs).toEqual([]);
   });
 

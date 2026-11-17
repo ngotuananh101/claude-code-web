@@ -339,8 +339,12 @@ export function createServer(options: ServerOptions): ServerHandle {
       // be deduplicated by every client anyway, and a conflict is never content.
       // This runs after the batch ingest transaction, so a failed broadcast
       // costs a live frame — never an event, which the journal still holds.
-      for (const { event, sessionSequence } of stored) {
-        browserGateway.publish({
+      //
+      // One frame per session per batch (§12.6): every subscribed socket
+      // receives the whole batch either way, so publishing per event paid a
+      // frame envelope for each row of a mostly-telemetry stream.
+      browserGateway.publishBatch(
+        stored.map(({ event, sessionSequence }) => ({
           sessionId: event.sessionId,
           sessionSequence,
           eventId: event.eventId,
@@ -349,8 +353,10 @@ export function createServer(options: ServerOptions): ServerHandle {
           occurredAt: event.occurredAt,
           type: event.type,
           payload: event.payload,
-        });
+        })),
+      );
 
+      for (const { event } of stored) {
         // §11.3: the session's one slot frees when a terminal event commits —
         // the journal is the authority on outcomes, so a lost socket can never
         // strand a session in `session_busy` forever.

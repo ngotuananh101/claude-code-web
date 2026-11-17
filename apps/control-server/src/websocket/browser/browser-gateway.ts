@@ -103,6 +103,20 @@ export class BrowserGateway {
   readonly #allowedOrigins: Set<string>;
   readonly #sockets = new Map<string, Set<BrowserSocket>>();
   readonly #journalSubscriptions = new WeakMap<BrowserSocket, Set<string>>();
+  /**
+   * The unbroken telemetry-only tail each journal socket has not been sent
+   * yet, keyed by socket and session (§12.5, §12.6).
+   *
+   * The projection may omit exactly one kind of event — thinking-token
+   * telemetry — and a live frame carrying nothing but omitted ranges costs the
+   * socket a frame envelope to advance `through` by one. Holding the range here
+   * folds it into the next frame that carries content: its `fromSequence`
+   * reaches back over the omitted sequences, so coverage stays unbroken and no
+   * frame is sent for a frame's worth of nothing. It stays per socket because
+   * a socket subscribing with the raw projection still needs every event, and
+   * because coverage is certified per subscriber.
+   */
+  readonly #pendingTelemetry = new WeakMap<BrowserSocket, Map<string, number>>();
 
   constructor(options: BrowserGatewayOptions) {
     this.#options = options;
@@ -224,6 +238,10 @@ export class BrowserGateway {
         if (readJournal !== undefined) journal.add(sessionId);
         else journal.delete(sessionId);
         this.#journalSubscriptions.set(socket, journal);
+        // The replay below certifies coverage through the captured watermark,
+        // so any telemetry range held from before this subscription is already
+        // covered; keeping it would only reach a needless `fromSequence` back.
+        this.#pendingTelemetry.get(socket)?.delete(sessionId);
         if (!this.#send(socket, { type: "subscribed", sessionId })) return;
 
         if (record["history"] === true) {
@@ -274,9 +292,15 @@ export class BrowserGateway {
               BrowserGateway.REPLAY_BATCH_LIMIT,
             );
             const last = events.at(-1)?.sessionSequence ?? cursor;
-            const replayComplete =
-              events.length < BrowserGateway.REPLAY_BATCH_LIMIT || last === watermark;
-            const through = replayComplete ? watermark : last;
+            // A full page may be followed by pure telemetry only. Looking one
+            // row ahead lets this page certify the whole remaining range
+            // instead of ending the replay just short of it and paying for an
+            // empty completion frame that carries nothing but `through`.
+            const hasMoreContent =
+              events.length === BrowserGateway.REPLAY_BATCH_LIMIT &&
+              last < watermark &&
+              readJournal(sessionId, last, watermark, 1).length > 0;
+            const through = hasMoreContent ? last : watermark;
             if (
               !this.#send(socket, {
                 type: "session.events",
@@ -285,12 +309,12 @@ export class BrowserGateway {
                 projection: "journal",
                 fromSequence: cursor + 1,
                 through,
-                replayComplete,
+                replayComplete: !hasMoreContent,
                 events,
               })
             )
               return;
-            if (replayComplete) break;
+            if (!hasMoreContent) break;
             cursor = through;
           }
           return;
@@ -381,6 +405,7 @@ export class BrowserGateway {
         if (typeof sessionId === "string") {
           socket.data.subscriptions.delete(sessionId);
           this.#journalSubscriptions.get(socket)?.delete(sessionId);
+          this.#pendingTelemetry.get(socket)?.delete(sessionId);
         }
         this.#send(socket, { type: "unsubscribed", sessionId });
         return;
@@ -401,38 +426,101 @@ export class BrowserGateway {
    * the browser replays the gap from the journal on its next subscribe.
    */
   publish(event: { sessionId: string } & BrowserReplayEvent): void {
-    const frame = {
+    this.publishBatch([event]);
+  }
+
+  /**
+   * Push one committed ingest batch to every subscribed socket (§12.5, §12.6).
+   *
+   * The runner sends events in bounded batches (64 events / 256 KiB, §12.6), and
+   * the server commits them in one transaction. Every subscribed socket receives
+   * the whole batch either way, so sending one frame per event paid a frame
+   * envelope — and a `through` the client had to process — for each row; a
+   * mostly-telemetry stream produced thousands of near-empty frames a second.
+   * This coalesces the batch into one frame per session per contiguous run.
+   *
+   * Contiguity matters: a projected frame's range must not span a sequence the
+   * client never received, so a gap in the batch starts a new frame rather than
+   * claiming coverage across it. A duplicate replay cannot normally leave such
+   * a gap, but the frame contract must not depend on that.
+   */
+  publishBatch(events: Array<{ sessionId: string } & BrowserReplayEvent>): void {
+    if (events.length === 0) return;
+
+    const bySession = new Map<string, BrowserReplayEvent[]>();
+    for (const event of events) {
+      const batch = bySession.get(event.sessionId);
+      if (batch === undefined) bySession.set(event.sessionId, [event]);
+      else batch.push(event);
+    }
+
+    for (const [sessionId, batch] of bySession) {
+      let start = 0;
+      for (let index = 1; index <= batch.length; index++) {
+        if (
+          index < batch.length &&
+          batch[index]!.sessionSequence === batch[index - 1]!.sessionSequence + 1
+        )
+          continue;
+        this.#publishRun(sessionId, batch.slice(start, index));
+        start = index;
+      }
+    }
+  }
+
+  #publishRun(sessionId: string, run: BrowserReplayEvent[]): void {
+    const first = run[0]!;
+    const last = run[run.length - 1]!;
+    const delivered = run.map((event) => ({
+      sessionSequence: event.sessionSequence,
+      eventId: event.eventId,
+      runId: event.runId,
+      attemptId: event.attemptId,
+      occurredAt: event.occurredAt,
+      type: event.type,
+      payload: event.payload,
+    }));
+    const content = delivered.filter((event) => !isThinkingTokenEstimate(event));
+
+    const liveFrame = {
       type: "session.events",
-      sessionId: event.sessionId,
+      sessionId,
       live: true,
-      through: event.sessionSequence,
-      events: [
-        {
-          sessionSequence: event.sessionSequence,
-          eventId: event.eventId,
-          runId: event.runId,
-          attemptId: event.attemptId,
-          occurredAt: event.occurredAt,
-          type: event.type,
-          payload: event.payload,
-        },
-      ],
+      through: last.sessionSequence,
+      events: delivered,
     };
 
     for (const sockets of this.#sockets.values()) {
       for (const socket of sockets) {
-        if (!socket.data.subscriptions.has(event.sessionId)) continue;
-        this.#send(
-          socket,
-          this.#journalSubscriptions.get(socket)?.has(event.sessionId)
-            ? {
-                ...frame,
-                projection: "journal",
-                fromSequence: event.sessionSequence,
-                events: isThinkingTokenEstimate(event) ? [] : frame.events,
-              }
-            : frame,
-        );
+        if (!socket.data.subscriptions.has(sessionId)) continue;
+        if (!this.#journalSubscriptions.get(socket)?.has(sessionId)) {
+          this.#send(socket, liveFrame);
+          continue;
+        }
+
+        // A journal subscriber only pays for content. The omitted tail is
+        // folded into the next content frame (or dropped with the socket on a
+        // send failure), never sent as a frame of its own.
+        let pending = this.#pendingTelemetry.get(socket);
+        if (pending === undefined) {
+          pending = new Map();
+          this.#pendingTelemetry.set(socket, pending);
+        }
+        const coveredFrom = pending.get(sessionId) ?? first.sessionSequence;
+        if (content.length === 0) {
+          pending.set(sessionId, coveredFrom);
+          continue;
+        }
+        pending.delete(sessionId);
+        this.#send(socket, {
+          type: "session.events",
+          sessionId,
+          live: true,
+          projection: "journal",
+          fromSequence: coveredFrom,
+          through: last.sessionSequence,
+          events: content,
+        });
       }
     }
   }

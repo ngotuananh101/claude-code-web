@@ -477,6 +477,65 @@ describe("session subscription and replay", () => {
     expect(socket.data.subscriptions.has("session-1")).toBe(true);
   });
 
+  test("one committed ingest batch becomes one live frame per subscribed socket", async () => {
+    const { gateway, cookie } = await setup();
+    const raw = await subscribe(gateway, cookie, "session-1");
+    const journal = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+    const rawBefore = raw.sent.length;
+    const journalBefore = journal.sent.length;
+    const progress = replayEvent(2, {
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens", estimated_tokens: 2 },
+    });
+
+    // One ingest transaction committed three events; the browser socket should
+    // pay for one frame, not three — the per-event fan-out was pure overhead
+    // because every socket receives the whole batch anyway.
+    gateway.publishBatch([
+      { sessionId: "session-1", ...replayEvent(1) },
+      { sessionId: "session-1", ...progress },
+      { sessionId: "session-1", ...replayEvent(3, { type: "run.finished" }) },
+    ]);
+
+    expect(raw.sent.length).toBe(rawBefore + 1);
+    expect(raw.sent.at(-1)).toMatchObject({ type: "session.events", live: true, through: 3 });
+    expect((raw.sent.at(-1)!["events"] as unknown[]).length).toBe(3);
+
+    // The journal projection stays the same contract, just carried once: the
+    // range is certified from the batch's first sequence and the omitted
+    // telemetry never appears in `events`.
+    expect(journal.sent.length).toBe(journalBefore + 1);
+    expect(journal.sent.at(-1)).toMatchObject({
+      type: "session.events",
+      live: true,
+      projection: "journal",
+      fromSequence: 1,
+      through: 3,
+      events: [replayEvent(1), replayEvent(3, { type: "run.finished" })],
+    });
+  });
+
+  test("batch frames never merge sequences that are not contiguous", async () => {
+    const { gateway, cookie } = await setup();
+    const { sent } = await subscribe(gateway, cookie, "session-1");
+    const before = sent.length;
+
+    // A committed batch is normally contiguous, but duplicate replay can leave
+    // holes in what was stored. Sending one frame across the hole would make
+    // the client's contiguous watermark skip a sequence it never received.
+    gateway.publishBatch([
+      { sessionId: "session-1", ...replayEvent(1) },
+      { sessionId: "session-1", ...replayEvent(2) },
+      { sessionId: "session-1", ...replayEvent(5) },
+    ]);
+
+    const frames = sent.slice(before);
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({ through: 2 });
+    expect(frames[1]).toMatchObject({ through: 5 });
+    expect((frames[1]!["events"] as unknown[]).length).toBe(1);
+  });
+
   test("opt-in journal replay covers omitted telemetry through the committed tail", async () => {
     const progress = (seq: number) =>
       replayEvent(seq, {
@@ -501,22 +560,113 @@ describe("session subscription and replay", () => {
     });
     const raw = await subscribe(gateway, cookie, "session-1");
     expect((raw.sent[1]!["events"] as unknown[]).length).toBe(5);
+    const beforeTelemetry = compact.sent.length;
     gateway.publish({ sessionId: "session-1", ...progress(6) });
-    expect(compact.sent.at(-1)).toMatchObject({
-      projection: "journal",
-      fromSequence: 6,
-      through: 6,
-      events: [],
-      live: true,
-    });
+    // A projected socket is not sent a live frame that carries nothing new:
+    // the range it would certify is carried by the next content frame, whose
+    // fromSequence reaches back over the omitted telemetry. Raw subscribers
+    // still need every event, so they pay for it.
+    expect(compact.sent.length).toBe(beforeTelemetry);
     expect(raw.sent.at(-1)!["events"]).toEqual([progress(6)]);
     gateway.publish({ sessionId: "session-1", ...replayEvent(7, { type: "question.requested" }) });
-    expect(compact.sent.at(-1)!["events"]).toEqual([
-      replayEvent(7, { type: "question.requested" }),
-    ]);
+    expect(compact.sent.at(-1)).toMatchObject({
+      projection: "journal",
+      live: true,
+      fromSequence: 6,
+      through: 7,
+      events: [replayEvent(7, { type: "question.requested" })],
+    });
   });
 
-  test("journal replay chains full content pages and finishes trailing telemetry explicitly", async () => {
+  test("a resubscribe covers held telemetry in its replay, not in the next live frame", async () => {
+    const progress = (seq: number) =>
+      replayEvent(seq, {
+        type: "run.status",
+        payload: { type: "system", subtype: "thinking_tokens" },
+      });
+    const { gateway, cookie } = await setup({
+      replay: { events: [progress(1)], bounds: { watermark: 2, earliest: 1 } },
+    });
+    const { socket, sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+
+    // Held while live: no frame carries it yet.
+    gateway.publish({ sessionId: "session-1", ...progress(2) });
+    expect(sent.filter((frame) => frame["type"] === "session.events")).toHaveLength(1);
+
+    // A repair resubscribe replays through the watermark (2), so the held
+    // range is certified there. The next content frame must start at itself,
+    // not reach back to a range the replay already covered.
+    socket.data.subscriptions.delete("session-1");
+    socket.data.subscriptions.add("session-1");
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "subscribe", sessionId: "session-1", projection: "journal" }),
+    );
+    expect(sent.at(-1)).toMatchObject({ through: 2, replayComplete: true, events: [] });
+
+    gateway.publish({ sessionId: "session-1", ...replayEvent(3) });
+    expect(sent.at(-1)).toMatchObject({ fromSequence: 3, through: 3 });
+  });
+
+  test("journal replay finishes on the last content page, not an empty tail frame", async () => {
+    // Exactly one full replay page of content, then a telemetry tail. The page
+    // boundary alone must not force an empty completion frame: the page reads
+    // ahead once, sees no more content, and certifies the whole remaining range
+    // itself.
+    const content = Array.from({ length: BrowserGateway.REPLAY_BATCH_LIMIT }, (_, i) =>
+      replayEvent(i * 2 + 1),
+    );
+    const tail = replayEvent(content.length * 2, {
+      type: "run.status",
+      payload: { type: "system", subtype: "thinking_tokens" },
+    });
+    const { gateway, cookie } = await setup({
+      replay: {
+        events: [...content, tail],
+        bounds: { watermark: tail.sessionSequence, earliest: 1 },
+      },
+    });
+
+    const { sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+
+    const frames = sent.filter((frame) => frame["type"] === "session.events");
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      fromSequence: 1,
+      through: tail.sessionSequence,
+      replayComplete: true,
+      events: content,
+    });
+  });
+
+  test("journal replay still chains when more content follows a full page", async () => {
+    const content = Array.from({ length: BrowserGateway.REPLAY_BATCH_LIMIT + 30 }, (_, i) =>
+      replayEvent(i + 1),
+    );
+    const { gateway, cookie } = await setup({ replay: { events: content } });
+
+    const { sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
+
+    const frames = sent.filter((frame) => frame["type"] === "session.events");
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({
+      fromSequence: 1,
+      through: BrowserGateway.REPLAY_BATCH_LIMIT,
+      replayComplete: false,
+      events: content.slice(0, BrowserGateway.REPLAY_BATCH_LIMIT),
+    });
+    expect(frames[1]).toMatchObject({
+      fromSequence: BrowserGateway.REPLAY_BATCH_LIMIT + 1,
+      through: content.length,
+      replayComplete: true,
+      events: content.slice(BrowserGateway.REPLAY_BATCH_LIMIT),
+    });
+  });
+
+  test("journal replay absorbs an interleaved telemetry tail into the last content page", async () => {
+    // The watermark is 400 and the page is full, but the remaining range is
+    // pure telemetry. The page is not followed by an empty completion frame:
+    // it reads one row ahead, sees no content, and certifies through 400.
     const content = Array.from({ length: 200 }, (_, i) => replayEvent(i * 2 + 1));
     const progress = Array.from({ length: 200 }, (_, i) =>
       replayEvent(i * 2 + 2, {
@@ -531,18 +681,12 @@ describe("session subscription and replay", () => {
     });
     const { sent } = await subscribe(gateway, cookie, "session-1", 0, 1, "journal");
     const frames = sent.filter((frame) => frame["type"] === "session.events");
-    expect(frames).toHaveLength(2);
+    expect(frames).toHaveLength(1);
     expect(frames[0]).toMatchObject({
       fromSequence: 1,
-      through: 399,
-      replayComplete: false,
-      events: content,
-    });
-    expect(frames[1]).toMatchObject({
-      fromSequence: 400,
       through: 400,
       replayComplete: true,
-      events: [],
+      events: content,
     });
   });
 

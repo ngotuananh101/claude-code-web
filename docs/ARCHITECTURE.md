@@ -746,8 +746,26 @@ frames certify inclusive coverage from `fromSequence` through `through`; only
 may be omitted. Content, unknown statuses, approvals/questions, tasks, usage and
 terminal events remain unchanged. The client validates range/order before
 advancing its contiguous coverage watermark; a raw frame's `through` cannot
-hide a missing event. `replayComplete` explicitly ends projected replay, including
-an empty completion frame (`fromSequence = through + 1`).
+hide a missing event. `replayComplete` explicitly ends projected replay. A live
+frame that would only certify omitted telemetry is not sent at all: the server
+holds that range per socket and the next content frame's `fromSequence` reaches
+back over it, so coverage stays unbroken and the socket pays no envelope for a
+frame carrying nothing. Replay likewise reads one row ahead past a full page, so
+a telemetry-only tail is absorbed into the last content page (and its
+`replayComplete: true`) instead of an empty completion frame. The empty-frame
+shape (`fromSequence = through + 1`) therefore only remains for a subscriber whose
+whole replay range is telemetry, e.g. a reconnect beyond the last content event.
+
+The runner no longer journals thinking-token telemetry at all. The SDK emits one
+`system/thinking_tokens` frame per estimation tick — 93% of the rows and 81% of
+the bytes in a measured local spool — and nothing downstream consumed the
+estimate: the journal projection, session history and the UI already omit it.
+The drop happens in the executor's `append`, before the durable write, so it
+costs no outbox row, no spool depth and no socket send; no sequence number is
+consumed, so `local_sequence` stays contiguous and the ACK watermark advances
+exactly as before. Rows already in a control journal (and any older runner) are
+still projected the same way — the `JOURNAL_EVENT_SQL` predicate remains the
+authority for those.
 
 The control database maintains a partial `(session_id, session_sequence)` index
 for this projection. It is built once over existing rows at startup and then
@@ -760,6 +778,14 @@ further replay reads immediately. This removes telemetry-dependent cold-open
 work, **not** an overall bound on content history or outbound frame bytes;
 checkpoint bootstrap, byte budgets and partial-retention snapshots remain
 separate work.
+
+**Live fan-out is per ingest batch.** One runner `events` frame commits in one
+transaction and is broadcast as one `session.events` frame per subscriber per
+contiguous run of sequences. Per-event publishing gave every subscribed socket
+a frame envelope per row, which on a mostly-telemetry stream was thousands of
+near-empty frames a second; the batch is what every socket receives anyway. A
+gap in the committed sequences starts a new frame rather than certifying
+coverage across a sequence the client never got.
 
 **Conversation reset (`/clear`).** The runner maps the SDK's
 `conversation_reset` message to `session.updated` and persists

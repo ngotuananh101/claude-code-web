@@ -363,6 +363,91 @@ describe("a clean run", () => {
     const frame = JSON.parse(list[2]!.payload) as { type?: string };
     expect(frame.type).toBe("user");
   });
+
+  test("thinking-token telemetry never reaches the durable outbox", async () => {
+    // The SDK emits one `system/thinking_tokens` frame per estimation tick, and
+    // the real local spool showed 1.6M of them — 93% of every row — each one a
+    // durable write, a socket send and a journal row the browser projection then
+    // omits again. Nothing consumes the estimate downstream (the journal
+    // projection, history and the UI all skip it), so it is not journaled at
+    // all: the bytes are saved where they are produced, not where they arrive.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    let flushes = 0;
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        for (let u = 1; u <= 500; u++) {
+          yield {
+            type: "system",
+            subtype: "thinking_tokens",
+            estimated_tokens: u,
+            estimated_tokens_delta: 1,
+            session_id: "sdk-1",
+            uuid: `u-${u}`,
+          };
+        }
+        yield { type: "assistant", message: { content: [{ type: "text", text: "done" }] } };
+        yield { type: "result", subtype: "success", result: "done" };
+      })();
+
+    await executeRun(db, COMMAND, {
+      workspacePath: WORKSPACES.get("workspace-1")!,
+      sdk,
+      onEvent: () => {
+        flushes++;
+      },
+    });
+
+    const list = events(db);
+    expect(flushes).toBe(list.length);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "session.updated",
+      "message.completed",
+      "run.finished",
+    ]);
+    // The sequence stays contiguous even though rows were skipped, so the ACK
+    // watermark can still advance (a hole would stop it at the first gap).
+    expect(list.map((e) => e.local_sequence)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("other system statuses are still journaled as run.status", async () => {
+    // The drop is exactly `system/thinking_tokens`, not "any system frame": a
+    // status the server or the UI might want must keep landing in the journal.
+    const { db } = setup();
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath: "/home/runner/project",
+    });
+
+    const sdk: SdkStream = () =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-1" };
+        yield { type: "system", subtype: "status", status: "compacting" };
+        yield { type: "result", subtype: "success", result: "ok" };
+      })();
+
+    await executeRun(db, COMMAND, { workspacePath: WORKSPACES.get("workspace-1")!, sdk });
+
+    const list = events(db);
+    expect(list.map((e) => e.type)).toEqual([
+      "run.started",
+      "session.updated",
+      "run.status",
+      "run.finished",
+    ]);
+    const frame = JSON.parse(list[2]!.payload) as { subtype?: string };
+    expect(frame.subtype).toBe("status");
+  });
 });
 
 describe("a failing run", () => {
