@@ -485,7 +485,11 @@ export async function handleCancelRun(
 
   const body = decision.queued
     ? { runId, queued: true }
-    : { runId, queued: false, ...(decision.commandId === undefined ? {} : { commandId: decision.commandId }) };
+    : {
+        runId,
+        queued: false,
+        ...(decision.commandId === undefined ? {} : { commandId: decision.commandId }),
+      };
   return new Response(JSON.stringify(body), {
     status: 202,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
