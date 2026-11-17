@@ -100,6 +100,8 @@ type Connection = {
    * the permission gates read, this is what the capabilities dialog renders.
    */
   runnerCapabilities?: RunnerCapabilities;
+  /** The negotiated maximum concurrent runs for this connection. */
+  maxConcurrentRuns: number;
 };
 
 /** The subset of `ServerWebSocket` used here; keeps tests free of a real server. */
@@ -125,6 +127,12 @@ type GatewayOptions = {
    * drain lives in the dispatcher rather than in the gateway's message loop.
    */
   onReady?: (runnerId: string) => void;
+  /**
+   * Called once per run terminalized by reconciliation, before the connection
+   * becomes `ready` and before `onReady`. Never fired when nothing is
+   * terminalized.
+   */
+  onRunTerminal?: (runnerId: string, runId: string) => void;
   /**
    * Called for every receipt a runner sends. Injected rather than handled here
    * because delivery state belongs to the outbox, and this class deliberately
@@ -183,6 +191,7 @@ export class RunnerGateway {
   readonly #connections: ConnectionRegistry;
   readonly #runs: RunRegistry;
   readonly #onReady: ((runnerId: string) => void) | undefined;
+  readonly #onRunTerminal: ((runnerId: string, runId: string) => void) | undefined;
   readonly #onReceipt: ((runnerId: string, receipt: CommandReceipt) => void) | undefined;
   readonly #onEvents:
     | ((runnerId: string, events: RunnerEvent[]) => Array<{ attemptId: string; through: number }>)
@@ -200,6 +209,7 @@ export class RunnerGateway {
     this.#connections = options.connections ?? new ConnectionRegistry();
     this.#runs = options.runs ?? new RunRegistry();
     this.#onReady = options.onReady;
+    this.#onRunTerminal = options.onRunTerminal;
     this.#onReceipt = options.onReceipt;
     this.#onEvents = options.onEvents;
     this.#onAbandonApproval = options.onAbandonApproval;
@@ -275,6 +285,7 @@ export class RunnerGateway {
       state: "connected",
       capabilities: [],
       models: [],
+      maxConcurrentRuns: 0,
     });
 
     // Close the socket this one replaced, rather than waiting for it to speak.
@@ -421,6 +432,14 @@ export class RunnerGateway {
   }
 
   /**
+   * The negotiated maximum concurrent runs for this runner, or undefined when
+   * nothing is live — deliberately like `capabilitiesOf`.
+   */
+  maxConcurrentRunsOf(runnerId: string): number | undefined {
+    return this.#live.get(runnerId)?.maxConcurrentRuns;
+  }
+
+  /**
    * The catalogue the runner's hello discovered (§4.1): commands, plugins, MCP
    * servers and agents. `undefined` when nothing is live — the same lifetime as
    * `modelsOf`'s answer, and read the same way: absence means "unknown", never
@@ -502,6 +521,7 @@ export class RunnerGateway {
     connection.capabilities = [...result.capabilities];
     connection.models = [...result.models];
     connection.runnerCapabilities = result.runnerCapabilities;
+    connection.maxConcurrentRuns = result.negotiation.policy.maxConcurrentRuns;
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 
@@ -563,7 +583,10 @@ export class RunnerGateway {
     }
 
     for (const action of result.actions) {
-      this.#runs.apply(action);
+      const terminalized = this.#runs.apply(action);
+      for (const runId of terminalized) {
+        this.#onRunTerminal?.(runnerId, runId);
+      }
       // The registry's apply covers run state; an abandoned approval is the
       // projection's to close, and it reaches the projection through the hook.
       if (action.kind === "abandon_approval") {

@@ -343,3 +343,58 @@ describe("approval waiting state (§13)", () => {
     expect(r.get("run-1")?.observedState).toBeUndefined();
   });
 });
+
+describe("apply return values", () => {
+  test("mark_interrupted reports the run it terminalized", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    expect(
+      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
+    ).toEqual(["run-1"]);
+  });
+
+  test("an action for a non-current attempt reports nothing", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    expect(
+      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-9" }),
+    ).toEqual([]);
+  });
+
+  test("a terminal run is not reported twice, and quarantine reports nothing", () => {
+    const r = registry();
+    r.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    expect(
+      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
+    ).toEqual(["run-1"]);
+    expect(
+      r.apply({ kind: "mark_interrupted", runId: "run-1", attemptId: "attempt-1" }),
+    ).toEqual([]);
+    expect(
+      r.apply({
+        kind: "quarantine",
+        runId: "ghost",
+        attemptId: "attempt-ghost",
+        reason: "no_assignment",
+      }),
+    ).toEqual([]);
+  });
+});
