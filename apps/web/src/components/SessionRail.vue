@@ -391,13 +391,12 @@ async function handleDeleteConfirm(): Promise<void> {
       </span>
     </div>
 
-    <!-- Nav rows sit on the desktop pitch here too: the drawer is the same
-         sidebar, and a phone does not need extra air between four fixed
-         destinations. -->
+    <!-- Nav rows use one tighter pitch everywhere: 32px is still a comfortable
+         target, and the drawer is the same four destinations as desktop. -->
     <nav class="grid gap-0 px-3 pt-2.5">
       <RouterLink
         to="/"
-        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        class="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
         :class="
           route.name === 'dashboard'
             ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
@@ -409,7 +408,7 @@ async function handleDeleteConfirm(): Promise<void> {
       </RouterLink>
       <button
         type="button"
-        class="flex h-9 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors"
+        class="flex h-8 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors"
         :class="
           route.name === 'sessions' && route.params.sessionId == null
             ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
@@ -423,7 +422,7 @@ async function handleDeleteConfirm(): Promise<void> {
       </button>
       <RouterLink
         to="/runners"
-        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        class="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
         :class="
           route.name === 'runners'
             ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
@@ -435,7 +434,7 @@ async function handleDeleteConfirm(): Promise<void> {
       </RouterLink>
       <RouterLink
         to="/profiles"
-        class="flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
+        class="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors"
         :class="
           route.name === 'profiles'
             ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
@@ -449,7 +448,7 @@ async function handleDeleteConfirm(): Promise<void> {
 
     <ScrollArea class="min-h-0 flex-1">
       <div class="px-2 pb-2">
-        <div class="flex h-9 items-center justify-between px-2.5">
+        <div class="flex h-8 items-center justify-between px-2.5">
           <p class="text-sm font-semibold text-foreground">{{ t("rail.sessions") }}</p>
           <span class="flex items-center gap-0.5">
             <Button
@@ -609,7 +608,7 @@ async function handleDeleteConfirm(): Promise<void> {
         <PopoverTrigger as-child>
           <button
             type="button"
-            class="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+            class="flex h-8 w-full items-center gap-2.5 rounded-lg px-2 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
             :aria-label="t('user.title')"
           >
             <span v-if="sessions.avatar" class="shrink-0 rounded-full object-cover">
