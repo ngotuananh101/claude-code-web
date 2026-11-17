@@ -184,9 +184,7 @@ async function dispatch(
 }
 
 describe("POST /api/sessions/:id/runs", () => {
-  // Task 8 wires promotion on terminal events; without it no second run.start is
-  // delivered. Kept (not deleted/faked) and marked clearly — see task-7 report.
-  test.skip("the queued run starts once the first run's terminal event arrives, with no second HTTP call", async () => {
+  test("the queued run starts once the first run's terminal event arrives, with no second HTTP call", async () => {
     const { url, cookie, credential } = await start();
     const inbox = runnerInbox();
     const runner = await connectRunner(url, credential, inbox);
