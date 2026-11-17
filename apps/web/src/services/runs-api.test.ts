@@ -48,6 +48,7 @@ describe("startRun", () => {
       runId: "run-1",
       attemptId: "attempt-1",
       sessionId: "session-1",
+      queued: false,
     });
     expect(captured.method).toBe("POST");
     expect(captured.url).toBe("/api/sessions/session-1/runs");
@@ -100,6 +101,30 @@ describe("startRun", () => {
     const withoutResume = capture(202, { runId: "r", attemptId: "a", sessionId: "s" });
     await startRun("session-1", { prompt: "continue" });
     expect(withoutResume.body).toEqual({ prompt: "continue" });
+  });
+
+  test("a 202 that says queued reports queued: true", async () => {
+    capture(202, { runId: "run-1", attemptId: "attempt-1", sessionId: "session-1", queued: true });
+    const result = await startRun("session-1", { prompt: "hello" });
+    expect(result).toEqual({
+      ok: true,
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      queued: true,
+    });
+  });
+
+  test("a 202 without the flag reports queued: false", async () => {
+    capture(202, { runId: "run-1", attemptId: "attempt-1", sessionId: "session-1" });
+    const result = await startRun("session-1", { prompt: "hello" });
+    expect(result).toEqual({
+      ok: true,
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      queued: false,
+    });
   });
 
   test("409 collapses to session_busy", async () => {

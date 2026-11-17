@@ -11,7 +11,7 @@ import type { EffortLevel } from "@cc-web/protocol";
 import { authFetch } from "./auth-api.ts";
 
 export type StartRunResult =
-  | { ok: true; runId: string; attemptId: string; sessionId: string }
+  | { ok: true; runId: string; attemptId: string; sessionId: string; queued: boolean }
   | {
       ok: false;
       reason:
@@ -105,8 +105,15 @@ export async function startRun(sessionId: string, run: StartRunRequest): Promise
     runId: string;
     attemptId: string;
     sessionId: string;
+    queued?: boolean;
   };
-  return { ok: true, runId: body.runId, attemptId: body.attemptId, sessionId: body.sessionId };
+  return {
+    ok: true,
+    runId: body.runId,
+    attemptId: body.attemptId,
+    sessionId: body.sessionId,
+    queued: body.queued === true,
+  };
 }
 
 export type CancelOutcome = "accepted" | "not_found" | "unauthorized" | "error";
