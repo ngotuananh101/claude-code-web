@@ -7,8 +7,12 @@
  *
  * Delivery states:
  *
- *   pending → sent → accepted      (the runner has it; the command is retired)
- *              └──→ rejected        (retired with a reason)
+ *   queued → pending → sent → accepted   (the runner has it; the command is retired)
+ *                        └──→ rejected   (retired with a reason, or queued again)
+ *
+ * `queued` rows are invisible to `pendingFor` on purpose: a queued run is held
+ * by session/workspace/capacity contention and must not be delivered until a
+ * promotion moves it back to `pending`.
  *
  * `sent` does not mean "delivered". It means "handed to a socket", which may
  * have died before the bytes arrived. So `pendingFor` still returns `sent`
@@ -25,6 +29,10 @@ import type { CommandKind } from "@cc-web/protocol";
 import { fingerprint } from "@cc-web/shared";
 
 export type { CommandKind } from "@cc-web/protocol";
+
+export type QueueSnapshot = { runnerId: string; workspaceId: string | undefined };
+
+export const MAX_REQUEUES = 50;
 
 export type EnqueueInput = {
   commandId: string;
@@ -52,9 +60,11 @@ export type EnqueueInput = {
   attemptId?: string;
   sessionId?: string;
   workspaceId?: string;
+  deliveryState?: "pending" | "queued";
+  queueSnapshot?: QueueSnapshot;
 };
 
-export type DeliveryState = "pending" | "sent" | "accepted" | "rejected";
+export type DeliveryState = "queued" | "pending" | "sent" | "accepted" | "rejected";
 
 export type OutboxCommand = {
   commandId: string;
@@ -72,6 +82,8 @@ export type OutboxCommand = {
   rejectionReason: string | undefined;
   /** The sealed payload the dispatcher opens for the live frame; undefined when none was stored. */
   payloadSecure: unknown | undefined;
+  requeueCount: number;
+  queueSnapshot: QueueSnapshot | undefined;
 };
 
 type Row = {
@@ -90,6 +102,8 @@ type Row = {
   delivery_state: string;
   attempt_count: number;
   rejection_reason: string | null;
+  requeue_count: number;
+  queue_snapshot: string | null;
 };
 
 /** Terminal states never transition again; a late receipt must not reopen one. */
@@ -126,13 +140,21 @@ export class CommandOutbox {
    * twice.
    */
   insertPendingSync(input: EnqueueInput, fingerprint: string): void {
+    const deliveryState = input.deliveryState ?? "pending";
+    const queueSnapshot =
+      input.queueSnapshot === undefined
+        ? null
+        : JSON.stringify({
+            runnerId: input.queueSnapshot.runnerId,
+            workspaceId: input.queueSnapshot.workspaceId ?? null,
+          });
     this.#db
       .query(
         `INSERT INTO command_outbox
            (command_id, runner_id, kind, payload, payload_secure, fingerprint, issued_at, expires_at,
             session_id, run_id, attempt_id, workspace_id,
-            delivery_state, attempt_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
+            delivery_state, attempt_count, requeue_count, queue_snapshot, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       )
       .run(
         input.commandId,
@@ -147,13 +169,16 @@ export class CommandOutbox {
         input.runId ?? null,
         input.attemptId ?? null,
         input.workspaceId ?? null,
+        deliveryState,
+        queueSnapshot,
         Date.now(),
       );
   }
 
   /**
-   * Commands this runner should receive now: everything not yet accepted or
-   * rejected, minus anything that has expired against `now`.
+   * Commands this runner should receive now: `pending` and `sent`, minus anything
+   * that has expired against `now`. `queued` rows are invisible on purpose — a
+   * queued run is held by contention and must not be delivered until promoted.
    */
   pendingFor(runnerId: string, options: { now?: Date } = {}): OutboxCommand[] {
     const now = (options.now ?? new Date()).toISOString();
@@ -162,7 +187,7 @@ export class CommandOutbox {
       .query(
         `SELECT * FROM command_outbox
           WHERE runner_id = ?
-            AND delivery_state NOT IN ('accepted', 'rejected')
+            AND delivery_state IN ('pending', 'sent')
             AND (expires_at IS NULL OR expires_at > ?)
           ORDER BY created_at ASC, command_id ASC`,
       )
@@ -199,6 +224,7 @@ export class CommandOutbox {
   markSent(commandId: string): void {
     const row = this.#require(commandId);
     if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
+    if (row.delivery_state === "queued") return;
 
     this.#db
       .query(
@@ -215,6 +241,7 @@ export class CommandOutbox {
     // gave up on. Reopening it would contradict what the rest of the system was
     // told, so the terminal state wins.
     if (row.delivery_state === "rejected") return;
+    if (row.delivery_state === "queued") return;
 
     // `attempt_id` is the attempt the command was *issued for*. A receipt naming
     // a different one is a conflict to report, not a correction to apply: taking
@@ -257,6 +284,7 @@ export class CommandOutbox {
   markAnswered(commandId: string): void {
     const row = this.#require(commandId);
     if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
+    if (row.delivery_state === "queued") return;
 
     this.#db
       .query(
@@ -265,6 +293,73 @@ export class CommandOutbox {
           WHERE command_id = ?`,
       )
       .run(Date.now(), commandId);
+  }
+
+  markQueued(commandId: string): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "pending") return;
+    this.#db
+      .query("UPDATE command_outbox SET delivery_state = 'queued' WHERE command_id = ?")
+      .run(commandId);
+  }
+
+  markPromoted(commandId: string): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "queued") return;
+    this.#db
+      .query(
+        "UPDATE command_outbox SET delivery_state = 'pending', queue_snapshot = NULL WHERE command_id = ?",
+      )
+      .run(commandId);
+  }
+
+  requeue(commandId: string): "requeued" | "ceiling" | "not_rejected" {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "rejected") return "not_rejected";
+    // `requeue_count > MAX_REQUEUES` is the ceiling (MAX_REQUEUES itself still requeues).
+    if (row.requeue_count > MAX_REQUEUES) return "ceiling";
+
+    const snapshot = row.queue_snapshot
+      ? row.queue_snapshot
+      : JSON.stringify({ runnerId: row.runner_id, workspaceId: row.workspace_id ?? null });
+
+    this.#db
+      .query(
+        `UPDATE command_outbox
+            SET delivery_state = 'queued',
+                requeue_count = requeue_count + 1,
+                rejection_reason = NULL,
+                queue_snapshot = ?
+          WHERE command_id = ?`,
+      )
+      .run(snapshot, commandId);
+    return "requeued";
+  }
+
+  queuedFor(runnerId: string): OutboxCommand[] {
+    const rows = this.#db
+      .query(
+        `SELECT * FROM command_outbox
+          WHERE runner_id = ?
+            AND delivery_state = 'queued'
+            AND kind = 'run.start'
+          ORDER BY created_at ASC, command_id ASC`,
+      )
+      .all(runnerId) as Row[];
+    return rows.map(toCommand);
+  }
+
+  queuedForSession(sessionId: string): OutboxCommand[] {
+    const rows = this.#db
+      .query(
+        `SELECT * FROM command_outbox
+          WHERE session_id = ?
+            AND delivery_state = 'queued'
+            AND kind = 'run.start'
+          ORDER BY created_at ASC, command_id ASC`,
+      )
+      .all(sessionId) as Row[];
+    return rows.map(toCommand);
   }
 
   get(commandId: string): OutboxCommand | undefined {
@@ -307,6 +402,18 @@ export async function fingerprintOf(input: EnqueueInput): Promise<string> {
 }
 
 function toCommand(row: Row): OutboxCommand {
+  const queueSnapshot = row.queue_snapshot
+    ? (() => {
+        const parsed = JSON.parse(row.queue_snapshot) as {
+          runnerId: string;
+          workspaceId?: string | null;
+        };
+        return {
+          runnerId: parsed.runnerId,
+          workspaceId: parsed.workspaceId ?? undefined,
+        };
+      })()
+    : undefined;
   return {
     commandId: row.command_id,
     runnerId: row.runner_id,
@@ -323,5 +430,7 @@ function toCommand(row: Row): OutboxCommand {
     runId: row.run_id ?? undefined,
     workspaceId: row.workspace_id ?? undefined,
     rejectionReason: row.rejection_reason ?? undefined,
+    requeueCount: row.requeue_count ?? 0,
+    queueSnapshot,
   };
 }

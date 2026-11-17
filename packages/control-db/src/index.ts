@@ -31,7 +31,9 @@ export {
   type DeliveryState,
   type EnqueueInput,
   fingerprintOf,
+  MAX_REQUEUES,
   type OutboxCommand,
+  type QueueSnapshot,
 } from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
@@ -65,6 +67,7 @@ export {
   sessionOwner,
   sessionWatermark,
 } from "./replay.ts";
+export { type QueuedRunSummary, queuedRunsForSession } from "./run-queue.ts";
 export {
   issueRunnerCredential,
   revokeRunner,

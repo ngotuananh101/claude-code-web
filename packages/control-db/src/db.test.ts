@@ -194,3 +194,15 @@ describe("workspaces.branches migration (M4)", () => {
     expect(columns).toContain("branches");
   });
 });
+
+describe("command_outbox queue columns", () => {
+  test("command_outbox carries requeue_count and queue_snapshot", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    const columns = (
+      db.query("PRAGMA table_info(command_outbox)").all() as Array<{ name: string }>
+    ).map((column) => column.name);
+    expect(columns).toContain("requeue_count");
+    expect(columns).toContain("queue_snapshot");
+  });
+});
