@@ -20,7 +20,7 @@
 import type { Database } from "bun:sqlite";
 import type { RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
 import { CommandOutbox } from "./command-outbox.ts";
-import { ensureSessionPin } from "./sessions.ts";
+import { ensureSessionPin, sessionPin } from "./sessions.ts";
 
 export type RunnerState = "offline" | "connected" | "ready" | "draining" | "revoked";
 
@@ -113,8 +113,10 @@ export type DispatchRequest = {
   profile?: RunProfilePayload;
 };
 
+export type DispatchOptions = { queue?: boolean };
+
 export type DispatchDecision =
-  | { ok: true; runnerId: string; commandId: string }
+  | { ok: true; runnerId: string; commandId: string; queued: boolean }
   | {
       ok: false;
       reason:
@@ -123,7 +125,9 @@ export type DispatchDecision =
         | "runner_at_capacity"
         | "session_busy"
         | "duplicate_run"
-        | "profile_secrets_unavailable";
+        | "profile_secrets_unavailable"
+        | "workspace_busy"
+        | "session_pinned";
     };
 
 type ActiveRow = {
@@ -167,7 +171,12 @@ export class Scheduler {
     this.#sealSecurePayload = options.sealSecurePayload;
   }
 
-  async dispatch(request: DispatchRequest, capacity: RunnerCapacity): Promise<DispatchDecision> {
+  async dispatch(
+    request: DispatchRequest,
+    capacity: RunnerCapacity,
+    options: DispatchOptions = {},
+  ): Promise<DispatchDecision> {
+    const queue = options.queue !== false;
     const sealer = this.#sealSecurePayload;
     // §18.1: a profile carries a cleartext credential, and the only durable copy
     // this scheduler may write is the sealed one. Without a sealer there is no
@@ -178,31 +187,45 @@ export class Scheduler {
       return { ok: false, reason: "profile_secrets_unavailable" };
     }
 
+    // Absence is not contention: a runner that cannot take work now is a refusal,
+    // never a queued run waiting for something that may never come back.
     if (capacity.state === "offline" || capacity.state === "revoked") {
       return { ok: false, reason: "runner_offline" };
     }
     if (capacity.state !== "ready") {
       return { ok: false, reason: "runner_not_ready" };
     }
-    if (capacity.maxConcurrentRuns <= 0 || capacity.activeRuns >= capacity.maxConcurrentRuns) {
-      return { ok: false, reason: "runner_at_capacity" };
-    }
 
-    const existingRun = this.#db
-      .query("SELECT run_id FROM active_runs WHERE run_id = ?")
-      .get(request.runId) as { run_id: string } | null;
-    if (existingRun) {
-      // A retry of the same dispatch. Creating a second command under the same
-      // run id would deliver the work twice.
+    // A retry of the same dispatch. Creating a second command under the same run
+    // id would deliver the work twice, so a queued (not-yet-admitted) row counts
+    // the same as an active one.
+    if (this.#isDuplicateRun(request.runId)) {
       return { ok: false, reason: "duplicate_run" };
     }
 
-    if (this.activeRunFor(request.sessionId)) {
-      return { ok: false, reason: "session_busy" };
+    // Resolve the pin before the awaited enqueue: a dispatch that contradicts the
+    // session's placement is refused and writes nothing. Queueing never relocates
+    // a session (invariant 11 / ADR-006).
+    const existingPin = sessionPin(this.#db, request.sessionId);
+    if (
+      existingPin !== undefined &&
+      (existingPin.runnerId !== capacity.runnerId || existingPin.workspaceId !== request.workspaceId)
+    ) {
+      return { ok: false, reason: "session_pinned" };
     }
+
+    // Contention is queueable: session_busy, workspace_busy, runner_at_capacity.
+    // Computed synchronously before enqueueing so the status is known when the
+    // payload is built (a queued run must not carry a frozen resumeSessionId).
+    const blocker = this.#blocker(request, capacity);
+    if (blocker !== undefined && !queue) {
+      return { ok: false, reason: blocker };
+    }
+    const queued = blocker !== undefined;
 
     const commandId = `cmd_${crypto.randomUUID()}`;
     const issuedAt = new Date().toISOString();
+    const queueSnapshot = { runnerId: capacity.runnerId, workspaceId: request.workspaceId };
 
     // Enqueue carries the envelope fields, not just the payload: the dispatcher
     // rebuilds the frame from the stored row alone, and a missing `sessionId`
@@ -213,27 +236,7 @@ export class Scheduler {
     // the seal on every drain; only a legacy row without a secure payload falls
     // back to the redacted copy, and that fails authentication rather than
     // substituting a key.
-    const cleartextPayload = {
-      sessionId: request.sessionId,
-      runId: request.runId,
-      attemptId: request.attemptId,
-      workspaceId: request.workspaceId,
-      prompt: request.prompt,
-      ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
-      ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
-      ...(request.model === undefined ? {} : { model: request.model }),
-      ...(request.effort === undefined ? {} : { effort: request.effort }),
-      ...(request.ultracode === undefined ? {} : { ultracode: request.ultracode }),
-      ...(request.branch === undefined ? {} : { branch: request.branch }),
-      ...(request.resumeSessionId === undefined
-        ? {}
-        : { resumeSessionId: request.resumeSessionId }),
-      ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
-      ...(request.scheduleId === undefined ? {} : { scheduleId: request.scheduleId }),
-      ...(request.scheduleCron === undefined ? {} : { scheduleCron: request.scheduleCron }),
-      ...(request.profile === undefined ? {} : { profile: request.profile }),
-    };
-
+    const cleartextPayload = this.#buildPayload(request, queued);
     const hasProfile = request.profile !== undefined;
     const persistedPayload = hasProfile
       ? { ...cleartextPayload, profile: redactProfileSecrets(request.profile!) }
@@ -250,47 +253,132 @@ export class Scheduler {
       workspaceId: request.workspaceId,
       payload: persistedPayload,
       ...(hasProfile && sealer !== undefined ? { payloadSecure: sealer(cleartextPayload) } : {}),
+      deliveryState: queued ? "queued" : "pending",
+      queueSnapshot,
     });
 
-    // The pin is written only for an accepted dispatch — a refusal must never
-    // relocate a session — and here, after the awaited enqueue and in the same
-    // synchronous continuation as the active_runs insert, on purpose: the
-    // enqueue hashes asynchronously, so a pin written earlier could survive on
-    // a concurrent dispatch that then lost the session-busy insert race. From
-    // this point the pin writer and the insert winner are the same dispatch by
-    // construction. A crash between pin and insert leaves a pinned session
-    // with an enqueued command and no active row — a retry passes every gate
-    // (duplicate_run reads active_runs) and lands in its own pin.
+    // The pin is resolved before the await and written here, in the same
+    // synchronous continuation as the active_runs insert. Writing it as
+    // INSERT OR IGNORE means two racing dispatches for the same session converge
+    // on the first pin, so it is re-read below and a contradiction rejects the
+    // command rather than relocating the session. A queued first run still pins
+    // the session (invariant 11) but never claims an active_runs slot and is
+    // never delivered.
     ensureSessionPin(this.#db, {
       sessionId: request.sessionId,
       ownerId: request.ownerId,
       workspaceId: request.workspaceId,
       runnerId: capacity.runnerId,
     });
-
-    try {
-      this.#db
-        .query(
-          `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(request.runId, request.sessionId, capacity.runnerId, request.attemptId, Date.now());
-    } catch (error) {
-      // The unique index caught a race between two dispatchers. Retire the
-      // command we just wrote rather than leaving an orphan that would run.
-      this.#outbox.markRejected(commandId, "session_busy");
-      if (String(error).includes("UNIQUE")) {
-        return { ok: false, reason: "session_busy" };
-      }
-      throw error;
+    const pinned = sessionPin(this.#db, request.sessionId);
+    if (
+      pinned === undefined ||
+      pinned.runnerId !== capacity.runnerId ||
+      pinned.workspaceId !== request.workspaceId
+    ) {
+      this.#outbox.markRejected(commandId, "session_pinned");
+      return { ok: false, reason: "session_pinned" };
     }
 
-    // Delivery is part of dispatch. A caller that has to remember a second call
-    // is a caller that will eventually forget it, and the run then sits in the
-    // outbox until the runner happens to reconnect.
-    this.#onDispatched?.(capacity.runnerId, commandId);
+    if (!queued) {
+      try {
+        this.#db
+          .query(
+            `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .run(request.runId, request.sessionId, capacity.runnerId, request.attemptId, Date.now());
+      } catch (error) {
+        // The unique index caught a race between two dispatchers. Session busy
+        // is contention, so queue the command instead of rejecting it — the run
+        // keeps its place and will be promoted when the slot frees.
+        if (String(error).includes("UNIQUE")) {
+          this.#outbox.markQueued(commandId);
+          if (request.resumeSessionId !== undefined) {
+            const queuedClear = this.#buildPayload(request, true);
+            const queuedPersisted = hasProfile
+              ? { ...queuedClear, profile: redactProfileSecrets(request.profile!) }
+              : queuedClear;
+            this.#db
+              .query("UPDATE command_outbox SET payload = ?, payload_secure = ? WHERE command_id = ?")
+              .run(
+                JSON.stringify(queuedPersisted ?? null),
+                hasProfile && sealer !== undefined ? JSON.stringify(sealer(queuedClear)) : null,
+                commandId,
+              );
+          }
+          return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
+        }
+        throw error;
+      }
 
-    return { ok: true, runnerId: capacity.runnerId, commandId };
+      // Delivery is part of dispatch. A caller that has to remember a second
+      // call is a caller that will eventually forget it, and the run then sits
+      // in the outbox until the runner happens to reconnect. A queued row has
+      // nothing to deliver until it is promoted.
+      this.#onDispatched?.(capacity.runnerId, commandId);
+      return { ok: true, runnerId: capacity.runnerId, commandId, queued: false };
+    }
+
+    return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
+  }
+
+  #isDuplicateRun(runId: string): boolean {
+    const active = this.#db
+      .query("SELECT 1 AS one FROM active_runs WHERE run_id = ?")
+      .get(runId) as { one: number } | null;
+    if (active !== null) return true;
+    const pending = this.#db
+      .query(
+        "SELECT 1 AS one FROM command_outbox WHERE run_id = ? AND delivery_state NOT IN ('accepted','rejected')",
+      )
+      .get(runId) as { one: number } | null;
+    return pending !== null;
+  }
+
+  #blocker(
+    request: DispatchRequest,
+    capacity: RunnerCapacity,
+  ): "session_busy" | "workspace_busy" | "runner_at_capacity" | undefined {
+    if (this.activeRunFor(request.sessionId)) return "session_busy";
+    if (this.#workspaceBusy(capacity.runnerId, request.workspaceId)) return "workspace_busy";
+    if (capacity.maxConcurrentRuns <= 0 || capacity.activeRuns >= capacity.maxConcurrentRuns) {
+      return "runner_at_capacity";
+    }
+    return undefined;
+  }
+
+  #workspaceBusy(runnerId: string, workspaceId: string): boolean {
+    const row = this.#db
+      .query(
+        `SELECT 1 AS one FROM active_runs a JOIN sessions s ON s.id = a.session_id
+         WHERE a.runner_id = ? AND s.workspace_id = ?`,
+      )
+      .get(runnerId, workspaceId) as { one: number } | null;
+    return row !== null;
+  }
+
+  #buildPayload(request: DispatchRequest, queued: boolean): Record<string, unknown> {
+    return {
+      sessionId: request.sessionId,
+      runId: request.runId,
+      attemptId: request.attemptId,
+      workspaceId: request.workspaceId,
+      prompt: request.prompt,
+      ...(request.workspacePath === undefined ? {} : { workspacePath: request.workspacePath }),
+      ...(request.permissionMode === undefined ? {} : { permissionMode: request.permissionMode }),
+      ...(request.model === undefined ? {} : { model: request.model }),
+      ...(request.effort === undefined ? {} : { effort: request.effort }),
+      ...(request.ultracode === undefined ? {} : { ultracode: request.ultracode }),
+      ...(request.branch === undefined ? {} : { branch: request.branch }),
+      ...(queued || request.resumeSessionId === undefined
+        ? {}
+        : { resumeSessionId: request.resumeSessionId }),
+      ...(request.attachments === undefined ? {} : { attachments: request.attachments }),
+      ...(request.scheduleId === undefined ? {} : { scheduleId: request.scheduleId }),
+      ...(request.scheduleCron === undefined ? {} : { scheduleCron: request.scheduleCron }),
+      ...(request.profile === undefined ? {} : { profile: request.profile }),
+    };
   }
 
   /** Frees the session and the runner slot once a run reaches a terminal state. */

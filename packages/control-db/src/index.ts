@@ -97,6 +97,7 @@ export {
 export {
   type DispatchDecision,
   type DispatchListener,
+  type DispatchOptions,
   type DispatchRequest,
   type RunnerCapacity,
   type RunnerState,
