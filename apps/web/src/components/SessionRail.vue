@@ -58,8 +58,10 @@ import {
 } from "../features/sessions/session-groups.ts";
 import { relativeTime } from "../lib/relative-time.ts";
 import { stopTokenRefreshTimer } from "../services/auth-api.ts";
+import { fetchRunners } from "../services/runners-api.ts";
 import { deleteSession, renameSession } from "../services/sessions-api.ts";
 import { fetchWorkspaces, type OwnerWorkspace } from "../services/workspaces-api.ts";
+import { runnerNames } from "../stores/runner-names.ts";
 import {
   disconnectSocket,
   removeSession,
@@ -85,7 +87,7 @@ const emit = defineEmits<{ close: [] }>();
 const workspaces = ref<OwnerWorkspace[]>([]);
 
 async function refreshWorkspaces(): Promise<void> {
-  const result = await fetchWorkspaces();
+  const [result] = await Promise.all([fetchWorkspaces(), fetchRunners()]);
   if (result.ok) workspaces.value = result.workspaces;
 }
 
@@ -117,7 +119,7 @@ watch(grouping, (value) => writeStored(GROUPING_KEY, value));
 watch(sort, (value) => writeStored(SORT_KEY, value));
 
 const groups = computed(() =>
-  groupSessions(sessions.sessions, workspaces.value, grouping.value, sort.value),
+  groupSessions(sessions.sessions, workspaces.value, grouping.value, sort.value, runnerNames),
 );
 
 const groupingIcon = computed<Component>(() => (grouping.value === "runner" ? Server : Folder));

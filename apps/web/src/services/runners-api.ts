@@ -9,7 +9,11 @@
  */
 
 import type { RunnerCapabilities, RunnerModel } from "@cc-web/protocol";
+import { runnerNames } from "../stores/runner-names.ts";
 import { authFetch } from "./auth-api.ts";
+
+// A late listing must not undo a rename or a newer registry response.
+let runnerNamesRevision = 0;
 
 export type OwnerRunner = {
   runnerId: string;
@@ -30,7 +34,22 @@ export type RunnersResult =
   | { ok: true; runners: OwnerRunner[] }
   | { ok: false; reason: "unauthorized" | "error" };
 
+/**
+ * The rail's headings and chips read this registry mirror. A later response
+ * replaces it, so a deleted runner cannot keep a stale label; a failed request
+ * publishes nothing, leaving the last known good names in place.
+ */
+function publishRunnerNames(runners: readonly OwnerRunner[]): void {
+  runnerNamesRevision += 1;
+  runnerNames.clear();
+  for (const runner of runners) {
+    const name = typeof runner.name === "string" ? runner.name.trim() : "";
+    runnerNames.set(runner.runnerId, name === "" ? null : name);
+  }
+}
+
 export async function fetchRunners(): Promise<RunnersResult> {
+  const startedAt = runnerNamesRevision;
   let response: Response;
   try {
     response = await authFetch("/api/runners");
@@ -42,6 +61,9 @@ export async function fetchRunners(): Promise<RunnersResult> {
   if (!response.ok) return { ok: false, reason: "error" };
 
   const body = (await response.json()) as { runners: OwnerRunner[] };
+  // A rename that landed while this listing was in flight is newer than the
+  // listing's snapshot; publishing it would flip the rail back to the old name.
+  if (runnerNamesRevision === startedAt) publishRunnerNames(body.runners);
   return { ok: true, runners: body.runners };
 }
 
@@ -56,19 +78,26 @@ export function modelsOfRunner(runners: readonly OwnerRunner[], runnerId: string
 }
 
 /**
- * Rename a runner.
+ * Rename a runner. The rail and the composer read the same registry mirror, so
+ * a successful PATCH publishes the trimmed name (or null when cleared) at once
+ * instead of waiting for the console's next listing.
  */
 export async function renameRunner(runnerId: string, name: string): Promise<boolean> {
+  let response: Response;
   try {
-    const response = await authFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
+    response = await authFetch(`/api/runners/${encodeURIComponent(runnerId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    return response.ok;
   } catch {
     return false;
   }
+  if (!response.ok) return false;
+  const trimmed = name.trim();
+  runnerNamesRevision += 1;
+  runnerNames.set(runnerId, trimmed === "" ? null : trimmed);
+  return true;
 }
 
 /**

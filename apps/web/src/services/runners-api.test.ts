@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { runnerNames } from "../stores/runner-names.ts";
 import {
   deleteRunner,
   fetchRunners,
@@ -14,8 +15,11 @@ import {
  */
 
 const realFetch = globalThis.fetch;
+const previousNames = new Map(runnerNames);
 
 afterEach(() => {
+  runnerNames.clear();
+  for (const [id, name] of previousNames) runnerNames.set(id, name);
   // bun runs every test file in one process: a leaked stub would answer the
   // next file's real fetches with this test's canned status.
   globalThis.fetch = realFetch;
@@ -60,6 +64,47 @@ describe("fetchRunners", () => {
         { runnerId: "runner-b", revokedAt: 123, models: [] },
       ],
     });
+  });
+
+  test("publishes runner names for the rail and removes absent registry entries", async () => {
+    runnerNames.set("runner-gone", "Old connector");
+    globalThis.fetch = (async () =>
+      Response.json({
+        runners: [
+          { runnerId: "runner-a", name: "Workstation", revokedAt: null, models: [] },
+          { runnerId: "runner-b", revokedAt: null, models: [] },
+        ],
+      })) as unknown as typeof fetch;
+    await fetchRunners();
+    expect([...runnerNames]).toEqual([
+      ["runner-a", "Workstation"],
+      ["runner-b", null],
+    ]);
+  });
+
+  test("a failed listing does not discard the current display names", async () => {
+    runnerNames.set("runner-a", "Workstation");
+    globalThis.fetch = (async () => new Response("", { status: 500 })) as unknown as typeof fetch;
+    await fetchRunners();
+    expect(runnerNames.get("runner-a")).toBe("Workstation");
+  });
+
+  test("a listing started before a rename cannot overwrite the new sidebar name", async () => {
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "PATCH" ? Response.json({ ok: true }) : pending) as typeof fetch;
+    const listing = fetchRunners();
+    await renameRunner("r-1", "New name");
+    release(
+      Response.json({
+        runners: [{ runnerId: "r-1", name: "Old name", revokedAt: null, models: [] }],
+      }),
+    );
+    await listing;
+    expect(runnerNames.get("r-1")).toBe("New name");
   });
 
   test("401 collapses to unauthorized", async () => {
@@ -115,6 +160,22 @@ describe("renameRunner", () => {
     expect(capturedMethod).toBe("PATCH");
     expect(JSON.parse(capturedBody)).toEqual({ name: "Runner 1" });
     expect(ok).toBe(true);
+  });
+
+  test("publishes a successful rename immediately to sidebar consumers", async () => {
+    runnerNames.set("r-1", "Old name");
+    globalThis.fetch = (async () => Response.json({ ok: true })) as unknown as typeof fetch;
+    expect(await renameRunner("r-1", "  New name  ")).toBe(true);
+    expect(runnerNames.get("r-1")).toBe("New name");
+    expect(await renameRunner("r-1", "  ")).toBe(true);
+    expect(runnerNames.get("r-1")).toBeNull();
+  });
+
+  test("a rejected rename keeps the existing sidebar name", async () => {
+    runnerNames.set("r-1", "Old name");
+    globalThis.fetch = (async () => new Response("", { status: 404 })) as unknown as typeof fetch;
+    expect(await renameRunner("r-1", "New name")).toBe(false);
+    expect(runnerNames.get("r-1")).toBe("Old name");
   });
 
   test("returns false on error", async () => {

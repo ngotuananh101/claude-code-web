@@ -166,6 +166,54 @@ describe("groupSessions — runner grouping", () => {
   });
 });
 
+describe("groupSessions — runner names", () => {
+  const names = new Map([
+    ["runner-1", "  Workstation  "],
+    ["runner-2", "Build server"],
+  ]);
+
+  test("uses assigned names for runner headings without changing group identities", () => {
+    const groups = groupSessions(sessions, workspaces, "runner", "recent", names);
+    expect(groups.map((group) => group.label)).toEqual(["Workstation", "Build server"]);
+    expect(groups.map((group) => group.key)).toEqual(["runner-1", "runner-2"]);
+    expect(groups[0]?.title).toBe("runner-1 (4 phiên)");
+  });
+
+  test("uses the runner name in project headings while keeping the folder label", () => {
+    const groups = groupSessions(sessions, workspaces, "project", "recent", names);
+    expect(groups.map((group) => group.label)).toEqual(["repo-b", "repo-a", "repo-c"]);
+    expect(groups.map((group) => group.detail)).toEqual([
+      "Workstation",
+      "Workstation",
+      "Build server",
+    ]);
+  });
+
+  test("falls back to the short ID for missing, null, empty or whitespace-only names", () => {
+    const id = "12345678-aaaa-bbbb-cccc-123456789abc";
+    const rows = [session("sess-fallback", id, "ws-1", 100)];
+    for (const names of [
+      new Map(),
+      new Map([[id, null]]),
+      new Map([[id, ""]]),
+      new Map([[id, "  "]]),
+    ]) {
+      expect(groupSessions(rows, [], "runner", "recent", names)[0]?.label).toBe("12345678");
+      expect(groupSessions(rows, [], "project", "recent", names)[0]?.detail).toBe("12345678");
+    }
+  });
+
+  test("duplicate display names do not merge different runners", () => {
+    const names = new Map([
+      ["runner-1", "Shared name"],
+      ["runner-2", "Shared name"],
+    ]);
+    const groups = groupSessions(sessions, workspaces, "runner", "recent", names);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.sessions.length)).toEqual([4, 1]);
+  });
+});
+
 describe("preference helpers", () => {
   test("grouping flips between the two shapes", () => {
     expect(nextGrouping("project")).toBe("runner");

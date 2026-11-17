@@ -29,11 +29,11 @@ export type GroupedSession = {
 /** One heading and the sessions under it. */
 export type SessionGroup = {
   key: string;
-  /** The heading text: folder basename (project) or short runner id (runner). */
+  /** The heading text: folder basename (project) or runner name/short ID (runner). */
   label: string;
   /** Heading tooltip: the folder path or the full runner id. */
   title: string;
-  /** Right-aligned heading detail: short runner id (project) or session count. */
+  /** Right-aligned heading detail: runner name/short ID (project) or session count. */
   detail: string;
   sessions: GroupedSession[];
 };
@@ -66,6 +66,7 @@ export function groupSessions(
   workspaces: readonly OwnerWorkspace[],
   grouping: SessionGrouping,
   sort: SessionSort,
+  runnerNames: ReadonlyMap<string, string | null> = new Map(),
 ): SessionGroup[] {
   const byComposite = new Map<string, OwnerWorkspace>();
   for (const workspace of workspaces) {
@@ -99,16 +100,17 @@ export function groupSessions(
     // A folder the control plane no longer declares still needs a heading; the
     // workspace id is the least misleading one available (the path is gone).
     const fallbackLabel = key.slice(key.indexOf("/") + 1);
+    const runnerLabel = runnerNames.get(runnerId)?.trim() || shortRunnerId(runnerId);
     groups.push({
       key,
-      label: grouping === "project" ? (rows[0]?.folder ?? fallbackLabel) : shortRunnerId(runnerId),
+      label: grouping === "project" ? (rows[0]?.folder ?? fallbackLabel) : runnerLabel,
       title:
         grouping === "project"
           ? (workspace?.path ?? key)
           : `${runnerId} (${t("sessionGroups.sessionCount", { count: rows.length })})`,
       detail:
         grouping === "project"
-          ? shortRunnerId(runnerId)
+          ? runnerLabel
           : t("sessionGroups.sessionCount", { count: rows.length }),
       sessions: rows,
     });
