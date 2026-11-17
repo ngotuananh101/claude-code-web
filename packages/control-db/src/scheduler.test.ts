@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { CommandOutbox } from "./command-outbox.ts";
+import { CommandOutbox, fingerprintOf } from "./command-outbox.ts";
 import { type RunnerCapacity, Scheduler } from "./scheduler.ts";
 
 /**
@@ -508,6 +508,87 @@ describe("scheduler", () => {
         runner_id: "runner-a",
       });
       expect(db.query("SELECT COUNT(*) AS n FROM active_runs").get()).toEqual({ n: 1 });
+    } finally {
+      subtle.digest = realDigest;
+    }
+  });
+
+  test("a UNIQUE-race requeue with resumeSessionId keeps payload and fingerprint consistent", async () => {
+    const { db, scheduler } = setup();
+    const outbox = new CommandOutbox(db);
+    const subtle = globalThis.crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    const releases: Array<() => void> = [];
+    subtle.digest = ((...args: Parameters<typeof realDigest>) =>
+      new Promise<ArrayBuffer>((resolve) =>
+        releases.push(() => resolve(realDigest(...args))),
+      )) as typeof subtle.digest;
+    try {
+      const loser = scheduler.dispatch({ ...request, resumeSessionId: "sdk-1" }, capacity());
+      await Bun.sleep(2);
+      const winner = scheduler.dispatch(
+        { ...request, runId: "run-2", attemptId: "attempt-2" },
+        capacity(),
+      );
+      await Bun.sleep(2);
+      // Winner's enqueue fingerprint (release[1]): let it admit and claim the slot.
+      releases[1]?.();
+      await Bun.sleep(2);
+      // Loser's precompute rewrite fingerprint (release[0]): unblocks its enqueue.
+      releases[0]?.();
+      await Bun.sleep(2);
+      // Loser's enqueue fingerprint (release[2], new code): it then loses the
+      // active_runs race and takes the synchronous requeue rewrite path.
+      releases[2]?.();
+      const [loserDecision, winnerDecision] = await Promise.all([loser, winner]);
+      // Restore before the async fingerprint/enqueue assertions below; the mock
+      // must only gate the dispatch race.
+      subtle.digest = realDigest;
+
+      expect(winnerDecision).toMatchObject({ ok: true, queued: false });
+      expect(loserDecision).toMatchObject({ ok: true, queued: true });
+      const commandId = (loserDecision as { commandId: string }).commandId;
+
+      const row = db
+        .query(
+          "SELECT payload, payload_secure, fingerprint, runner_id, kind FROM command_outbox WHERE command_id = ?",
+        )
+        .get(commandId) as {
+        payload: string;
+        payload_secure: string | null;
+        fingerprint: string;
+        runner_id: string;
+        kind: string;
+      };
+      const storedPayload = JSON.parse(row.payload) as Record<string, unknown>;
+      expect(storedPayload).not.toHaveProperty("resumeSessionId");
+      expect(row.fingerprint).toBe(
+        await fingerprintOf({
+          commandId,
+          runnerId: row.runner_id,
+          kind: row.kind as "run.start",
+          issuedAt: "",
+          payload: storedPayload,
+        }),
+      );
+      await expect(
+        outbox.enqueue({
+          commandId,
+          runnerId: row.runner_id,
+          kind: "run.start",
+          issuedAt: new Date().toISOString(),
+          sessionId: "session-1",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          workspaceId: "workspace-1",
+          payload: storedPayload,
+          ...(row.payload_secure === null
+            ? {}
+            : { payloadSecure: JSON.parse(row.payload_secure) as unknown }),
+          deliveryState: "queued",
+          queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+        }),
+      ).resolves.toBeUndefined();
     } finally {
       subtle.digest = realDigest;
     }

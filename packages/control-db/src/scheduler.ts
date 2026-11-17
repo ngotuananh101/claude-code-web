@@ -19,7 +19,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { RunnerAttachmentItem, RunProfilePayload } from "@cc-web/protocol";
-import { CommandOutbox } from "./command-outbox.ts";
+import { CommandOutbox, fingerprintOf } from "./command-outbox.ts";
 import { ensureSessionPin, sessionPin } from "./sessions.ts";
 
 export type RunnerState = "offline" | "connected" | "ready" | "draining" | "revoked";
@@ -242,6 +242,34 @@ export class Scheduler {
       ? { ...cleartextPayload, profile: redactProfileSecrets(request.profile!) }
       : cleartextPayload;
 
+    // An admitted dispatch can lose the active_runs race and be queued instead.
+    // If it carried a resumeSessionId, the queued row must not keep that frozen
+    // id, so precompute the queued (no-resume) payload and its fingerprint before
+    // the enqueue await. The race-loss rewrite then stays synchronous — no yield
+    // that could let a concurrent promote admit the run while it still names the
+    // stale resume session.
+    let raceRequeueRewrite:
+      | { payload: unknown; payloadSecure: unknown; fingerprint: string }
+      | undefined;
+    if (!queued && request.resumeSessionId !== undefined) {
+      const queuedClear = this.#buildPayload(request, true);
+      const queuedPersisted = hasProfile
+        ? { ...queuedClear, profile: redactProfileSecrets(request.profile!) }
+        : queuedClear;
+      raceRequeueRewrite = {
+        payload: queuedPersisted,
+        payloadSecure:
+          hasProfile && sealer !== undefined ? sealer(queuedClear) : undefined,
+        fingerprint: await fingerprintOf({
+          commandId,
+          runnerId: capacity.runnerId,
+          kind: "run.start",
+          payload: queuedPersisted,
+          issuedAt,
+        }),
+      };
+    }
+
     await this.#outbox.enqueue({
       commandId,
       runnerId: capacity.runnerId,
@@ -270,6 +298,10 @@ export class Scheduler {
       workspaceId: request.workspaceId,
       runnerId: capacity.runnerId,
     });
+    // Enqueue-then-reject tradeoff: the row was already written, so a pin
+    // contradiction (another dispatch won the INSERT OR IGNORE race with a
+    // different placement) retires it as rejected rather than deleting it. The
+    // refusal writes nothing durable about placement, only a rejected command.
     const pinned = sessionPin(this.#db, request.sessionId);
     if (
       pinned === undefined ||
@@ -291,21 +323,14 @@ export class Scheduler {
       } catch (error) {
         // The unique index caught a race between two dispatchers. Session busy
         // is contention, so queue the command instead of rejecting it — the run
-        // keeps its place and will be promoted when the slot frees.
+        // keeps its place and will be promoted when the slot frees. The rewrite
+        // stays synchronous (no await) so a concurrent promote cannot admit the
+        // run while it still carries a stale resumeSessionId.
         if (String(error).includes("UNIQUE")) {
-          this.#outbox.markQueued(commandId);
-          if (request.resumeSessionId !== undefined) {
-            const queuedClear = this.#buildPayload(request, true);
-            const queuedPersisted = hasProfile
-              ? { ...queuedClear, profile: redactProfileSecrets(request.profile!) }
-              : queuedClear;
-            this.#db
-              .query("UPDATE command_outbox SET payload = ?, payload_secure = ? WHERE command_id = ?")
-              .run(
-                JSON.stringify(queuedPersisted ?? null),
-                hasProfile && sealer !== undefined ? JSON.stringify(sealer(queuedClear)) : null,
-                commandId,
-              );
+          if (raceRequeueRewrite === undefined) {
+            this.#outbox.markQueued(commandId);
+          } else {
+            this.#outbox.replaceQueuedPayload(commandId, raceRequeueRewrite);
           }
           return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
         }
