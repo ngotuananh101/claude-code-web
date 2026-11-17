@@ -343,6 +343,86 @@ describe("runner gateway", () => {
     expect(gateway.stateOf("runner-a")).not.toBe("offline");
     expect(gateway.stateOf("runner-a")).toBe("connected");
   });
+
+  test("maxConcurrentRunsOf reflects the negotiated hello", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, maxConcurrentRuns: 3 } }),
+    );
+
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBe(3);
+  });
+
+  test("the negotiated capacity is clamped by policy", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, maxConcurrentRuns: 9 } }),
+    );
+
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBe(4);
+  });
+
+  test("maxConcurrentRunsOf is undefined when nothing is live", () => {
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBeUndefined();
+  });
+
+  test("a reconcile that terminalizes a run reports it before the runner is ready", () => {
+    const runs = new RunRegistry();
+    runs.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    const events: Array<{ kind: "terminal"; runId: string; stateAtCall: string | undefined }> = [];
+    const readyCalls: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      runs,
+      onRunTerminal: (runnerId, runId) => {
+        events.push({ kind: "terminal", runId, stateAtCall: gateway.stateOf(runnerId) });
+      },
+      onReady: (runnerId) => {
+        readyCalls.push(runnerId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(events).toEqual([{ kind: "terminal", runId: "run-1", stateAtCall: "connected" }]);
+    expect(readyCalls).toEqual(["runner-a"]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("a reconcile that terminalizes nothing fires no hook", () => {
+    const runs = new RunRegistry();
+    const events: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      runs,
+      onRunTerminal: (_runnerId, runId) => {
+        events.push(runId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(events).toEqual([]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
 });
 
 describe("event ingestion", () => {
