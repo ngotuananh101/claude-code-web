@@ -12,6 +12,7 @@ import Composer from "../components/Composer.vue";
 import SubagentListDialog from "../components/chat/SubagentListDialog.vue";
 import EventJournal from "../components/EventJournal.vue";
 import InspectPanel from "../components/InspectPanel.vue";
+import { pruneQueuedRuns } from "../features/composer/run-queue.ts";
 import { taskStateFromEvents } from "../features/journal/background-tasks.ts";
 import {
   createSdkChatHistory,
@@ -29,6 +30,8 @@ import {
   loadInspectPreference,
   saveInspectPreference,
 } from "../features/layout/layout-prefs.ts";
+import { fetchSessionQueue, type QueuedRun } from "../services/queue-api.ts";
+import { cancelRun } from "../services/runs-api.ts";
 import { fetchSessionMessages } from "../services/sessions-api.ts";
 import {
   closeSession,
@@ -172,6 +175,26 @@ const pendingRun = ref<{
   attachments?: AttachmentInfo[];
 } | null>(null);
 
+/** Runs waiting in the queue for the active session. */
+const queuedRuns = ref<QueuedRun[]>([]);
+
+async function refreshQueue(sessionId: string | null): Promise<void> {
+  if (sessionId === null) {
+    queuedRuns.value = [];
+    return;
+  }
+  const result = await fetchSessionQueue(sessionId);
+  queuedRuns.value = result.ok ? result.runs : [];
+}
+
+async function cancelQueuedRun(runId: string): Promise<void> {
+  const outcome = await cancelRun(runId);
+  if (outcome === "unauthorized" || outcome === "error") {
+    toast.error(t("composer.errorQueueCancelFailed"));
+  }
+  await refreshQueue(routeSession.value);
+}
+
 /**
  * The run a stop request would target. Prefer the one started here (it may not
  * be in the journal yet); otherwise walk the journal backwards — the newest
@@ -310,6 +333,7 @@ function onStarted(
     };
   }
   void loadSessions();
+  void refreshQueue(sessionId);
   if (sessionId !== routeSession.value) router.push(`/sessions/${sessionId}`);
 }
 
@@ -333,10 +357,12 @@ function followRoute(): void {
   subagentDialogTab.value = "active";
   if (id === null) {
     if (sessions.activeId !== null) closeSession();
+    void refreshQueue(null);
     return;
   }
   if (id !== sessions.activeId) openSession(id);
   history.update(historyTarget.value);
+  void refreshQueue(id);
 }
 
 onBeforeUnmount(() => {
@@ -345,6 +371,10 @@ onBeforeUnmount(() => {
 });
 onMounted(followRoute);
 watch(routeSession, followRoute);
+
+watch(journalEvents, (events) => {
+  queuedRuns.value = pruneQueuedRuns(queuedRuns.value, events);
+});
 
 async function refreshNow(): Promise<void> {
   await loadSessions();
@@ -417,8 +447,10 @@ async function refreshNow(): Promise<void> {
                 :session-id="routeSession"
                 :active-run-id="liveRunId"
                 :subagents="subagentItems"
+                :queued-runs="queuedRuns"
                 @started="onStarted"
                 @open-subagents="(tab) => openSubagentsDialog(undefined, tab ?? 'active')"
+                @cancel-queued="cancelQueuedRun"
               />
             </div>
 
@@ -485,7 +517,9 @@ async function refreshNow(): Promise<void> {
           class="w-full max-w-4xl"
           :session-id="routeSession"
           :active-run-id="null"
+          :queued-runs="queuedRuns"
           @started="onStarted"
+          @cancel-queued="cancelQueuedRun"
         />
 
         <div class="flex flex-wrap items-center justify-center gap-2">
