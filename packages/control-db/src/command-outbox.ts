@@ -303,6 +303,38 @@ export class CommandOutbox {
       .run(commandId);
   }
 
+  /**
+   * Rewrite a command's persisted payload and fingerprint while queueing it
+   * again, synchronously and in one step. Used when an admitted enqueue loses
+   * the active_runs race and must become queued without a stale payload (e.g. a
+   * queued run must never carry a frozen `resumeSessionId`): the fingerprint is
+   * immutable per command id in meaning, so changing the payload also requires
+   * changing the fingerprint that describes it. The caller precomputes the new
+   * fingerprint before the await boundary so no yield occurs here.
+   */
+  replaceQueuedPayload(
+    commandId: string,
+    input: { payload: unknown; payloadSecure: unknown; fingerprint: string },
+  ): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "pending") return;
+    this.#db
+      .query(
+        `UPDATE command_outbox
+            SET delivery_state = 'queued',
+                payload = ?,
+                payload_secure = ?,
+                fingerprint = ?
+          WHERE command_id = ?`,
+      )
+      .run(
+        JSON.stringify(input.payload ?? null),
+        input.payloadSecure === undefined ? null : JSON.stringify(input.payloadSecure ?? null),
+        input.fingerprint,
+        commandId,
+      );
+  }
+
   markPromoted(commandId: string): void {
     const row = this.#require(commandId);
     if (row.delivery_state !== "queued") return;

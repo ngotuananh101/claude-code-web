@@ -480,7 +480,8 @@ export async function handleCancelRun(
     return new Response("not found", { status: 404 });
   }
 
-  return new Response(JSON.stringify({ runId, commandId: decision.commandId }), {
+  const body = decision.queued ? { runId, queued: true } : { runId, commandId: decision.commandId };
+  return new Response(JSON.stringify(body), {
     status: 202,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
