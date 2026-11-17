@@ -1,6 +1,7 @@
 import {
   getProfileWithSecret,
   getSessionAttachment,
+  queuedRunsForSession,
   type Scheduler,
   sessionPin,
   workspacesForOwner,
@@ -311,19 +312,14 @@ export async function handleDispatchRun(
     runnerId = record.runnerId;
   }
 
-  // Checked before runner selection so a double-submit answers with its own
-  // cause: the session is busy, not "no runner could take it" (§2.3).
-  if (scheduler.activeRunFor(sessionId)) {
-    return new Response("session_busy", { status: 409 });
-  }
-
   // Candidates, in creation order — NEW sessions only. A workspace in the
   // body narrows them to the runners that declare it (§15.1: the runner is
   // the registration authority) — a workspaceId nobody declared must never
   // widen into "any ready runner". The 4xx refusals come before readiness on
   // purpose: a placement that cannot work is a client error even when a
   // runner happens to be down. A pinned session never sees this code: its
-  // placement was decided once, at pin time.
+  // placement was decided once, at pin time. The scheduler decides contention
+  // (and may queue) once a ready runner is known; absence is refused below.
   let candidates: Array<{ id: string }> = [];
   if (pin === undefined) {
     if (typeof record.workspaceId === "string" && record.workspaceId.trim() !== "") {
@@ -432,21 +428,28 @@ export async function handleDispatchRun(
     scheduler.capacityFor(ready, {
       runnerId: ready,
       state: "ready",
-      maxConcurrentRuns: 1,
+      maxConcurrentRuns: runnerGateway.maxConcurrentRunsOf(ready) ?? 1,
       activeRuns: 0,
     }),
   );
 
   if (!decision.ok) {
     const status =
-      decision.reason === "session_busy" || decision.reason === "duplicate_run" ? 409 : 503;
+      decision.reason === "session_busy" ||
+      decision.reason === "duplicate_run" ||
+      decision.reason === "session_pinned"
+        ? 409
+        : 503;
     return new Response(decision.reason, { status });
   }
 
-  return new Response(JSON.stringify({ runId, attemptId, sessionId, runnerId: ready }), {
-    status: 202,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-  });
+  return new Response(
+    JSON.stringify({ runId, attemptId, sessionId, runnerId: ready, queued: decision.queued }),
+    {
+      status: 202,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    },
+  );
 }
 
 /**
@@ -475,14 +478,52 @@ export async function handleCancelRun(
     return new Response("unauthorized", { status: 401 });
   }
 
-  const decision = await scheduler.cancel(runId);
+  const decision = await scheduler.cancel(runId, { ownerId: authorized.userId });
   if (!decision.ok) {
     return new Response("not found", { status: 404 });
   }
 
-  const body = decision.queued ? { runId, queued: true } : { runId, commandId: decision.commandId };
+  const body = decision.queued
+    ? { runId, queued: true }
+    : { runId, queued: false, ...(decision.commandId === undefined ? {} : { commandId: decision.commandId }) };
   return new Response(JSON.stringify(body), {
     status: 202,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+/**
+ * Return the session's queued runs (§11.3). Owner-scoped: a session that does
+ * not exist, or whose pin belongs to another owner, is 404 — never an empty 200
+ * and never 403, so existence is not leaked.
+ */
+export async function handleSessionQueue(
+  request: Request,
+  options: ServerOptions,
+  allowedOrigins: ReadonlySet<string>,
+  browserGateway: BrowserGateway,
+  sessionId: string,
+): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigins.has(origin)) {
+    return new Response("forbidden", { status: 403 });
+  }
+
+  const authorized = await browserGateway.authorize({
+    origin: origin ?? undefined,
+    cookie: request.headers.get("cookie") ?? undefined,
+  });
+  if (!authorized.ok) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const pin = sessionPin(options.db, sessionId);
+  if (pin === undefined || pin.ownerId !== authorized.userId) {
+    return new Response("not found", { status: 404 });
+  }
+
+  return new Response(JSON.stringify({ runs: queuedRunsForSession(options.db, sessionId) }), {
+    status: 200,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }

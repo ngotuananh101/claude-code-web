@@ -88,7 +88,7 @@ import {
   handleRevokeRunner,
   handleUpdateRunnerName,
 } from "./routes/runners-routes.ts";
-import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
+import { handleCancelRun, handleDispatchRun, handleSessionQueue } from "./routes/runs-routes.ts";
 import { handleCancelSchedule, handleListSchedules } from "./routes/schedules-routes.ts";
 import {
   handleDeleteSession,
@@ -775,6 +775,17 @@ export function createServer(options: ServerOptions): ServerHandle {
           runnerGateway,
           scheduler,
           decodeURIComponent(runsMatch[1] ?? ""),
+        );
+      }
+
+      const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue$/);
+      if (queueMatch && request.method === "GET") {
+        return handleSessionQueue(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(queueMatch[1] ?? ""),
         );
       }
 

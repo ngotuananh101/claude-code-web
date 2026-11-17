@@ -184,6 +184,109 @@ async function dispatch(
 }
 
 describe("POST /api/sessions/:id/runs", () => {
+  // Task 8 wires promotion on terminal events; without it no second run.start is
+  // delivered. Kept (not deleted/faked) and marked clearly — see task-7 report.
+  test.skip("the queued run starts once the first run's terminal event arrives, with no second HTTP call", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    const first = (await (await dispatch(url, cookie, "one")).json()) as {
+      runId: string;
+      attemptId: string;
+    };
+    const second = (await (await dispatch(url, cookie, "two")).json()) as {
+      runId: string;
+      attemptId: string;
+      queued: boolean;
+    };
+    expect(second.queued).toBe(true);
+
+    runner.send({
+      type: "events",
+      events: [
+        {
+          protocolVersion: 1,
+          eventId: "evt-promote-1",
+          runnerId: "runner-a",
+          bootId: "boot-runner-a",
+          sessionId: "session-1",
+          runId: first.runId,
+          attemptId: first.attemptId,
+          localSequence: 1,
+          occurredAt: new Date().toISOString(),
+          type: "run.finished",
+          payload: {},
+        },
+      ],
+    });
+
+    await waitFor(() =>
+      runner.received.some((c) => c["kind"] === "run.start" && c["runId"] === second.runId),
+    );
+  });
+
+  test("GET /api/sessions/:id/queue returns prompt and enqueue time only", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    await dispatch(url, cookie, "one");
+    await dispatch(url, cookie, "two");
+
+    const response = await fetch(`${url}/api/sessions/session-1/queue`, {
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = (await response.json()) as { runs: Array<Record<string, unknown>> };
+    expect(body.runs).toHaveLength(1);
+    expect(Object.keys(body.runs[0]!).sort()).toEqual([
+      "attemptId",
+      "enqueuedAt",
+      "prompt",
+      "runId",
+    ]);
+    expect(body.runs[0]).toMatchObject({ prompt: "two" });
+  });
+
+  test("the queue endpoint is owner-scoped", async () => {
+    const { db, url, cookie, credential, auth } = await start();
+    const inbox = runnerInbox();
+    await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    await dispatch(url, cookie, "one");
+    await dispatch(url, cookie, "two");
+
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other-owner", "hash", 1, Date.now());
+    const cookie2 = `cc_session=${await auth.issueAccessToken("user-2")}`;
+
+    const response = await fetch(`${url}/api/sessions/session-1/queue`, {
+      headers: { Origin: origin, Cookie: cookie2 },
+    });
+    expect(response.status).toBe(404);
+  });
+
+  test("a queued prompt whose pinned runner went offline is refused 503", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    await dispatch(url, cookie, "one");
+    runner.link.close();
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") !== "ready");
+
+    const response = await dispatch(url, cookie, "two");
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("runner_offline");
+  });
+
   test("a prompt to a session with a ready runner dispatches a run", async () => {
     const { db, url, cookie, credential } = await start();
     const inbox = runnerInbox();
@@ -217,19 +320,18 @@ describe("POST /api/sessions/:id/runs", () => {
     ).toEqual({ n: 1 });
   });
 
-  test("a second dispatch on the same session is refused while a run is active", async () => {
+  test("a second prompt on a busy session answers 202 with queued: true", async () => {
     const { url, cookie, credential } = await start();
     const inbox = runnerInbox();
     await connectRunner(url, credential, inbox);
     await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
 
-    const first = await dispatch(url, cookie, "hello");
+    const first = await dispatch(url, cookie, "one");
+    const second = await dispatch(url, cookie, "two");
     expect(first.status).toBe(202);
-
-    const second = await dispatch(url, cookie, "again");
-
-    expect(second.status).toBe(409);
-    expect(await second.text()).toBe("session_busy");
+    expect(second.status).toBe(202);
+    expect(await second.json()).toMatchObject({ queued: true });
+    expect(await first.json()).toMatchObject({ queued: false });
   });
 
   test("a finished run releases the session for the next prompt", async () => {
@@ -1190,6 +1292,34 @@ describe("POST /api/runs/:id/cancel", () => {
     expect(
       db.query("SELECT COUNT(*) AS n FROM active_runs WHERE run_id = ?").get(dispatched.runId),
     ).toEqual({ n: 1 });
+  });
+
+  test("cancelling a queued run answers 202 and the runner never receives it", async () => {
+    const { url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    await dispatch(url, cookie, "one");
+    const second = (await (await dispatch(url, cookie, "two")).json()) as {
+      runId: string;
+      queued: boolean;
+    };
+    expect(second.queued).toBe(true);
+
+    const response = await fetch(`${url}/api/runs/${second.runId}/cancel`, {
+      method: "POST",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ runId: second.runId, queued: true });
+    expect("commandId" in body).toBe(false);
+
+    await Bun.sleep(50);
+    expect(
+      runner.received.some((c) => c["kind"] === "run.cancel" && c["runId"] === second.runId),
+    ).toBe(false);
   });
 
   test("an unknown run answers 404", async () => {
