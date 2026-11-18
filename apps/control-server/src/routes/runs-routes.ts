@@ -453,8 +453,12 @@ export async function handleDispatchRun(
 }
 
 /**
- * Cancel an active run (§14.2): a durable request enqueued to the holding
- * runner, not an in-memory abort. 404 for a run nobody is holding — an
+ * Cancel a run: for an active one (§14.2) a durable request enqueued to the
+ * holding runner, not an in-memory abort; for a queued one the outbox row is
+ * retired directly (`markRejected(commandId, "cancelled")`) because the run
+ * never reached a runner and never entered the journal. Both answer 202.
+ *
+ * 404 for a run nobody is holding — neither active nor queued. An
  * already-finished run needs no cancel, and inventing one would promise
  * delivery the outbox cannot keep.
  */
