@@ -65,6 +65,13 @@ export function handleRejectedStart(
 
   if (requeueResult === "ceiling") {
     const abandonRow = outbox.get(commandId) ?? row;
+    // Every `run.start` row the scheduler writes carries its session and
+    // attempt (§11.1): `dispatch` passes both from a request whose fields are
+    // required, so these fallbacks cannot be reached from a real rejection.
+    // They exist because `OutboxCommand` types the columns as optional (the
+    // table allows null for other kinds). The branch is kept rather than
+    // asserted so a future enqueue site that omits them degrades to retiring
+    // the row instead of throwing inside the rejection path.
     const sessionId = abandonRow.sessionId ?? row.sessionId;
     const attemptId = abandonRow.attemptId ?? row.attemptId;
     const eventRunId = abandonRow.runId ?? row.runId ?? runId;
@@ -104,7 +111,10 @@ export function handleRejectedStart(
     return "abandoned";
   }
 
-  // "not_rejected" - command no longer in the expected state; avoid double work.
+  // "not_rejected" - `requeue` only refuses a row that is not `rejected`, and
+  // the check above proved it was. Unreachable from today's callers; treated
+  // as already-requeued so a concurrent path that got there first is not
+  // double-promoted into a second admission.
   promote(promoteRunnerId);
   return "requeued";
 }
