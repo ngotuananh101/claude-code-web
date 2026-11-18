@@ -115,6 +115,16 @@ describe("handleRejectedStart", () => {
       attemptId: "attempt-2",
       workspaceId: "workspace-2",
     });
+    // queuedFor orders by created_at then command_id. Both rows can share the
+    // same millisecond, so force run-1 to be the FIFO head in this test only.
+    const run1CreatedAt = (
+      db.query("SELECT created_at FROM command_outbox WHERE run_id = 'run-1'").get() as {
+        created_at: number;
+      }
+    ).created_at;
+    db.query("UPDATE command_outbox SET created_at = ? WHERE run_id = 'run-2'").run(
+      run1CreatedAt + 1000,
+    );
     // Runner rejected run1's start: dispatcher marks the command rejected.
     outbox.markRejected(cmd1, "workspace_busy");
 
