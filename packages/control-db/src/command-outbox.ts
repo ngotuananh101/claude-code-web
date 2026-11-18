@@ -312,6 +312,15 @@ export class CommandOutbox {
    * immutable per command id in meaning, so changing the payload also requires
    * changing the fingerprint that describes it. The caller precomputes the new
    * fingerprint before the await boundary so no yield occurs here.
+   *
+   * The `pending` guard cannot be reached today: the only caller runs in the
+   * same synchronous continuation as the `enqueue` that wrote the row, and
+   * nothing between them yields, so no promote or delivery can have moved it.
+   * It stays as a guard rather than a throw because the alternative — leaving a
+   * row that is neither queued nor rewritten — is a run that is delivered with
+   * the frozen `resumeSessionId` this method exists to strip; a silent no-op
+   * leaves a row the caller can still inspect, a throw would escape `dispatch`
+   * and strand it in `pending`.
    */
   replaceQueuedPayload(
     commandId: string,
