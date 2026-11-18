@@ -138,7 +138,21 @@ export function resolveDeclaredWorkspaces(
  * configured value; anything else falls back to one run at a time.
  */
 export function resolveMaxConcurrentRuns(value: string | undefined): number {
-  return value !== undefined && /^\d+$/.test(value) && Number(value) > 0 ? Number(value) : 1;
+  if (value === undefined) return 1;
+  return maxConcurrentRunsWarning(value) === undefined ? Number(value) : 1;
+}
+
+/**
+ * Why an override was ignored, or `undefined` when it was accepted (or absent).
+ *
+ * The bootstrap warning uses this rather than re-running the same validation,
+ * so a change to what counts as valid cannot leave the log telling operators
+ * one thing while the daemon does another.
+ */
+export function maxConcurrentRunsWarning(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (/^\d+$/.test(value) && Number(value) > 0) return undefined;
+  return `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS=${JSON.stringify(value)} is not a positive integer; defaulting to 1`;
 }
 
 /**

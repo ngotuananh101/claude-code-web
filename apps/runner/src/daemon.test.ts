@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerCapabilities } from "@cc-web/protocol";
 import { attemptState, lockHolder } from "@cc-web/runner-db";
-import { type Daemon, helloFrame, resolveMaxConcurrentRuns, startDaemon } from "./daemon.ts";
+import {
+  type Daemon,
+  helloFrame,
+  maxConcurrentRunsWarning,
+  resolveMaxConcurrentRuns,
+  startDaemon,
+} from "./daemon.ts";
 import type { SdkStream } from "./execution/executor.ts";
 import { saveIdentity } from "./identity/identity-store.ts";
 
@@ -360,6 +366,22 @@ test("the env override parses to a positive integer, otherwise one", () => {
   for (const bad of [undefined, "", "0", "-2", "2.5", "many"]) {
     expect(resolveMaxConcurrentRuns(bad)).toBe(1);
   }
+});
+
+/**
+ * The bootstrap logs the warning this returns, so the two must agree on what
+ * "accepted" means. Asserting them against the same value proves it: a valid
+ * override produces no warning and the resolved number; anything else produces
+ * a warning and exactly the fallback.
+ */
+test("the override warning agrees with the fallback it explains", () => {
+  expect(maxConcurrentRunsWarning(undefined)).toBeUndefined();
+  expect(maxConcurrentRunsWarning("4")).toBeUndefined();
+  for (const bad of ["", "0", "-2", "2.5", "many", " 4", "4 "]) {
+    expect(maxConcurrentRunsWarning(bad)).toContain("not a positive integer");
+    expect(resolveMaxConcurrentRuns(bad)).toBe(1);
+  }
+  expect(maxConcurrentRunsWarning("")).toContain('""');
 });
 
 describe("the hello frame advertises capabilities", () => {

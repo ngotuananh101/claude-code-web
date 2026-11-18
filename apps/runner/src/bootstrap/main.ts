@@ -17,7 +17,7 @@ import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { claudeCliKind } from "@cc-web/agent-adapter";
 import { migrateRunnerDb } from "@cc-web/runner-db";
-import { resolveMaxConcurrentRuns, startDaemon } from "../daemon.ts";
+import { maxConcurrentRunsWarning, resolveMaxConcurrentRuns, startDaemon } from "../daemon.ts";
 import { discoverCapabilities } from "../execution/capability-catalog.ts";
 import { hostClaudeCli, skippedCheckWarning } from "../execution/claude-cli.ts";
 import { discoverModels } from "../execution/model-catalog.ts";
@@ -320,14 +320,8 @@ async function start(options?: Record<string, string>, claudeCliPath?: string): 
   );
 
   const maxConcurrentRunsEnv = process.env["CC_WEB_RUNNER_MAX_CONCURRENT_RUNS"];
-  if (
-    maxConcurrentRunsEnv !== undefined &&
-    (!/^\d+$/.test(maxConcurrentRunsEnv) || Number(maxConcurrentRunsEnv) <= 0)
-  ) {
-    console.warn(
-      `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS=${JSON.stringify(maxConcurrentRunsEnv)} is not a positive integer; defaulting to 1`,
-    );
-  }
+  const maxConcurrentRunsIgnored = maxConcurrentRunsWarning(maxConcurrentRunsEnv);
+  if (maxConcurrentRunsIgnored !== undefined) console.warn(maxConcurrentRunsIgnored);
 
   const daemon = await startDaemon({
     identityDir: dir,
