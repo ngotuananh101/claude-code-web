@@ -686,7 +686,6 @@ export type TranslationDictionary = {
     subagentHistoryShort: string;
     queuedWaiting: string;
     queuedTitle: string;
-    queuedEmpty: string;
     queuedCancelAria: string;
     promptQueued: string;
     errorQueueCancelFailed: string;

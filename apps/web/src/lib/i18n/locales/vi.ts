@@ -701,7 +701,6 @@ export const vi: TranslationDictionary = {
     subagentHistoryShort: "Lịch sử ({count})",
     queuedWaiting: "Đang chờ ({count})",
     queuedTitle: "Đang chờ · chạy khi lượt hiện tại xong",
-    queuedEmpty: "Không có prompt nào đang chờ",
     queuedCancelAria: "Huỷ prompt đang chờ",
     promptQueued: "Đã xếp prompt vào hàng đợi",
     errorQueueCancelFailed: "Không huỷ được prompt đang chờ — thử lại.",

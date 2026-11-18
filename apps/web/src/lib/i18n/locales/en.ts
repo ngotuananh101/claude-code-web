@@ -702,7 +702,6 @@ export const en: TranslationDictionary = {
     subagentHistoryShort: "History ({count})",
     queuedWaiting: "Waiting ({count})",
     queuedTitle: "Waiting · starts when the current turn ends",
-    queuedEmpty: "No prompts waiting",
     queuedCancelAria: "Cancel queued prompt",
     promptQueued: "Prompt queued",
     errorQueueCancelFailed: "Could not cancel the queued prompt — try again.",

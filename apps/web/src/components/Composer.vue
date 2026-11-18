@@ -860,7 +860,6 @@ async function stop(): Promise<void> {
             type="button"
             class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <History :size="12" class="shrink-0" />
             <span>{{ t("composer.queuedWaiting", { count: queuedRuns.length }) }}</span>
           </button>
         </PopoverTrigger>
@@ -878,7 +877,7 @@ async function stop(): Promise<void> {
           <ScrollArea
             class="[&>[data-slot=scroll-area-viewport]]:max-h-[min(17rem,40dvh)] [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
           >
-            <div v-if="queuedRuns.length > 0" class="min-w-0 p-1 pt-0">
+            <div class="min-w-0 p-1 pt-0">
               <div
                 v-for="run in queuedRuns"
                 :key="run.runId"
@@ -907,12 +906,6 @@ async function stop(): Promise<void> {
                 </button>
               </div>
             </div>
-            <p
-              v-else
-              class="px-2.5 py-6 text-center text-xs text-muted-foreground"
-            >
-              {{ t("composer.queuedEmpty") }}
-            </p>
           </ScrollArea>
         </PopoverContent>
       </Popover>
