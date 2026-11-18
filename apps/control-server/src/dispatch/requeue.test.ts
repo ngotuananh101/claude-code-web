@@ -152,13 +152,19 @@ describe("handleRejectedStart", () => {
     expect(queued2?.delivery_state).toBe("queued");
   });
 
-  test("a permanent rejection retires the command and journals nothing", async () => {
+  test("a permanent rejection retires the command, journals nothing, and promotes the next queued run", async () => {
     const { db, scheduler, outbox, capacityOf } = setup();
     const cmd1 = await dispatchAdmitted(scheduler, {
       sessionId: "session-1",
       runId: "run-1",
       attemptId: "attempt-1",
       workspaceId: "workspace-1",
+    });
+    await dispatchQueued(scheduler, {
+      sessionId: "session-2",
+      runId: "run-2",
+      attemptId: "attempt-2",
+      workspaceId: "workspace-2",
     });
     outbox.markRejected(cmd1, "unknown_workspace");
 
@@ -179,17 +185,24 @@ describe("handleRejectedStart", () => {
       payload: string;
     }>;
     expect(events).toHaveLength(0);
-    // Slot freed.
+    // Slot freed and refilled from the queue (no timer).
     expect(scheduler.activeRunFor("session-1")).toBeUndefined();
+    expect(scheduler.activeRunFor("session-2")?.runId).toBe("run-2");
   });
 
-  test("past the ceiling the server journals run.failed queue_abandoned and broadcasts it", async () => {
+  test("past the ceiling the server journals run.failed queue_abandoned, broadcasts it, and promotes the next queued run", async () => {
     const { db, scheduler, outbox, capacityOf } = setup();
     const cmd1 = await dispatchAdmitted(scheduler, {
       sessionId: "session-1",
       runId: "run-1",
       attemptId: "attempt-1",
       workspaceId: "workspace-1",
+    });
+    await dispatchQueued(scheduler, {
+      sessionId: "session-2",
+      runId: "run-2",
+      attemptId: "attempt-2",
+      workspaceId: "workspace-2",
     });
     // Drive requeue_count past the ceiling (> MAX_REQUEUES). markRejected + requeue
     // is the durable path that increments the count; stop when the next would be past.
@@ -251,7 +264,8 @@ describe("handleRejectedStart", () => {
       payload: { reason: "queue_abandoned", detail: "draining" },
     });
 
-    // Slot freed.
+    // Slot freed and refilled from the queue (no timer).
     expect(scheduler.activeRunFor("session-1")).toBeUndefined();
+    expect(scheduler.activeRunFor("session-2")?.runId).toBe("run-2");
   });
 });
