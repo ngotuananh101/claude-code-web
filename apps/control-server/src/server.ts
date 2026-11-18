@@ -663,10 +663,10 @@ export function createServer(options: ServerOptions): ServerHandle {
             options,
             allowed,
             browserGateway,
-            scheduler,
             runnerGateway,
             dispatcher,
             sessionId,
+            promoteRunner,
           );
         }
       }

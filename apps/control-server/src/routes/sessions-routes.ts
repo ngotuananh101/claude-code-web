@@ -3,7 +3,6 @@ import { join } from "node:path";
 import {
   deleteSession,
   listSessions,
-  type Scheduler,
   sessionPin,
   updateSessionTitle,
   workspacesForOwner,
@@ -304,10 +303,17 @@ export async function handleDeleteSession(
   options: ServerOptions,
   allowedOrigins: ReadonlySet<string>,
   browserGateway: BrowserGateway,
-  scheduler: Scheduler,
   runnerGateway: RunnerGateway,
   dispatcher: Dispatcher | undefined,
   sessionId: string,
+  /**
+   * `promoteRunner` from the server wiring: a slot this delete frees has to be
+   * refilled from the queue in the same request (§"Admission and promotion").
+   * Injected rather than reaching for the scheduler because promoting is
+   * promote-then-drain, and the drain is what actually delivers the promoted
+   * command — a bare `scheduler.promote` here would leave it `pending`.
+   */
+  promoteRunner?: (runnerId: string) => void,
 ): Promise<Response> {
   const origin = request.headers.get("origin");
   if (origin !== null && !allowedOrigins.has(origin)) {
@@ -326,14 +332,21 @@ export async function handleDeleteSession(
   // row is gone — the pin is what routes the cleanup command.
   const pin = sessionPin(options.db, sessionId);
 
-  const active = scheduler.activeRunFor(sessionId);
-  if (active) {
-    scheduler.release(active.runId);
-  }
-
   const res = deleteSession(options.db, sessionId, authorized.userId);
   if (!res.ok) {
     return new Response("not found", { status: 404 });
+  }
+
+  // §"Admission and promotion": every slot release runs promotion immediately.
+  // `deleteSession` removed this session's `active_runs` row inside its own
+  // transaction, so the slot is already free; the run queued behind it on the
+  // same runner must take it in this same request. Without the promote it waits
+  // for the next unrelated trigger, which on an idle server is never.
+  //
+  // Deliberately after the ownership check: releasing before `deleteSession`
+  // let a caller delete nothing yet still free another owner's slot.
+  if (pin !== undefined) {
+    promoteRunner?.(pin.runnerId);
   }
 
   // §4.4: remove the session's attachment directory on disk if it was configured
