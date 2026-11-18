@@ -268,4 +268,63 @@ describe("handleRejectedStart", () => {
     expect(scheduler.activeRunFor("session-1")).toBeUndefined();
     expect(scheduler.activeRunFor("session-2")?.runId).toBe("run-2");
   });
+
+  /**
+   * The end-to-end half of §"Resume semantics": a run **admitted** at dispatch
+   * time keeps its `resumeSessionId` on purpose (that is the operator's
+   * "resume this specific conversation"). When the runner then refuses it for
+   * a transient reason, the command goes back to the queue — and a queued run
+   * must resolve the conversation at start, not at submit. So the requeue
+   * transition has to strip the field and carry the fingerprint with it.
+   */
+  test("a transiently rejected run loses its frozen resumeSessionId when it rejoins the queue", async () => {
+    const { db, scheduler, outbox, capacityOf } = setup();
+    const capacity = scheduler.capacityFor("runner-a", {
+      runnerId: "runner-a",
+      state: "ready",
+      maxConcurrentRuns: 1,
+      activeRuns: 0,
+    });
+    const decision = await scheduler.dispatch(
+      {
+        sessionId: "session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        workspaceId: "workspace-1",
+        prompt: "continue this",
+        ownerId: "user-1",
+        resumeSessionId: "sdk-conversation-1",
+      },
+      capacity,
+      { queue: false },
+    );
+    if (!decision.ok || decision.queued) throw new Error("expected an admitted dispatch");
+
+    // The admitted payload still names the conversation, so the field is
+    // genuinely present before the requeue — otherwise this test proves nothing.
+    expect(outbox.get(decision.commandId)?.payload).toMatchObject({
+      resumeSessionId: "sdk-conversation-1",
+    });
+
+    // Nothing else is queued on this runner, so run-1 is the FIFO head and
+    // promotion admits it again immediately; the row ends `pending`.
+    outbox.markRejected(decision.commandId, "workspace_busy");
+    expect(
+      handleRejectedStart({
+        db,
+        outbox,
+        scheduler,
+        capacityOf,
+        runId: "run-1",
+        commandId: decision.commandId,
+        reason: "workspace_busy",
+      }),
+    ).toBe("requeued");
+
+    const row = outbox.get(decision.commandId);
+    expect(row?.deliveryState).toBe("pending");
+    const payload = (row as { payload: Record<string, unknown> }).payload;
+    expect("resumeSessionId" in payload).toBe(false);
+    expect(row?.payload).toMatchObject({ prompt: "continue this", runId: "run-1" });
+  });
 });

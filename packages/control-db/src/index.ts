@@ -31,6 +31,7 @@ export {
   type DeliveryState,
   type EnqueueInput,
   fingerprintOf,
+  fingerprintOfSync,
   MAX_REQUEUES,
   type OutboxCommand,
   type QueueSnapshot,
