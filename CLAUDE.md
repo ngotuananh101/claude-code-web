@@ -86,3 +86,6 @@ Runner connector (single-file build via `bun run build:runner` →
 - `CC_WEB_APPROVAL_TIMEOUT_MS` — optional. A tool-permission or question gate
   never expires by default; set a positive millisecond value to restore a
   finite window.
+- `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS` — optional. Default `1`, clamped by the
+  server policy to `4`. Declares how many runs this runner may execute
+  concurrently.

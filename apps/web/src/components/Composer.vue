@@ -25,6 +25,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { toast } from "vue-sonner";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from "@/components/ui/input-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -69,6 +71,7 @@ import { useI18n } from "@/lib/i18n";
 import { relativeTime } from "@/lib/relative-time.ts";
 import { uploadSessionAttachments } from "../services/attachments-api";
 import { listProfiles } from "../services/profiles-api";
+import type { QueuedRun } from "../services/queue-api";
 import {
   fetchRunners,
   liveRunners,
@@ -110,11 +113,14 @@ const props = defineProps<{
   activeRunId?: string | null;
   /** Subagents spawned in this session, shown in the top bar when inside a session. */
   subagents?: SubagentItem[];
+  /** Runs waiting in the session queue, shown in the strip when present. */
+  queuedRuns?: QueuedRun[];
 }>();
 
 const emit = defineEmits<{
   started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
   openSubagents: [tab?: SubagentDialogTab];
+  cancelQueued: [runId: string];
 }>();
 
 const { t } = useI18n();
@@ -178,6 +184,8 @@ const subagentBreakdownLabel = computed(() => {
   if (failed > 0) parts.push(t("composer.subagentsFailedCount", { count: failed }));
   return parts.length > 0 ? `(${parts.join(" · ")})` : "";
 });
+
+const queuedRuns = computed(() => props.queuedRuns ?? []);
 
 const prompt = ref("");
 const sending = ref(false);
@@ -644,6 +652,9 @@ async function send(): Promise<void> {
       });
       prompt.value = "";
       attachments.value = [];
+      if (result.queued) {
+        toast.success(t("composer.promptQueued"));
+      }
       emit("started", sessionId, result.runId, promptText, uploadedAttachments);
       return;
     }
@@ -815,12 +826,13 @@ async function stop(): Promise<void> {
       </span>
     </div>
 
-    <!-- Top tab inside an active Session: only shown while subagents are running or completed < 5m ago -->
+    <!-- Top tab inside an active Session: subagents and/or queued prompts -->
     <div
-      v-else-if="subagentCounts.total > 0"
+      v-else-if="subagentCounts.total > 0 || queuedRuns.length > 0"
       class="-mb-3.5 flex flex-wrap items-center justify-between gap-2 rounded-t-2xl border border-b-0 border-input/80 bg-muted/60 px-3 pt-1.5 pb-5"
     >
       <button
+        v-if="subagentCounts.total > 0"
         type="button"
         class="inline-flex h-7 cursor-pointer items-center gap-2 rounded-lg px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
         @click="emit('openSubagents', 'active')"
@@ -840,17 +852,63 @@ async function stop(): Promise<void> {
           <ArrowUpRight :size="11" />
         </span>
       </button>
+      <span v-else aria-hidden="true" />
 
-      <button
-        v-if="historySubagents.length > 0"
-        type="button"
-        class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        :title="t('composer.subagentHistory', { count: historySubagents.length })"
-        @click="emit('openSubagents', 'history')"
-      >
-        <History :size="12" class="shrink-0" />
-        <span>{{ t("composer.subagentHistoryShort", { count: historySubagents.length }) }}</span>
-      </button>
+      <Popover v-if="queuedRuns.length > 0">
+        <PopoverTrigger as-child>
+          <button
+            type="button"
+            class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <span>{{ t("composer.queuedWaiting", { count: queuedRuns.length }) }}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="end"
+          :side-offset="6"
+          class="w-[calc(100vw-2rem)] max-w-[26rem] overflow-hidden rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-2xl"
+          role="listbox"
+          :aria-label="t('composer.queuedTitle')"
+        >
+          <p class="px-2.5 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground">
+            {{ t("composer.queuedTitle") }}
+          </p>
+          <ScrollArea
+            class="[&>[data-slot=scroll-area-viewport]]:max-h-[min(17rem,40dvh)] [&>[data-slot=scroll-area-viewport]]:overscroll-contain"
+          >
+            <div class="min-w-0 p-1 pt-0">
+              <div
+                v-for="run in queuedRuns"
+                :key="run.runId"
+                class="flex min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-accent/60"
+                role="option"
+              >
+                <div class="min-w-0 flex-1">
+                  <p
+                    class="truncate text-xs text-foreground"
+                    :title="run.prompt"
+                  >
+                    {{ run.prompt }}
+                  </p>
+                  <p class="text-[11px] text-muted-foreground">
+                    {{ relativeTime(run.enqueuedAt) }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="mt-0.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  :aria-label="t('composer.queuedCancelAria')"
+                  :title="t('composer.queuedCancelAria')"
+                  @click="emit('cancelQueued', run.runId)"
+                >
+                  <X :size="12" />
+                </button>
+              </div>
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
     </div>
 
     <!-- Main Prompt Card -->

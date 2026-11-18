@@ -7,8 +7,12 @@
  *
  * Delivery states:
  *
- *   pending → sent → accepted      (the runner has it; the command is retired)
- *              └──→ rejected        (retired with a reason)
+ *   queued → pending → sent → accepted   (the runner has it; the command is retired)
+ *                        └──→ rejected   (retired with a reason, or queued again)
+ *
+ * `queued` rows are invisible to `pendingFor` on purpose: a queued run is held
+ * by session/workspace/capacity contention and must not be delivered until a
+ * promotion moves it back to `pending`.
  *
  * `sent` does not mean "delivered". It means "handed to a socket", which may
  * have died before the bytes arrived. So `pendingFor` still returns `sent`
@@ -21,10 +25,15 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import type { CommandKind } from "@cc-web/protocol";
-import { fingerprint } from "@cc-web/shared";
+import { canonicalize, fingerprint } from "@cc-web/shared";
 
 export type { CommandKind } from "@cc-web/protocol";
+
+export type QueueSnapshot = { runnerId: string; workspaceId: string | undefined };
+
+export const MAX_REQUEUES = 50;
 
 export type EnqueueInput = {
   commandId: string;
@@ -52,9 +61,11 @@ export type EnqueueInput = {
   attemptId?: string;
   sessionId?: string;
   workspaceId?: string;
+  deliveryState?: "pending" | "queued";
+  queueSnapshot?: QueueSnapshot;
 };
 
-export type DeliveryState = "pending" | "sent" | "accepted" | "rejected";
+export type DeliveryState = "queued" | "pending" | "sent" | "accepted" | "rejected";
 
 export type OutboxCommand = {
   commandId: string;
@@ -72,6 +83,8 @@ export type OutboxCommand = {
   rejectionReason: string | undefined;
   /** The sealed payload the dispatcher opens for the live frame; undefined when none was stored. */
   payloadSecure: unknown | undefined;
+  requeueCount: number;
+  queueSnapshot: QueueSnapshot | undefined;
 };
 
 type Row = {
@@ -90,6 +103,8 @@ type Row = {
   delivery_state: string;
   attempt_count: number;
   rejection_reason: string | null;
+  requeue_count: number;
+  queue_snapshot: string | null;
 };
 
 /** Terminal states never transition again; a late receipt must not reopen one. */
@@ -126,13 +141,21 @@ export class CommandOutbox {
    * twice.
    */
   insertPendingSync(input: EnqueueInput, fingerprint: string): void {
+    const deliveryState = input.deliveryState ?? "pending";
+    const queueSnapshot =
+      input.queueSnapshot === undefined
+        ? null
+        : JSON.stringify({
+            runnerId: input.queueSnapshot.runnerId,
+            workspaceId: input.queueSnapshot.workspaceId ?? null,
+          });
     this.#db
       .query(
         `INSERT INTO command_outbox
            (command_id, runner_id, kind, payload, payload_secure, fingerprint, issued_at, expires_at,
             session_id, run_id, attempt_id, workspace_id,
-            delivery_state, attempt_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
+            delivery_state, attempt_count, requeue_count, queue_snapshot, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
       )
       .run(
         input.commandId,
@@ -147,13 +170,16 @@ export class CommandOutbox {
         input.runId ?? null,
         input.attemptId ?? null,
         input.workspaceId ?? null,
+        deliveryState,
+        queueSnapshot,
         Date.now(),
       );
   }
 
   /**
-   * Commands this runner should receive now: everything not yet accepted or
-   * rejected, minus anything that has expired against `now`.
+   * Commands this runner should receive now: `pending` and `sent`, minus anything
+   * that has expired against `now`. `queued` rows are invisible on purpose — a
+   * queued run is held by contention and must not be delivered until promoted.
    */
   pendingFor(runnerId: string, options: { now?: Date } = {}): OutboxCommand[] {
     const now = (options.now ?? new Date()).toISOString();
@@ -162,7 +188,7 @@ export class CommandOutbox {
       .query(
         `SELECT * FROM command_outbox
           WHERE runner_id = ?
-            AND delivery_state NOT IN ('accepted', 'rejected')
+            AND delivery_state IN ('pending', 'sent')
             AND (expires_at IS NULL OR expires_at > ?)
           ORDER BY created_at ASC, command_id ASC`,
       )
@@ -199,6 +225,7 @@ export class CommandOutbox {
   markSent(commandId: string): void {
     const row = this.#require(commandId);
     if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
+    if (row.delivery_state === "queued") return;
 
     this.#db
       .query(
@@ -215,6 +242,7 @@ export class CommandOutbox {
     // gave up on. Reopening it would contradict what the rest of the system was
     // told, so the terminal state wins.
     if (row.delivery_state === "rejected") return;
+    if (row.delivery_state === "queued") return;
 
     // `attempt_id` is the attempt the command was *issued for*. A receipt naming
     // a different one is a conflict to report, not a correction to apply: taking
@@ -257,6 +285,7 @@ export class CommandOutbox {
   markAnswered(commandId: string): void {
     const row = this.#require(commandId);
     if (TERMINAL.has(row.delivery_state as DeliveryState)) return;
+    if (row.delivery_state === "queued") return;
 
     this.#db
       .query(
@@ -265,6 +294,158 @@ export class CommandOutbox {
           WHERE command_id = ?`,
       )
       .run(Date.now(), commandId);
+  }
+
+  markQueued(commandId: string): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "pending") return;
+    this.#db
+      .query("UPDATE command_outbox SET delivery_state = 'queued' WHERE command_id = ?")
+      .run(commandId);
+  }
+
+  /**
+   * Rewrite a command's persisted payload and fingerprint while queueing it
+   * again, synchronously and in one step. Used when an admitted enqueue loses
+   * the active_runs race and must become queued without a stale payload (e.g. a
+   * queued run must never carry a frozen `resumeSessionId`): the fingerprint is
+   * immutable per command id in meaning, so changing the payload also requires
+   * changing the fingerprint that describes it. The caller precomputes the new
+   * fingerprint before the await boundary so no yield occurs here.
+   *
+   * The `pending` guard cannot be reached today: the only caller runs in the
+   * same synchronous continuation as the `enqueue` that wrote the row, and
+   * nothing between them yields, so no promote or delivery can have moved it.
+   * It stays as a guard rather than a throw because the alternative — leaving a
+   * row that is neither queued nor rewritten — is a run that is delivered with
+   * the frozen `resumeSessionId` this method exists to strip; a silent no-op
+   * leaves a row the caller can still inspect, a throw would escape `dispatch`
+   * and strand it in `pending`.
+   */
+  replaceQueuedPayload(
+    commandId: string,
+    input: { payload: unknown; payloadSecure: unknown; fingerprint: string },
+  ): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "pending") return;
+    this.#db
+      .query(
+        `UPDATE command_outbox
+            SET delivery_state = 'queued',
+                payload = ?,
+                payload_secure = ?,
+                fingerprint = ?
+          WHERE command_id = ?`,
+      )
+      .run(
+        JSON.stringify(input.payload ?? null),
+        input.payloadSecure === undefined ? null : JSON.stringify(input.payloadSecure ?? null),
+        input.fingerprint,
+        commandId,
+      );
+  }
+
+  markPromoted(commandId: string): void {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "queued") return;
+    this.#db
+      .query(
+        "UPDATE command_outbox SET delivery_state = 'pending', queue_snapshot = NULL WHERE command_id = ?",
+      )
+      .run(commandId);
+  }
+
+  requeue(commandId: string): "requeued" | "ceiling" | "not_rejected" {
+    const row = this.#require(commandId);
+    if (row.delivery_state !== "rejected") return "not_rejected";
+    // `requeue_count > MAX_REQUEUES` is the ceiling (MAX_REQUEUES itself still requeues).
+    if (row.requeue_count > MAX_REQUEUES) return "ceiling";
+
+    const snapshot = row.queue_snapshot
+      ? row.queue_snapshot
+      : JSON.stringify({ runnerId: row.runner_id, workspaceId: row.workspace_id ?? null });
+
+    // §"Resume semantics": a queued run must not carry a frozen
+    // `resumeSessionId`. This is the path that starts from an **admitted**
+    // command — so its payload does carry the field — and returns it to the
+    // queue, where the runner must instead resolve the conversation as it
+    // stands when the run starts. Stripping it here, not at promotion, is what
+    // keeps the queue entry honest for its whole life in the queue.
+    //
+    // The payload the runner receives is `payload_secure` when one exists
+    // (§18.1) and the redacted `payload` otherwise, so both move together or
+    // the redaction would disagree with the live frame. The fingerprint is
+    // computed from the redacted copy, exactly like `fingerprintOf`, and moves
+    // with it in the same statement: a payload change with a stale fingerprint
+    // makes the redelivery a `fingerprint_mismatch`, i.e. a command the runner
+    // will refuse forever. A row that never carried the field is written back
+    // unchanged, fingerprint included — rewriting an unrelated row would be
+    // silent corruption of the outbox's immutability contract.
+    const redacted = JSON.parse(row.payload) as unknown;
+    const secure =
+      row.payload_secure === null ? undefined : (JSON.parse(row.payload_secure) as unknown);
+    const nextRedacted = withoutResume(redacted);
+    const nextSecure = secure === undefined ? undefined : withoutResume(secure);
+    const changed = nextRedacted !== undefined || nextSecure !== undefined;
+
+    const payloadValue = nextRedacted ?? redacted;
+    const secureValue = nextSecure ?? secure;
+    const fingerprintValue = changed
+      ? fingerprintOfSync({
+          commandId,
+          runnerId: row.runner_id,
+          kind: row.kind as CommandKind,
+          payload: payloadValue,
+          issuedAt: row.issued_at,
+        })
+      : row.fingerprint;
+
+    this.#db
+      .query(
+        `UPDATE command_outbox
+            SET delivery_state = 'queued',
+                requeue_count = requeue_count + 1,
+                rejection_reason = NULL,
+                queue_snapshot = ?,
+                payload = ?,
+                payload_secure = ?,
+                fingerprint = ?
+          WHERE command_id = ?`,
+      )
+      .run(
+        snapshot,
+        JSON.stringify(payloadValue ?? null),
+        secureValue === undefined ? null : JSON.stringify(secureValue ?? null),
+        fingerprintValue,
+        commandId,
+      );
+    return "requeued";
+  }
+
+  queuedFor(runnerId: string): OutboxCommand[] {
+    const rows = this.#db
+      .query(
+        `SELECT * FROM command_outbox
+          WHERE runner_id = ?
+            AND delivery_state = 'queued'
+            AND kind = 'run.start'
+          ORDER BY created_at ASC, command_id ASC`,
+      )
+      .all(runnerId) as Row[];
+    return rows.map(toCommand);
+  }
+
+  queuedForSession(sessionId: string): OutboxCommand[] {
+    const rows = this.#db
+      .query(
+        `SELECT * FROM command_outbox
+          WHERE session_id = ?
+            AND delivery_state = 'queued'
+            AND kind = 'run.start'
+          ORDER BY created_at ASC, command_id ASC`,
+      )
+      .all(sessionId) as Row[];
+    return rows.map(toCommand);
   }
 
   get(commandId: string): OutboxCommand | undefined {
@@ -306,7 +487,60 @@ export async function fingerprintOf(input: EnqueueInput): Promise<string> {
   });
 }
 
+/**
+ * `fingerprintOf` without the await.
+ *
+ * `fingerprint` is async because it uses Web Crypto, which is the only digest
+ * API importable from the web bundle. Some transitions cannot yield: `requeue`
+ * rewrites payload and fingerprint in one statement precisely so no reader and
+ * no concurrent promote can observe a queued row that still means the old
+ * thing. `createHash` over the same canonical form produces a byte-identical
+ * digest — verified against the async path over unicode, null, undefined and
+ * numeric edge cases — so the two are interchangeable, not merely similar.
+ */
+export function fingerprintOfSync(input: EnqueueInput): string {
+  return createHash("sha256")
+    .update(
+      canonicalize({
+        commandId: input.commandId,
+        runnerId: input.runnerId,
+        kind: input.kind,
+        payload: input.payload ?? null,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/**
+ * The payload with `resumeSessionId` removed, or `undefined` when it was not
+ * there to remove.
+ *
+ * Returning `undefined` for "nothing to do" is what lets `requeue` leave an
+ * unaffected row's bytes untouched instead of round-tripping it through
+ * `JSON.parse`/`JSON.stringify` for no reason.
+ */
+function withoutResume(payload: unknown): Record<string, unknown> | undefined {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  if (!("resumeSessionId" in record)) return undefined;
+  const { resumeSessionId: _dropped, ...rest } = record;
+  return rest;
+}
+
 function toCommand(row: Row): OutboxCommand {
+  const queueSnapshot = row.queue_snapshot
+    ? (() => {
+        const parsed = JSON.parse(row.queue_snapshot) as {
+          runnerId: string;
+          workspaceId?: string | null;
+        };
+        return {
+          runnerId: parsed.runnerId,
+          workspaceId: parsed.workspaceId ?? undefined,
+        };
+      })()
+    : undefined;
   return {
     commandId: row.command_id,
     runnerId: row.runner_id,
@@ -323,5 +557,7 @@ function toCommand(row: Row): OutboxCommand {
     runId: row.run_id ?? undefined,
     workspaceId: row.workspace_id ?? undefined,
     rejectionReason: row.rejection_reason ?? undefined,
+    requeueCount: row.requeue_count ?? 0,
+    queueSnapshot,
   };
 }

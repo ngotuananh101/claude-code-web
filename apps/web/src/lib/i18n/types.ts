@@ -684,6 +684,11 @@ export type TranslationDictionary = {
     viewSubagents: string;
     subagentHistory: string;
     subagentHistoryShort: string;
+    queuedWaiting: string;
+    queuedTitle: string;
+    queuedCancelAria: string;
+    promptQueued: string;
+    errorQueueCancelFailed: string;
     /** The slash-command menu's listbox label. */
     slashCommandsAria: string;
     slashCommandsEmpty: string;

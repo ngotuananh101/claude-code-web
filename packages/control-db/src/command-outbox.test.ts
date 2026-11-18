@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrate } from "@cc-web/control-db";
-import { CommandOutbox } from "./command-outbox.ts";
+import { CommandOutbox, fingerprintOf, MAX_REQUEUES } from "./command-outbox.ts";
 
 /**
  * The central command outbox (§18.1, §9.3, §12.2).
@@ -324,5 +324,225 @@ describe("command outbox", () => {
 
     expect(row.payload_secure).toBeNull();
     expect(o.get("cmd-1")?.payloadSecure).toBeUndefined();
+  });
+
+  test("a queued command is never offered for delivery", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({
+      ...command,
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+    });
+
+    expect(o.pendingFor("runner-a")).toEqual([]);
+    expect(o.queuedFor("runner-a")).toMatchObject([
+      {
+        commandId: "cmd-1",
+        deliveryState: "queued",
+        queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+        requeueCount: 0,
+      },
+    ]);
+  });
+
+  test("a queued command is retired when it expires, like any other", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({
+      ...command,
+      deliveryState: "queued",
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+
+    expect(o.pendingFor("runner-a")).toEqual([]);
+    expect(o.retireExpired("runner-a")).toEqual(["cmd-1"]);
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "rejected", rejectionReason: "expired" });
+  });
+
+  test("requeue returns a rejected run.start to the queue and counts the attempt", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, workspaceId: "workspace-1" });
+    o.markRejected("cmd-1", "workspace_busy");
+
+    expect(o.requeue("cmd-1")).toBe("requeued");
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "queued",
+      requeueCount: 1,
+      rejectionReason: undefined,
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+    });
+  });
+
+  test("requeue only moves a rejected command", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue(command); // pending
+    expect(o.requeue("cmd-1")).toBe("not_rejected");
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "pending", requeueCount: 0 });
+  });
+
+  test("requeue refuses past the ceiling and leaves the row rejected", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue(command);
+    o.markRejected("cmd-1", "workspace_busy");
+    // The spec's ceiling test is `requeue_count > 50`, so 51 is the first refusal.
+    db.query("UPDATE command_outbox SET requeue_count = ? WHERE command_id = 'cmd-1'").run(
+      MAX_REQUEUES + 1,
+    );
+
+    expect(o.requeue("cmd-1")).toBe("ceiling");
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "rejected",
+      requeueCount: MAX_REQUEUES + 1,
+    });
+  });
+
+  test("promotion flips a queued command to deliverable", async () => {
+    const { outbox: o } = outbox();
+    await o.enqueue({ ...command, deliveryState: "queued" });
+    o.markPromoted("cmd-1");
+
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "pending", queueSnapshot: undefined });
+    expect(o.pendingFor("runner-a").map((c) => c.commandId)).toEqual(["cmd-1"]);
+  });
+
+  test("queuedForSession lists one session's queue oldest first", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({ ...command, sessionId: "session-1", deliveryState: "queued" }); // created_at earlier
+    await o.enqueue({
+      ...command,
+      commandId: "cmd-2",
+      runId: "run-2",
+      sessionId: "session-2",
+      deliveryState: "queued",
+    });
+    await o.enqueue({
+      ...command,
+      commandId: "cmd-3",
+      runId: "run-3",
+      sessionId: "session-1",
+      deliveryState: "queued",
+    });
+    await o.enqueue({ ...command, commandId: "cmd-4", runId: "run-4", sessionId: "session-1" }); // accepted later
+
+    // created_at is a millisecond clock; force a deterministic order instead of racing it.
+    db.query("UPDATE command_outbox SET created_at = 1 WHERE command_id = 'cmd-1'").run();
+    db.query("UPDATE command_outbox SET created_at = 3 WHERE command_id = 'cmd-3'").run();
+
+    expect(o.queuedForSession("session-1").map((c) => c.commandId)).toEqual(["cmd-1", "cmd-3"]);
+  });
+
+  /**
+   * §"Resume semantics": a run that becomes queued must not keep the
+   * `resumeSessionId` its payload was built with at submit time — by the time
+   * it starts, the preceding run in that session may have produced a newer
+   * conversation id, and resuming the frozen one would resume a stale
+   * transcript.
+   *
+   * `requeue` is the second path into `queued` (the first is a dispatch that
+   * queues immediately, and the third is losing the active_runs race). A
+   * transient rejection takes a command that was **admitted** — so its payload
+   * does carry the field — and returns it to the queue, which is exactly the
+   * case that has to strip it.
+   */
+  test("requeue strips a frozen resumeSessionId and rewrites the fingerprint with it", async () => {
+    const { db, outbox: o } = outbox();
+    const resumeCommand = {
+      ...command,
+      payload: { prompt: "hello", resumeSessionId: "sdk-conversation-1" },
+      workspaceId: "workspace-1",
+    };
+    await o.enqueue(resumeCommand);
+    o.markRejected("cmd-1", "workspace_busy");
+
+    expect(o.requeue("cmd-1")).toBe("requeued");
+    const row = o.get("cmd-1");
+    expect(row?.deliveryState).toBe("queued");
+
+    // Absent, not merely falsy: an empty string would be the same bug.
+    const payload = (row as { payload: Record<string, unknown> }).payload;
+    expect("resumeSessionId" in payload).toBe(false);
+    // And nothing else in the payload moved.
+    expect(row?.payload).toEqual({ prompt: "hello" });
+
+    // The fingerprint describes the payload the runner will actually receive.
+    // A stale one makes the redelivery a `fingerprint_mismatch`, i.e. a
+    // command that can never be delivered again.
+    const stored = (
+      db.query("SELECT fingerprint FROM command_outbox WHERE command_id = 'cmd-1'").get() as {
+        fingerprint: string;
+      }
+    ).fingerprint;
+    expect(stored).toBe(
+      await fingerprintOf({
+        commandId: "cmd-1",
+        runnerId: "runner-a",
+        kind: "run.start",
+        payload: { prompt: "hello" },
+        issuedAt: command.issuedAt,
+      }),
+    );
+  });
+
+  test("requeue leaves a payload that never had resumeSessionId byte-for-byte alone", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({ ...command, workspaceId: "workspace-1" });
+    const before = db
+      .query("SELECT payload, fingerprint FROM command_outbox WHERE command_id = 'cmd-1'")
+      .get() as { payload: string; fingerprint: string };
+    o.markRejected("cmd-1", "draining");
+
+    expect(o.requeue("cmd-1")).toBe("requeued");
+
+    const after = db
+      .query("SELECT payload, fingerprint FROM command_outbox WHERE command_id = 'cmd-1'")
+      .get() as { payload: string; fingerprint: string };
+    // Rewriting an unrelated row's fingerprint would be silent corruption of
+    // the outbox's immutability contract.
+    expect(after).toEqual(before);
+  });
+
+  /**
+   * The path a profile run actually takes (§18.1): the runner receives
+   * `payload_secure` (opened) when one exists, and the redacted `payload`
+   * otherwise. Stripping only the redacted copy would leave the field the
+   * runner really executes, so both columns have to move together.
+   */
+  test("requeue strips resumeSessionId from the secure payload too, and hashes the redacted copy", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({
+      ...command,
+      payload: {
+        prompt: "hello",
+        resumeSessionId: "sdk-conversation-1",
+        profile: { apiKey: "[REDACTED]" },
+      },
+      payloadSecure: {
+        prompt: "hello",
+        resumeSessionId: "sdk-conversation-1",
+        profile: { apiKey: "sk-secret" },
+      },
+    });
+    o.markRejected("cmd-1", "workspace_busy");
+
+    expect(o.requeue("cmd-1")).toBe("requeued");
+
+    const row = db
+      .query("SELECT payload, payload_secure, fingerprint FROM command_outbox WHERE command_id = ?")
+      .get("cmd-1") as { payload: string; payload_secure: string; fingerprint: string };
+    expect(JSON.parse(row.payload)).toEqual({ prompt: "hello", profile: { apiKey: "[REDACTED]" } });
+    expect(JSON.parse(row.payload_secure)).toEqual({
+      prompt: "hello",
+      profile: { apiKey: "sk-secret" },
+    });
+    // The digest describes the redacted copy, which is what `fingerprintOf`
+    // hashes — not the clear one, whose key changes between dispatches.
+    expect(row.fingerprint).toBe(
+      await fingerprintOf({
+        commandId: "cmd-1",
+        runnerId: "runner-a",
+        kind: "run.start",
+        payload: { prompt: "hello", profile: { apiKey: "[REDACTED]" } },
+        issuedAt: command.issuedAt,
+      }),
+    );
   });
 });

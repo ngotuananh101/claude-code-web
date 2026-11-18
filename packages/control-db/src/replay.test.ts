@@ -484,4 +484,36 @@ describe("listing an owner's sessions", () => {
     const [summary] = listSessions(db, "owner-1");
     expect(summary?.sdkSessionId).toBeNull();
   });
+
+  test("a session whose only run is queued appears in the sidebar", () => {
+    const db = setup();
+    registerRunner(db, "runner-a", "user-1");
+    ensureSessionPin(db, {
+      sessionId: "session-queued",
+      ownerId: "user-1",
+      workspaceId: "ws-1",
+      runnerId: "runner-a",
+    });
+    db.prepare(
+      `INSERT INTO command_outbox
+         (command_id, runner_id, kind, payload, fingerprint, issued_at,
+          session_id, run_id, attempt_id, workspace_id, delivery_state,
+          attempt_count, requeue_count, created_at)
+       VALUES (?, ?, 'run.start', ?, ?, '2026-10-24T00:00:00.000Z',
+               ?, ?, ?, ?, 'queued', 0, 0, ?)`,
+    ).run(
+      "cmd-q",
+      "runner-a",
+      JSON.stringify({ prompt: "queued prompt" }),
+      "fp-q",
+      "session-queued",
+      "run-q",
+      "attempt-q",
+      "ws-1",
+      1,
+    );
+
+    expect(listSessions(db, "user-1").map((s) => s.sessionId)).toEqual(["session-queued"]);
+    expect(listSessions(db, "user-1")[0]).toMatchObject({ live: true, runnerId: "runner-a" });
+  });
 });

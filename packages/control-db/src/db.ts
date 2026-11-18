@@ -118,6 +118,8 @@ export function migrate(db: Database): void {
   // receives them over the authenticated socket. Nullable — commands without
   // secrets carry no secure payload and the dispatcher falls back to `payload`.
   addColumnIfMissing(db, "command_outbox", "payload_secure", "TEXT");
+  addColumnIfMissing(db, "command_outbox", "requeue_count", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "command_outbox", "queue_snapshot", "TEXT");
 
   // The drain query is "undelivered commands for one runner", so index exactly
   // that rather than scanning the table per reconnect.
@@ -132,6 +134,11 @@ export function migrate(db: Database): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS command_outbox_run
       ON command_outbox (run_id);
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS command_outbox_queued
+      ON command_outbox (runner_id, created_at) WHERE delivery_state = 'queued';
   `);
 
   // Server-side view of which run is live. This is what enforces §2.3's "one

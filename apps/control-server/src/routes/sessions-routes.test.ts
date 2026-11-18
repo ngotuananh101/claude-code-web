@@ -64,7 +64,21 @@ async function start() {
     outbox: new CommandOutbox(db),
   });
   const cookie = `cc_session=${await auth.issueAccessToken("user-1")}`;
-  return { db, url: `http://127.0.0.1:${handle.server.port}`, cookie, credential };
+  return { db, url: `http://127.0.0.1:${handle.server.port}`, cookie, credential, auth };
+}
+
+function dispatchRun(
+  url: string,
+  cookie: string,
+  prompt: string,
+  sessionId: string,
+  extra: Record<string, unknown> = {},
+) {
+  return fetch(`${url}/api/sessions/${sessionId}/runs`, {
+    method: "POST",
+    headers: { Origin: origin, Cookie: cookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, ...extra }),
+  });
 }
 
 async function connectSessionsRunner(
@@ -621,5 +635,74 @@ describe("session rename and delete routes", () => {
       headers: { Origin: origin, Cookie: cookie },
     });
     expect(response.status).toBe(404);
+  });
+
+  /**
+   * §"Admission and promotion", invariant 7: a slot release runs promotion
+   * immediately, with no timer. Deleting a session frees its active run, so the
+   * run queued behind it — on another session, on the same runner — must start
+   * in the same request. Without the promote it waits for the next unrelated
+   * trigger, which on an idle server is never.
+   */
+  test("DELETE /api/sessions/:id promotes the runner's queued work", async () => {
+    const { db, url, cookie, credential } = await start();
+    const inbox = runnerInbox();
+    const runner = await connectSessionsRunner(url, credential, inbox);
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    // session-a occupies the runner's one slot; session-b's run queues behind it.
+    const first = await dispatchRun(url, cookie, "one", "session-a");
+    expect(first.status).toBe(202);
+    const second = (await (await dispatchRun(url, cookie, "two", "session-b")).json()) as {
+      runId: string;
+      queued: boolean;
+    };
+    expect(second.queued).toBe(true);
+    // The queued run must not have reached the runner before the delete.
+    expect(runner.received.some((c) => c["runId"] === second.runId)).toBe(false);
+
+    const response = await fetch(`${url}/api/sessions/session-a`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie },
+    });
+    expect(response.status).toBe(200);
+
+    // Promoted and delivered, in the same request — no further trigger.
+    await waitFor(() =>
+      runner.received.some((c) => c["kind"] === "run.start" && c["runId"] === second.runId),
+    );
+    expect(db.query("SELECT run_id FROM active_runs").all()).toEqual([{ run_id: second.runId }]);
+  });
+
+  /**
+   * The delete route releases a slot before it knows whether the caller may
+   * delete this session. Another owner's session id must be a 404 that writes
+   * nothing — including no release of that session's active run, which would
+   * let any signed-in user free a slot they do not own.
+   */
+  test("DELETE of another owner's session releases nothing", async () => {
+    const { db, url, auth } = await start();
+    db.query(
+      "INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at) VALUES ('sess-mine', 'user-1', 'default', 'runner-a', ?)",
+    ).run(Date.now());
+    db.query(
+      `INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at)
+       VALUES ('run-mine', 'sess-mine', 'runner-a', 'attempt-mine', ?)`,
+    ).run(Date.now());
+
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-2", "other-owner", "hash", 1, Date.now());
+    const cookie2 = `cc_session=${await auth.issueAccessToken("user-2")}`;
+
+    const response = await fetch(`${url}/api/sessions/sess-mine`, {
+      method: "DELETE",
+      headers: { Origin: origin, Cookie: cookie2 },
+    });
+    expect(response.status).toBe(404);
+    // The victim's slot is untouched.
+    expect(db.query("SELECT run_id FROM active_runs WHERE run_id = 'run-mine'").get()).toEqual({
+      run_id: "run-mine",
+    });
   });
 });

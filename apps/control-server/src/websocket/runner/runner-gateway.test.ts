@@ -343,6 +343,237 @@ describe("runner gateway", () => {
     expect(gateway.stateOf("runner-a")).not.toBe("offline");
     expect(gateway.stateOf("runner-a")).toBe("connected");
   });
+
+  test("maxConcurrentRunsOf reflects the negotiated hello", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, maxConcurrentRuns: 3 } }),
+    );
+
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBe(3);
+  });
+
+  test("the negotiated capacity is clamped by policy", () => {
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({ type: "hello", hello: { ...hello, maxConcurrentRuns: 9 } }),
+    );
+
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBe(4);
+  });
+
+  test("maxConcurrentRunsOf is undefined when nothing is live", () => {
+    expect(gateway.maxConcurrentRunsOf("runner-a")).toBeUndefined();
+  });
+
+  test("a reconcile that terminalizes a run reports it before the runner is ready", () => {
+    const runs = new RunRegistry();
+    runs.createRun({
+      runId: "run-1",
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runnerId: "runner-a",
+    });
+
+    const events: Array<{ kind: "terminal"; runId: string; stateAtCall: string | undefined }> = [];
+    const readyCalls: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      runs,
+      onRunTerminal: (runnerId, runId) => {
+        events.push({ kind: "terminal", runId, stateAtCall: gateway.stateOf(runnerId) });
+      },
+      onReady: (runnerId) => {
+        readyCalls.push(runnerId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(events).toEqual([{ kind: "terminal", runId: "run-1", stateAtCall: "connected" }]);
+    expect(readyCalls).toEqual(["runner-a"]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("a reconcile that terminalizes nothing fires no hook", () => {
+    const runs = new RunRegistry();
+    const events: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      runs,
+      onRunTerminal: (_runnerId, runId) => {
+        events.push(runId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(events).toEqual([]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("a run supplied only by the durable inventory terminalizes and reports", () => {
+    // Production never calls `createRun`; the inventory comes from
+    // `active_runs`. A run the registry does not hold must still reach
+    // `onRunTerminal`, or its slot is never freed.
+    const events: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      serverRuns: (runnerId) =>
+        runnerId === "runner-a"
+          ? [
+              {
+                runId: "run-durable",
+                attemptId: "attempt-durable",
+                state: "running",
+                cancelRequested: false,
+              },
+            ]
+          : [],
+      onRunTerminal: (_runnerId, runId) => {
+        events.push(runId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(events).toEqual(["run-durable"]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("the durable inventory is scoped to the asking runner", () => {
+    const asked: string[] = [];
+    const events: Array<{ runnerId: string; runId: string }> = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      serverRuns: (runnerId) => {
+        asked.push(runnerId);
+        return runnerId === "runner-a"
+          ? [
+              {
+                runId: "run-durable",
+                attemptId: "attempt-durable",
+                state: "running",
+                cancelRequested: false,
+              },
+            ]
+          : [];
+      },
+      onRunTerminal: (runnerId, runId) => {
+        events.push({ runnerId, runId });
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    expect(asked).toEqual(["runner-a"]);
+    expect(events).toEqual([{ runnerId: "runner-a", runId: "run-durable" }]);
+  });
+
+  test("a durable run the runner reports terminal is adopted, not interrupted", () => {
+    const events: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      serverRuns: () => [
+        {
+          runId: "run-durable",
+          attemptId: "attempt-durable",
+          state: "running",
+          cancelRequested: false,
+        },
+      ],
+      onRunTerminal: (_runnerId, runId) => {
+        events.push(runId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "reconcile",
+        runner: [{ runId: "run-durable", attemptId: "attempt-durable", state: "completed" }],
+      }),
+    );
+
+    // One report per run, whatever the action — never two.
+    expect(events).toEqual(["run-durable"]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("a terminal run absent from the durable inventory fires no hook", () => {
+    // The inventory is the authority on what is still live. A run it does not
+    // list has already been terminalized (its `active_runs` row is gone), so a
+    // late action must not free a slot twice.
+    const events: string[] = [];
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      serverRuns: () => [],
+      onRunTerminal: (_runnerId, runId) => {
+        events.push(runId);
+      },
+    });
+
+    const { socket } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    gateway.handleMessage(
+      socket,
+      JSON.stringify({
+        type: "reconcile",
+        runner: [{ runId: "run-gone", attemptId: "attempt-gone", state: "completed" }],
+      }),
+    );
+
+    expect(events).toEqual([]);
+    expect(gateway.stateOf("runner-a")).toBe("ready");
+  });
+
+  test("a durable inventory read that throws refuses the reconcile, not the socket", () => {
+    const gateway = new RunnerGateway({
+      policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
+      verifyCredential: () => ({ ok: true, runnerId: "runner-a", ownerId: "owner-1" }),
+      serverRuns: () => {
+        throw new Error("database is gone");
+      },
+    });
+
+    const { socket, sent, closed } = makeSocket();
+    gateway.handleOpen(socket, { authorization: "Bearer cck_valid" });
+    gateway.handleMessage(socket, JSON.stringify({ type: "hello", hello }));
+    const result = gateway.handleMessage(socket, JSON.stringify({ type: "reconcile", runner: [] }));
+
+    // Never promote on half an inventory; leave the runner `connected` so a
+    // retry is legal, and never drop the socket for a server-side fault.
+    expect(result).toEqual({ ok: false, reason: "runs_unavailable" });
+    expect(sent.at(-1)).toMatchObject({ type: "error", reason: "runs_unavailable" });
+    expect(closed).toEqual([]);
+    expect(gateway.stateOf("runner-a")).toBe("connected");
+  });
 });
 
 describe("event ingestion", () => {

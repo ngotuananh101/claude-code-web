@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { migrateRunnerDb } from "./db.ts";
-import { acceptCommand, type CommandEnvelope } from "./inbox.ts";
+import { acceptCommand, type CommandEnvelope, discardCommand } from "./inbox.ts";
 
 function freshDb(): Database {
   const db = new Database(":memory:");
@@ -99,5 +99,42 @@ describe("runner inbox", () => {
 
     const again = acceptCommand(db, command(), { now: 2_000 });
     expect(again).toEqual({ ok: true, duplicate: true, state: "finished" });
+  });
+
+  test("discarding an accepted row makes a later delivery fresh, not a duplicate", () => {
+    const db = freshDb();
+    acceptCommand(db, command(), { now: 1_000 });
+
+    expect(discardCommand(db, "cmd-1")).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM command_inbox").get()).toEqual({ n: 0 });
+
+    // The refused command never ran, so re-delivery under the same id must be
+    // able to execute it — not short-circuit on a row this runner abandoned.
+    expect(acceptCommand(db, command(), { now: 2_000 })).toEqual({
+      ok: true,
+      duplicate: false,
+      state: "accepted",
+    });
+  });
+
+  test("discarding never removes a row a run has advanced past accepted", () => {
+    // `running`, `finished` and `failed` all mean something actually executed
+    // the command. That row is the evidence, and deleting it would let a
+    // redelivery run the same command twice.
+    for (const state of ["running", "finished", "failed"] as const) {
+      const db = freshDb();
+      acceptCommand(db, command(), { now: 1_000 });
+      db.prepare("UPDATE command_inbox SET state = ? WHERE command_id = ?").run(state, "cmd-1");
+
+      expect(discardCommand(db, "cmd-1")).toBe(false);
+      expect(
+        db.prepare("SELECT state FROM command_inbox WHERE command_id = ?").get("cmd-1"),
+      ).toEqual({ state });
+    }
+  });
+
+  test("discarding an unknown command is a no-op", () => {
+    const db = freshDb();
+    expect(discardCommand(db, "cmd-missing")).toBe(false);
   });
 });

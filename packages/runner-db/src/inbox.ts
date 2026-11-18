@@ -131,3 +131,30 @@ function reject(db: Database, commandId: string, reason: string, now: number): v
     now,
   );
 }
+
+/**
+ * Un-claim a command this delivery accepted but never executed.
+ *
+ * `acceptCommand` writes the row before anything else has decided whether the
+ * command can run. When the caller then refuses it *and the server will retry
+ * the same command id*, the row must not survive: the command never ran, so a
+ * retry answered as a duplicate would strand the run forever. That is the
+ * `workspace_busy` path — the one refusal the control server classifies as
+ * transient and requeues under the same id. The permanent refusals
+ * (`unknown_workspace`, `unsupported_command`, `attempt_exists`) are never
+ * redelivered, and their rows stay.
+ *
+ * Only a row still in `accepted` is removed. Anything further along —
+ * `running`, `finished`, `failed` — means something else actually executed the
+ * command, and that row is the evidence that stops a redelivery from running
+ * it a second time. Deleting it would trade a stranded run for a duplicated
+ * one.
+ *
+ * Returns whether a row was removed.
+ */
+export function discardCommand(db: Database, commandId: string): boolean {
+  const result = db
+    .prepare("DELETE FROM command_inbox WHERE command_id = ? AND state = 'accepted'")
+    .run(commandId);
+  return result.changes === 1;
+}

@@ -76,9 +76,9 @@ export function usageStats(
     });
   }
 
-  // Sessions and runs count what the journal (or the dispatch table, for a
-  // run in flight that has not journaled its first event yet) holds; events
-  // counts every row of every type.
+  // Sessions and runs count what the journal (or the dispatch/outbox tables,
+  // for a run in flight or queued that has not journaled its first event yet)
+  // holds; events counts every row of every type.
   const counts = db
     .prepare(
       `SELECT
@@ -88,6 +88,12 @@ export function usageStats(
             UNION
             SELECT a.session_id AS id FROM active_runs a
               JOIN runners r ON r.id = a.runner_id WHERE r.owner_id = ?
+            UNION
+            SELECT c.session_id AS id FROM command_outbox c
+              JOIN runners r ON r.id = c.runner_id WHERE r.owner_id = ?
+              AND c.kind = 'run.start'
+              AND c.delivery_state IN ('queued', 'pending', 'sent')
+              AND c.session_id IS NOT NULL
          ) AS u) AS sessions,
          (SELECT COUNT(*) FROM (
             SELECT e.run_id AS id FROM run_events e
@@ -95,11 +101,17 @@ export function usageStats(
             UNION
             SELECT a.run_id AS id FROM active_runs a
               JOIN runners r ON r.id = a.runner_id WHERE r.owner_id = ?
+            UNION
+            SELECT c.run_id AS id FROM command_outbox c
+              JOIN runners r ON r.id = c.runner_id WHERE r.owner_id = ?
+              AND c.kind = 'run.start'
+              AND c.delivery_state IN ('queued', 'pending', 'sent')
+              AND c.run_id IS NOT NULL
          ) AS u) AS runs,
          (SELECT COUNT(*) FROM run_events e
             JOIN runners r ON r.id = e.runner_id WHERE r.owner_id = ?) AS events`,
     )
-    .get(ownerId, ownerId, ownerId, ownerId, ownerId) as {
+    .get(ownerId, ownerId, ownerId, ownerId, ownerId, ownerId, ownerId) as {
     sessions: number;
     runs: number;
     events: number;

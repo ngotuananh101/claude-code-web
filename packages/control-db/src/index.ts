@@ -31,7 +31,10 @@ export {
   type DeliveryState,
   type EnqueueInput,
   fingerprintOf,
+  fingerprintOfSync,
+  MAX_REQUEUES,
   type OutboxCommand,
+  type QueueSnapshot,
 } from "./command-outbox.ts";
 export { migrate } from "./db.ts";
 export {
@@ -65,6 +68,7 @@ export {
   sessionOwner,
   sessionWatermark,
 } from "./replay.ts";
+export { type QueuedRunSummary, queuedRunsForSession } from "./run-queue.ts";
 export {
   issueRunnerCredential,
   revokeRunner,
@@ -95,12 +99,14 @@ export {
 export {
   type DispatchDecision,
   type DispatchListener,
+  type DispatchOptions,
   type DispatchRequest,
   type RunnerCapacity,
   type RunnerState,
   Scheduler,
   type SchedulerOptions,
 } from "./scheduler.ts";
+export { serverRunsForRunner } from "./server-inventory.ts";
 export { readSessionHistory } from "./session-history.ts";
 export {
   deleteSession,

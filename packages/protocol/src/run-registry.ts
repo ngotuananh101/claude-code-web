@@ -133,7 +133,7 @@ export class RunRegistry {
     run.observedState = "running";
   }
 
-  apply(action: ReconcileAction): void {
+  apply(action: ReconcileAction): string[] {
     switch (action.kind) {
       case "quarantine": {
         this.#quarantined.push({
@@ -141,13 +141,13 @@ export class RunRegistry {
           attemptId: action.attemptId,
           reason: action.reason,
         });
-        return;
+        return [];
       }
 
       case "adopt_terminal": {
         const run = this.#current(action.runId, action.attemptId);
-        if (!run) return;
-        if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return; // idempotent
+        if (!run) return [];
+        if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return []; // idempotent
         run.observedState = action.state;
         run.desiredState =
           action.state === "completed"
@@ -155,23 +155,23 @@ export class RunRegistry {
             : action.state === "failed"
               ? "failed"
               : "cancelled";
-        return;
+        return [action.runId];
       }
 
       case "mark_interrupted": {
         const run = this.#current(action.runId, action.attemptId);
-        if (!run) return;
+        if (!run) return [];
         // Never overwrite a known terminal outcome with an interruption.
-        if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return;
+        if (run.observedState && TERMINAL_OBSERVED.has(run.observedState)) return [];
         run.observedState = "interrupted";
         run.desiredState = "interrupted";
-        return;
+        return [action.runId];
       }
 
       // The remaining actions describe facts the server records elsewhere
       // (command receipts, audit, evidence). They do not change run state.
       default:
-        return;
+        return [];
     }
   }
 

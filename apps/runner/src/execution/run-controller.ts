@@ -17,6 +17,7 @@ import {
   addCustomWorkspace,
   beginAttempt,
   type CommandEnvelope,
+  discardCommand,
   finishAttempt,
   pendingApproval,
   recoverStaleAttempts,
@@ -308,10 +309,24 @@ export class RunController {
     });
 
     if (!begun.ok) {
-      return {
-        ...receipt(parsed, false),
-        reason: begun.reason === "workspace_locked" ? "workspace_busy" : "attempt_exists",
-      };
+      if (begun.reason === "workspace_locked") {
+        // Forget the inbox row ONLY here. `workspace_busy` is the one refusal
+        // the server treats as transient: `handleRejectedStart` requeues the
+        // command under the SAME id and delivers it again. If the row survived,
+        // that delivery would be answered as a duplicate and the run would be
+        // stranded forever — with its slot, session and workspace behind it.
+        // Discarding is safe because `beginAttempt`'s failure rolled its
+        // transaction back: no attempt row and no lock were written, so nothing
+        // claims this command and it never ran. The delete is further guarded
+        // to `state = 'accepted'` (§9.3).
+        discardCommand(this.#db, parsed.commandId);
+        return { ...receipt(parsed, false), reason: "workspace_busy" };
+      }
+      // `attempt_exists`: `local_attempts` already holds this attempt, so the
+      // command may genuinely have run. That row is evidence, not a claim to
+      // forget — keep the inbox row. The server treats this refusal as
+      // permanent and never redelivers it.
+      return { ...receipt(parsed, false), reason: "attempt_exists" };
     }
 
     // The attempt is recorded, so the run is now this process's responsibility.

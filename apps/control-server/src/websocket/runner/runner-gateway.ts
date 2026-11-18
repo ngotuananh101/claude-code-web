@@ -41,6 +41,7 @@ import {
   RunRegistry,
   reconcile,
   type ServerPolicy,
+  type ServerRunState,
   toServerRunState,
 } from "@cc-web/protocol";
 
@@ -62,7 +63,9 @@ export type RefusalReason =
   | "already_negotiated"
   | "not_ready"
   | "unknown_message"
-  | "workspaces_unavailable";
+  | "workspaces_unavailable"
+  /** The durable run inventory could not be read (reconciliation). */
+  | "runs_unavailable";
 
 export type HandleResult =
   | { ok: true }
@@ -100,6 +103,8 @@ type Connection = {
    * the permission gates read, this is what the capabilities dialog renders.
    */
   runnerCapabilities?: RunnerCapabilities;
+  /** The negotiated maximum concurrent runs for this connection. */
+  maxConcurrentRuns: number;
 };
 
 /** The subset of `ServerWebSocket` used here; keeps tests free of a real server. */
@@ -120,11 +125,29 @@ type GatewayOptions = {
    */
   runs?: RunRegistry;
   /**
+   * Supplies the server's durable view of the runs assigned to this runner:
+   * the production source of the reconcile inventory (§14.3). `active_runs` is
+   * where a slot actually lives, and unlike the in-memory registry it survives
+   * a restart — so a runner that reconnects after crashing is reconciled
+   * against what the server durably knows, not against an empty map.
+   *
+   * Injected, like `onReceipt` and `onEvents`: this class deliberately knows
+   * nothing about a database. When absent the registry above is used instead,
+   * which keeps transport tests and the reconnect-fence script unchanged.
+   */
+  serverRuns?: (runnerId: string) => ServerRunState[];
+  /**
    * Called after a successful reconciliation promotes the runner, and only
    * then: §14.3 step 6 says ready first, dispatch second. The hook exists so the
    * drain lives in the dispatcher rather than in the gateway's message loop.
    */
   onReady?: (runnerId: string) => void;
+  /**
+   * Called once per run terminalized by reconciliation, before the connection
+   * becomes `ready` and before `onReady`. Never fired when nothing is
+   * terminalized.
+   */
+  onRunTerminal?: (runnerId: string, runId: string) => void;
   /**
    * Called for every receipt a runner sends. Injected rather than handled here
    * because delivery state belongs to the outbox, and this class deliberately
@@ -182,7 +205,9 @@ export class RunnerGateway {
   readonly #verifyCredential: (credential: string) => CredentialCheck;
   readonly #connections: ConnectionRegistry;
   readonly #runs: RunRegistry;
+  readonly #serverRuns: ((runnerId: string) => ServerRunState[]) | undefined;
   readonly #onReady: ((runnerId: string) => void) | undefined;
+  readonly #onRunTerminal: ((runnerId: string, runId: string) => void) | undefined;
   readonly #onReceipt: ((runnerId: string, receipt: CommandReceipt) => void) | undefined;
   readonly #onEvents:
     | ((runnerId: string, events: RunnerEvent[]) => Array<{ attemptId: string; through: number }>)
@@ -199,7 +224,9 @@ export class RunnerGateway {
     this.#verifyCredential = options.verifyCredential;
     this.#connections = options.connections ?? new ConnectionRegistry();
     this.#runs = options.runs ?? new RunRegistry();
+    this.#serverRuns = options.serverRuns;
     this.#onReady = options.onReady;
+    this.#onRunTerminal = options.onRunTerminal;
     this.#onReceipt = options.onReceipt;
     this.#onEvents = options.onEvents;
     this.#onAbandonApproval = options.onAbandonApproval;
@@ -275,6 +302,7 @@ export class RunnerGateway {
       state: "connected",
       capabilities: [],
       models: [],
+      maxConcurrentRuns: 0,
     });
 
     // Close the socket this one replaced, rather than waiting for it to speak.
@@ -421,6 +449,14 @@ export class RunnerGateway {
   }
 
   /**
+   * The negotiated maximum concurrent runs for this runner, or undefined when
+   * nothing is live — deliberately like `capabilitiesOf`.
+   */
+  maxConcurrentRunsOf(runnerId: string): number | undefined {
+    return this.#live.get(runnerId)?.maxConcurrentRuns;
+  }
+
+  /**
    * The catalogue the runner's hello discovered (§4.1): commands, plugins, MCP
    * servers and agents. `undefined` when nothing is live — the same lifetime as
    * `modelsOf`'s answer, and read the same way: absence means "unknown", never
@@ -502,6 +538,7 @@ export class RunnerGateway {
     connection.capabilities = [...result.capabilities];
     connection.models = [...result.models];
     connection.runnerCapabilities = result.runnerCapabilities;
+    connection.maxConcurrentRuns = result.negotiation.policy.maxConcurrentRuns;
     // Still `connected`: §14.3 requires reconciliation before any dispatch.
     connection.state = "connected";
 
@@ -549,10 +586,21 @@ export class RunnerGateway {
     // Stored even when reconciliation then blocks (contradictory_inventory):
     // a blocked runner is never `ready`, so placement cannot act on it.
 
-    const result = reconcile({
-      server: this.#serverInventory(connection),
-      runner,
-    });
+    // Read once: the same list is reconciled against and consulted below, so
+    // a supplier that changes its answer mid-message cannot make the gateway
+    // fire a hook for a run it never reconciled.
+    let inventory: ServerRunState[];
+    try {
+      inventory = this.#serverInventory(connection);
+    } catch {
+      // The durable read failed. Refuse over the still-open socket and leave
+      // the runner `connected`: a promotion decided from half an inventory is
+      // exactly what reconciliation exists to prevent, and a retry is legal
+      // because nothing was promoted.
+      return this.#refuse(connection, "runs_unavailable");
+    }
+
+    const result = reconcile({ server: inventory, runner });
 
     if (!result.ready) {
       // Do not promote, and do not apply: contradictory evidence must not be
@@ -562,10 +610,32 @@ export class RunnerGateway {
       return { ok: true };
     }
 
+    const reported = new Set<string>();
+    const report = (runId: string): void => {
+      if (reported.has(runId)) return;
+      reported.add(runId);
+      this.#onRunTerminal?.(runnerId, runId);
+    };
+
     for (const action of result.actions) {
-      this.#runs.apply(action);
-      // The registry's apply covers run state; an abandoned approval is the
-      // projection's to close, and it reaches the projection through the hook.
+      for (const runId of this.#runs.apply(action)) report(runId);
+      // The registry only knows runs `createRun` was called for, and the
+      // production server never calls it. A run supplied by the durable
+      // inventory (`active_runs`, the source of a slot) is therefore invisible
+      // to `apply`, and the action itself is the terminalization: `reconcile`
+      // emits `mark_interrupted` only for a server state that is not terminal,
+      // and `adopt_terminal` only against a terminal report. A run already
+      // terminal has no `active_runs` row, so it never reaches this branch.
+      if (
+        (action.kind === "mark_interrupted" || action.kind === "adopt_terminal") &&
+        !reported.has(action.runId) &&
+        this.#runs.get(action.runId) === undefined &&
+        inventory.some((run) => run.runId === action.runId && run.attemptId === action.attemptId)
+      ) {
+        report(action.runId);
+      }
+      // An abandoned approval is the projection's to close, and it reaches the
+      // projection through the hook.
       if (action.kind === "abandon_approval") {
         this.#onAbandonApproval?.(runnerId, { runId: action.runId, attemptId: action.attemptId });
       }
@@ -696,10 +766,17 @@ export class RunnerGateway {
     return { ok: true };
   }
 
-  #serverInventory(connection: Connection): Array<ReturnType<typeof toServerRunState>> {
-    // Scoped to this runner's sessions. A registry shared across runners would
-    // otherwise reconcile work belonging to someone else.
-    const inventory: Array<ReturnType<typeof toServerRunState>> = [];
+  #serverInventory(connection: Connection): ServerRunState[] {
+    // The durable supplier is the production source: `active_runs` survives a
+    // restart and is where the slot lives. The registry is the fallback for
+    // embedders (transport tests, the reconnect-fence script) that have no
+    // database behind the gateway.
+    //
+    // Scoped to this runner's sessions either way. A registry shared across
+    // runners would otherwise reconcile work belonging to someone else.
+    if (this.#serverRuns) return this.#serverRuns(connection.socket.data.runnerId);
+
+    const inventory: ServerRunState[] = [];
     for (const run of this.#runs.runsFor(connection.socket.data.runnerId)) {
       inventory.push(toServerRunState(run));
     }

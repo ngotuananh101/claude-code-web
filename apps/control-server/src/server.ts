@@ -24,8 +24,8 @@ import {
   projectScheduleEvent,
   readSessionEvents,
   readSessionHistory,
-  reopenRejectedSchedule,
   Scheduler,
+  serverRunsForRunner,
   sessionEarliest,
   sessionOwner,
   sessionWatermark,
@@ -39,6 +39,7 @@ import type { AuthService } from "./auth/auth-service.ts";
 import { clientKey, createRateLimiter, type RateLimiter } from "./auth/rate-limit.ts";
 import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import { Dispatcher, openSealedPayload } from "./dispatch/dispatcher.ts";
+import { handleRejectedStart } from "./dispatch/requeue.ts";
 import { dispatchTelegramNotification, NOTIFIABLE_EVENT_TYPES } from "./notifications/telegram.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
@@ -88,7 +89,7 @@ import {
   handleRevokeRunner,
   handleUpdateRunnerName,
 } from "./routes/runners-routes.ts";
-import { handleCancelRun, handleDispatchRun } from "./routes/runs-routes.ts";
+import { handleCancelRun, handleDispatchRun, handleSessionQueue } from "./routes/runs-routes.ts";
 import { handleCancelSchedule, handleListSchedules } from "./routes/schedules-routes.ts";
 import {
   handleDeleteSession,
@@ -240,9 +241,21 @@ export function createServer(options: ServerOptions): ServerHandle {
 
   const runnerGateway = new RunnerGateway({
     runs,
+    // §14.3: reconciliation's server-side inventory comes from durable state.
+    // `active_runs` is where a slot actually lives; the in-memory registry is
+    // never populated in production (nothing calls `createRun`), so reading it
+    // here meant a crashed runner's accepted run held its session forever and
+    // the queued run behind it never promoted. A read failure is a fault, not
+    // a protocol violation: the gateway refuses the reconcile over the still-
+    // open socket and leaves the runner `connected`, so it can retry.
+    serverRuns: (runnerId) => serverRunsForRunner(options.db, runnerId),
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,
-    onReady: (runnerId) => dispatcher?.drain(runnerId),
+    onReady: (runnerId) => promoteRunner(runnerId),
+    onRunTerminal: (_runnerId, runId) => {
+      const freed = scheduler.release(runId);
+      if (freed !== undefined) promoteRunner(freed);
+    },
     onReceipt: (runnerId, receipt) => dispatcher?.handleReceipt(runnerId, receipt),
     // §14.3: an abandoned approval's cards must not sit pending forever. The
     // projection closes the rows here, CAS-only, when reconciliation proves the
@@ -365,7 +378,8 @@ export function createServer(options: ServerOptions): ServerHandle {
           event.type === "run.failed" ||
           event.type === "run.interrupted"
         ) {
-          scheduler.release(event.runId);
+          const freed = scheduler.release(event.runId);
+          if (freed !== undefined) promoteRunner(freed);
         }
 
         // N1 notifications: one bounded summary per stored, notifiable
@@ -433,13 +447,28 @@ export function createServer(options: ServerOptions): ServerHandle {
       outbox,
       gateway: runnerGateway,
       onRejectedStart: (runId, commandId, reason) => {
-        scheduler.release(runId);
-        // §11.5: a scheduled one-shot the runner refused never ran. Its slot
-        // is unspent, so put the row back for the next tick instead of losing
-        // the only fire silently. A mark that the run does not belong to a
-        // schedule, or that it already started, reopens nothing.
-        reopenRejectedSchedule(options.db, outbox, { commandId, runId });
-        console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
+        const result = handleRejectedStart({
+          db: options.db,
+          outbox,
+          scheduler,
+          capacityOf,
+          publish: (event) => browserGateway.publish(event),
+          runId,
+          commandId,
+          reason,
+        });
+        if (result === "rejected") {
+          console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
+        }
+        // `abandoned` means the requeue ceiling was hit and the server journaled
+        // `run.failed { reason: "queue_abandoned" }` instead of retrying. The
+        // operator sees a failed turn in the browser, so the server log must
+        // say why rather than letting the run vanish from the retry loop.
+        if (result === "abandoned") {
+          console.warn(
+            `run ${runId} abandoned after too many requeues (${reason}); journaled run.failed queue_abandoned`,
+          );
+        }
       },
       openSecurePayload: (stored) => openSealedPayload(stored, (sealed) => secretBox.open(sealed)),
     });
@@ -457,6 +486,22 @@ export function createServer(options: ServerOptions): ServerHandle {
     onDispatched: (runnerId) => dispatcher?.drain(runnerId),
     sealSecurePayload: (value) => secretBox.seal(JSON.stringify(value)),
   });
+
+  const capacityOf = (runnerId: string) =>
+    scheduler.capacityFor(runnerId, {
+      runnerId,
+      state: runnerGateway.stateOf(runnerId),
+      maxConcurrentRuns: runnerGateway.maxConcurrentRunsOf(runnerId) ?? 1,
+      activeRuns: 0,
+    });
+
+  const promoteRunner = (runnerId: string): void => {
+    // promote() calls onDispatched (→ drain) when it admits rows; when it admits
+    // nothing we still need a drain so pending/sent commands reach a runner that
+    // just became ready (no second drain on top of an admission).
+    const admitted = scheduler.promote(runnerId, capacityOf(runnerId));
+    if (admitted.length === 0) dispatcher?.drain(runnerId);
+  };
 
   // §11.5: the server owns the clock. The loop dispatches due schedules as
   // ordinary runs through the same scheduler — capacity, pins and the outbox
@@ -636,10 +681,10 @@ export function createServer(options: ServerOptions): ServerHandle {
             options,
             allowed,
             browserGateway,
-            scheduler,
             runnerGateway,
             dispatcher,
             sessionId,
+            promoteRunner,
           );
         }
       }
@@ -775,6 +820,17 @@ export function createServer(options: ServerOptions): ServerHandle {
           runnerGateway,
           scheduler,
           decodeURIComponent(runsMatch[1] ?? ""),
+        );
+      }
+
+      const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue$/);
+      if (queueMatch && request.method === "GET") {
+        return handleSessionQueue(
+          request,
+          options,
+          allowed,
+          browserGateway,
+          decodeURIComponent(queueMatch[1] ?? ""),
         );
       }
 

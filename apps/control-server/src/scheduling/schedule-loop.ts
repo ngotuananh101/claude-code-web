@@ -33,8 +33,20 @@ import {
 export type ScheduleTickOptions = {
   db: Database;
   scheduler: Scheduler;
-  /** The live view of each runner; only `stateOf` is needed to build capacity. */
-  runnerGateway: { stateOf(runnerId: string): RunnerState };
+  /**
+   * The live view of each runner: state and negotiated concurrency for capacity.
+   *
+   * `maxConcurrentRunsOf` is **required**, not optional. It used to be
+   * optional, and the tick wrote `?.() ?? 1` — so any wiring that forgot it
+   * fell back to the literal this feature exists to remove, and a runner
+   * advertising 2 had half its scheduled capacity refused as
+   * `runner_at_capacity` with nothing to notice. A missing supplier is a wiring
+   * error the compiler should catch, not a silent downgrade.
+   */
+  runnerGateway: {
+    stateOf(runnerId: string): RunnerState;
+    maxConcurrentRunsOf(runnerId: string): number | undefined;
+  };
   now?: () => number;
   log?: (message: string) => void;
 };
@@ -132,9 +144,10 @@ async function fireSchedule(
     scheduler.capacityFor(pin.runnerId, {
       runnerId: pin.runnerId,
       state,
-      maxConcurrentRuns: 1,
+      maxConcurrentRuns: runnerGateway.maxConcurrentRunsOf(pin.runnerId) ?? 1,
       activeRuns: 0,
     }),
+    { queue: false },
   );
 
   // A refusal (offline, not ready, at capacity, session busy) means "not now":
