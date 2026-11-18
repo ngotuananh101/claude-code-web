@@ -218,6 +218,7 @@ Bun.serve({
           runId: "run-" + run,
           attemptId: "attempt-" + run,
           workspaceId: "workspace-1",
+          ownerId: "user-1",
           prompt: "hello from the harness, run " + run,
         },
         { runnerId: "runner-a", state: handle.runnerGateway.stateOf("runner-a"), maxConcurrentRuns: 1, activeRuns: 0 },

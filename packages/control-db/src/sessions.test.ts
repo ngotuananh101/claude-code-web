@@ -63,6 +63,28 @@ describe("session pins", () => {
 
     expect(sessionPin(db, "nobody")).toBeUndefined();
   });
+
+  test("a pin missing a required field is refused, not silently dropped", () => {
+    const db = setup();
+
+    // A NOT NULL violation inside INSERT OR IGNORE is swallowed: the insert
+    // writes nothing, no error surfaces, and `sessionPin` returns undefined —
+    // the caller then reports whatever "no pin" means to it. A dispatch that
+    // forgot `ownerId` would surface as `session_pinned`, pointing at the wrong
+    // cause entirely. An untyped embedder (a probe written as a template
+    // string, a stale client) is exactly how that arrives; add the row's own
+    // constraint to the reason instead of letting it vanish.
+    expect(() =>
+      ensureSessionPin(db, {
+        sessionId: "session-1",
+        ownerId: undefined as unknown as string,
+        workspaceId: "ws",
+        runnerId: "runner-a",
+      }),
+    ).toThrow(/ownerId/);
+
+    expect(sessionPin(db, "session-1")).toBeUndefined();
+  });
 });
 
 describe("session rename and delete", () => {

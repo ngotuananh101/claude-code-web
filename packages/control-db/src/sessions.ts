@@ -33,6 +33,19 @@ export type EnsureSessionPinInput = {
 };
 
 export function ensureSessionPin(db: Database, input: EnsureSessionPinInput): void {
+  // `INSERT OR IGNORE` swallows a NOT NULL violation exactly as it swallows the
+  // duplicate-key race it exists for: the write vanishes, no error is raised,
+  // and the next `sessionPin` reads back "no pin". A caller that then refuses on
+  // a pin contradiction reports the wrong cause — a dispatch missing `ownerId`
+  // surfaced as `session_pinned`, which reads as "this session lives on another
+  // runner". Both cases are silent, so check the required fields here, where the
+  // field name is still known. An embedder inside a template string sees no type
+  // error for this, which is how it reaches production at all.
+  requirePinField(input.ownerId, "ownerId");
+  requirePinField(input.workspaceId, "workspaceId");
+  requirePinField(input.runnerId, "runnerId");
+  requirePinField(input.sessionId, "sessionId");
+
   db.query(
     `INSERT OR IGNORE INTO sessions (id, owner_id, workspace_id, runner_id, created_at, title)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -44,6 +57,13 @@ export function ensureSessionPin(db: Database, input: EnsureSessionPinInput): vo
     Date.now(),
     input.title ?? null,
   );
+}
+
+/** The `sessions` columns are NOT NULL; reject a missing value before SQLite eats it. */
+function requirePinField(value: unknown, field: string): void {
+  if (typeof value !== "string" || value === "") {
+    throw new TypeError(`ensureSessionPin: ${field} is required and must be a non-empty string`);
+  }
 }
 
 export function updateSessionTitle(
