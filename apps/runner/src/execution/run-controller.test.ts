@@ -4,11 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  acquireWorkspaceLock,
   attemptState,
   insertPendingApproval,
   lockHolder,
   migrateRunnerDb,
   pendingApproval,
+  releaseAttempt,
 } from "@cc-web/runner-db";
 import type { SdkStream } from "./executor.ts";
 import { RunController } from "./run-controller.ts";
@@ -327,6 +329,87 @@ describe("workspace contention", () => {
 
     release();
     await controller.settle();
+  });
+
+  test("a start refused for a busy workspace runs when the server redelivers it", async () => {
+    const { db } = setup();
+    const held = holdableStream();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: held.sdk,
+    });
+
+    // An unrelated holder — a mutation sentinel, not an attempt — owns the
+    // workspace. Taken after construction because the boot sweep drops locks
+    // with no attempt row. The server classifies the refusal as transient and
+    // requeues the SAME command id; the runner must not answer that delivery
+    // as a duplicate of a command it never ran.
+    expect(acquireWorkspaceLock(db, "/home/runner/project", "revert:cmd-other", 1_000)).toBe(true);
+    const first = await controller.handle(command);
+    expect(first).toEqual({
+      commandId: "cmd-1",
+      attemptId: "attempt-1",
+      accepted: false,
+      reason: "workspace_busy",
+    });
+    // The refusal claimed nothing: the inbox row it wrote is gone.
+    expect(db.prepare("SELECT COUNT(*) AS n FROM command_inbox").get()).toEqual({ n: 0 });
+    expect(attemptState(db, "attempt-1")).toBeUndefined();
+
+    // The holder finishes; the server promotes the requeued command and
+    // redelivers it under its original id and payload.
+    releaseAttempt(db, "revert:cmd-other");
+
+    const second = await controller.handle(command);
+    expect(second).toEqual({ commandId: "cmd-1", attemptId: "attempt-1", accepted: true });
+
+    // Accepted is not enough: the attempt must actually be running, holding
+    // the very workspace the first delivery was refused for.
+    expect(attemptState(db, "attempt-1")).toBe("starting");
+    expect(lockHolder(db, "/home/runner/project")).toBe("attempt-1");
+
+    held.release();
+    await controller.settle();
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+  });
+
+  test("an attempt_exists refusal keeps the inbox row, because the attempt is evidence", async () => {
+    const { db } = setup();
+    const controller = new RunController({
+      db,
+      localRunnerId: "runner-a",
+      workspacePathFor: (id) => WORKSPACES.get(id),
+      sdk: () => (async function* () {})(),
+    });
+
+    // The attempt is already recorded — a run of this very command exists.
+    // Its inbox row is the record of that run, so a refusal that names this
+    // reason must not forget it: a redelivery that looked fresh would execute
+    // the command a second time.
+    db.prepare(
+      `INSERT INTO local_attempts (attempt_id, session_id, run_id, state, started_at, updated_at)
+       VALUES (?, ?, ?, 'finished', 1, 1)`,
+    ).run("attempt-1", "session-1", "run-1");
+
+    const refused = await controller.handle(command);
+    expect(refused).toEqual({
+      commandId: "cmd-1",
+      attemptId: "attempt-1",
+      accepted: false,
+      reason: "attempt_exists",
+    });
+    expect(db.prepare("SELECT state FROM command_inbox WHERE command_id = ?").get("cmd-1")).toEqual(
+      {
+        state: "accepted",
+      },
+    );
+
+    // And the row still short-circuits the redelivery, as guarantee #1 requires.
+    const redelivered = await controller.handle(command);
+    expect(redelivered.accepted).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM local_attempts").get()).toEqual({ n: 1 });
   });
 });
 

@@ -45,6 +45,7 @@ export {
   type AcceptResult,
   acceptCommand,
   type CommandEnvelope,
+  discardCommand,
   fingerprintCommand,
   type InboxState,
 } from "./inbox.ts";
