@@ -1293,9 +1293,9 @@ describe("POST /api/runs/:id/cancel", () => {
   });
 
   test("cancelling a queued run answers 202 and the runner never receives it", async () => {
-    const { url, cookie, credential } = await start();
+    const { db, url, cookie, credential } = await start();
     const inbox = runnerInbox();
-    const runner = await connectRunner(url, credential, inbox);
+    await connectRunner(url, credential, inbox);
     await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
 
     await dispatch(url, cookie, "one");
@@ -1314,10 +1314,24 @@ describe("POST /api/runs/:id/cancel", () => {
     expect(body).toMatchObject({ runId: second.runId, queued: true });
     expect("commandId" in body).toBe(false);
 
-    await Bun.sleep(50);
+    // The queued run never entered the journal, so cancellation retires its
+    // entry: the `run.start` row is rejected, no `run.cancel` was minted, and
+    // no slot was opened. That is the whole delivery surface — the dispatcher
+    // only sends outbox rows, so an outbox in this state can never reach the
+    // runner. A wall-clock sleep could only assert "nothing happened yet".
+    const rows = db
+      .query(
+        "SELECT kind, delivery_state, rejection_reason FROM command_outbox ORDER BY created_at",
+      )
+      .all() as Array<{ kind: string; delivery_state: string; rejection_reason: string | null }>;
+    expect(rows.filter((row) => row.kind === "run.cancel")).toEqual([]);
+    const cancelled = rows.filter((row) => row.delivery_state === "rejected");
+    expect(cancelled).toEqual([
+      { kind: "run.start", delivery_state: "rejected", rejection_reason: "cancelled" },
+    ]);
     expect(
-      runner.received.some((c) => c["kind"] === "run.cancel" && c["runId"] === second.runId),
-    ).toBe(false);
+      db.query("SELECT COUNT(*) AS n FROM active_runs WHERE run_id = ?").get(second.runId),
+    ).toEqual({ n: 0 });
   });
 
   test("an unknown run answers 404", async () => {
