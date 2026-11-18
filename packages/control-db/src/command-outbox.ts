@@ -25,8 +25,9 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import type { CommandKind } from "@cc-web/protocol";
-import { fingerprint } from "@cc-web/shared";
+import { canonicalize, fingerprint } from "@cc-web/shared";
 
 export type { CommandKind } from "@cc-web/protocol";
 
@@ -355,16 +356,60 @@ export class CommandOutbox {
       ? row.queue_snapshot
       : JSON.stringify({ runnerId: row.runner_id, workspaceId: row.workspace_id ?? null });
 
+    // §"Resume semantics": a queued run must not carry a frozen
+    // `resumeSessionId`. This is the path that starts from an **admitted**
+    // command — so its payload does carry the field — and returns it to the
+    // queue, where the runner must instead resolve the conversation as it
+    // stands when the run starts. Stripping it here, not at promotion, is what
+    // keeps the queue entry honest for its whole life in the queue.
+    //
+    // The payload the runner receives is `payload_secure` when one exists
+    // (§18.1) and the redacted `payload` otherwise, so both move together or
+    // the redaction would disagree with the live frame. The fingerprint is
+    // computed from the redacted copy, exactly like `fingerprintOf`, and moves
+    // with it in the same statement: a payload change with a stale fingerprint
+    // makes the redelivery a `fingerprint_mismatch`, i.e. a command the runner
+    // will refuse forever. A row that never carried the field is written back
+    // unchanged, fingerprint included — rewriting an unrelated row would be
+    // silent corruption of the outbox's immutability contract.
+    const redacted = JSON.parse(row.payload) as unknown;
+    const secure =
+      row.payload_secure === null ? undefined : (JSON.parse(row.payload_secure) as unknown);
+    const nextRedacted = withoutResume(redacted);
+    const nextSecure = secure === undefined ? undefined : withoutResume(secure);
+    const changed = nextRedacted !== undefined || nextSecure !== undefined;
+
+    const payloadValue = nextRedacted ?? redacted;
+    const secureValue = nextSecure ?? secure;
+    const fingerprintValue = changed
+      ? fingerprintOfSync({
+          commandId,
+          runnerId: row.runner_id,
+          kind: row.kind as CommandKind,
+          payload: payloadValue,
+          issuedAt: row.issued_at,
+        })
+      : row.fingerprint;
+
     this.#db
       .query(
         `UPDATE command_outbox
             SET delivery_state = 'queued',
                 requeue_count = requeue_count + 1,
                 rejection_reason = NULL,
-                queue_snapshot = ?
+                queue_snapshot = ?,
+                payload = ?,
+                payload_secure = ?,
+                fingerprint = ?
           WHERE command_id = ?`,
       )
-      .run(snapshot, commandId);
+      .run(
+        snapshot,
+        JSON.stringify(payloadValue ?? null),
+        secureValue === undefined ? null : JSON.stringify(secureValue ?? null),
+        fingerprintValue,
+        commandId,
+      );
     return "requeued";
   }
 
@@ -431,6 +476,47 @@ export async function fingerprintOf(input: EnqueueInput): Promise<string> {
     kind: input.kind,
     payload: input.payload ?? null,
   });
+}
+
+/**
+ * `fingerprintOf` without the await.
+ *
+ * `fingerprint` is async because it uses Web Crypto, which is the only digest
+ * API importable from the web bundle. Some transitions cannot yield: `requeue`
+ * rewrites payload and fingerprint in one statement precisely so no reader and
+ * no concurrent promote can observe a queued row that still means the old
+ * thing. `createHash` over the same canonical form produces a byte-identical
+ * digest — verified against the async path over unicode, null, undefined and
+ * numeric edge cases — so the two are interchangeable, not merely similar.
+ */
+export function fingerprintOfSync(input: EnqueueInput): string {
+  return createHash("sha256")
+    .update(
+      canonicalize({
+        commandId: input.commandId,
+        runnerId: input.runnerId,
+        kind: input.kind,
+        payload: input.payload ?? null,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+/**
+ * The payload with `resumeSessionId` removed, or `undefined` when it was not
+ * there to remove.
+ *
+ * Returning `undefined` for "nothing to do" is what lets `requeue` leave an
+ * unaffected row's bytes untouched instead of round-tripping it through
+ * `JSON.parse`/`JSON.stringify` for no reason.
+ */
+function withoutResume(payload: unknown): Record<string, unknown> | undefined {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  if (!("resumeSessionId" in record)) return undefined;
+  const { resumeSessionId: _dropped, ...rest } = record;
+  return rest;
 }
 
 function toCommand(row: Row): OutboxCommand {
