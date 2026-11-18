@@ -30,29 +30,36 @@ export function handleRejectedStart(
   const { db, outbox, scheduler, capacityOf, publish, runId, commandId, reason, now } = input;
 
   const row = outbox.get(commandId);
+
+  const promote = (runnerId: string | undefined): void => {
+    if (runnerId !== undefined) {
+      scheduler.promote(runnerId, capacityOf(runnerId));
+    }
+  };
+
   if (row === undefined) {
-    scheduler.release(runId);
+    promote(scheduler.release(runId));
     return "rejected";
   }
 
   if (!TRANSIENT_REASONS.has(reason)) {
-    scheduler.release(runId);
+    const freed = scheduler.release(runId);
     reopenRejectedSchedule(db, outbox, { commandId, runId });
+    promote(freed ?? row.runnerId);
     return "rejected";
   }
 
+  const freedRunnerId = scheduler.release(runId);
+  const promoteRunnerId = freedRunnerId ?? row.runnerId;
+
   if (row.deliveryState !== "rejected") {
-    scheduler.release(runId);
+    promote(promoteRunnerId);
     return "requeued";
   }
 
-  const runnerId = row.runnerId;
-  const freedRunnerId = scheduler.release(runId);
-  const promoteRunnerId = freedRunnerId ?? runnerId;
-
   const requeueResult = outbox.requeue(commandId);
   if (requeueResult === "requeued") {
-    scheduler.promote(promoteRunnerId, capacityOf(promoteRunnerId));
+    promote(promoteRunnerId);
     return "requeued";
   }
 
@@ -93,9 +100,11 @@ export function handleRejectedStart(
     } else {
       outbox.markRejected(commandId, "queue_abandoned");
     }
+    promote(promoteRunnerId);
     return "abandoned";
   }
 
   // "not_rejected" - command no longer in the expected state; avoid double work.
+  promote(promoteRunnerId);
   return "requeued";
 }
