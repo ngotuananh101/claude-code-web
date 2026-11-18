@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { ingestEvent, migrate } from "@cc-web/control-db";
+import { CommandOutbox, ingestEvent, migrate } from "@cc-web/control-db";
 import {
   type EventType,
   type SessionEventsFrame,
@@ -29,18 +29,29 @@ let handle: ServerHandle | undefined;
 
 const jwtSecret = new Uint8Array(32).fill(11);
 
-async function start(overrides: { allowedOrigins?: string[] } = {}) {
-  const db = new Database(":memory:");
+/**
+ * `db` and `outbox` are accepted for tests that must seed durable state
+ * *before* the server exists (a crashed run's `active_runs` row, a queued run
+ * in the outbox) — the server reads both through `options.db` and the injected
+ * outbox, so they must be the same instances.
+ */
+async function start(
+  overrides: { allowedOrigins?: string[]; db?: Database; outbox?: CommandOutbox } = {},
+) {
+  const db = overrides.db ?? new Database(":memory:");
   migrate(db);
-  db.query(
-    "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run("user-1", "owner", "hash", 1, Date.now());
+  if (db.query("SELECT 1 FROM users WHERE id = 'user-1'").get() === null) {
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-1", "owner", "hash", 1, Date.now());
+  }
 
   const auth = new AuthService({ db, signer: createSigner(jwtSecret) });
   handle = createServer({
     db,
     auth,
     allowedOrigins: overrides.allowedOrigins ?? [origin],
+    ...(overrides.outbox === undefined ? {} : { outbox: overrides.outbox }),
     verifyRunnerCredential: (credential) =>
       credential === "cck_valid"
         ? { ok: true, runnerId: "runner-a", ownerId: "user-1" }
@@ -151,6 +162,102 @@ describe("control server routes", () => {
 
     const response = await fetch(`${wsUrl.replace("ws://", "http://")}/ws/runner`);
     expect(response.status).toBe(401);
+  });
+
+  test("reconcile frees the slot of a crashed run and promotes its queued successor", async () => {
+    // The decisive test for the reconcile-release path, at the level where the
+    // bug lived: production never populated the gateway's in-memory registry,
+    // so an accepted run whose runner crashed held its active_runs row — and
+    // the queued run behind it on the same session — forever.
+    //
+    // Nothing here seeds the registry. The only state is durable: an
+    // active_runs row, a runners row, and a queued run.start in the outbox.
+    // If the gateway's inventory does not come from active_runs, this fails.
+    const db = new Database(":memory:");
+    migrate(db);
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-1", "owner", "hash", 1, Date.now());
+    const outbox = new CommandOutbox(db);
+    const { wsUrl } = await start({ db, outbox });
+
+    db.query("INSERT INTO runners (id, owner_id, created_at) VALUES (?, ?, ?)").run(
+      "runner-a",
+      "user-1",
+      1,
+    );
+    // The session is pinned to the runner, as every real session is after its
+    // first admitted dispatch (ADR-006). Promotion reads the pin.
+    db.query(
+      `INSERT INTO sessions (id, owner_id, workspace_id, runner_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run("session-1", "user-1", "workspace-1", "runner-a", 1);
+
+    // Run A is accepted and in flight; the runner dies with the row still there.
+    db.query(
+      "INSERT INTO active_runs (run_id, session_id, runner_id, attempt_id, dispatched_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("run-crashed", "session-1", "runner-a", "attempt-crashed", 1);
+    await outbox.enqueue({
+      commandId: "cmd-crashed",
+      runnerId: "runner-a",
+      kind: "run.start",
+      payload: { prompt: "crashed" },
+      issuedAt: "2026-11-18T00:00:00.000Z",
+      sessionId: "session-1",
+      runId: "run-crashed",
+      attemptId: "attempt-crashed",
+      workspaceId: "workspace-1",
+      deliveryState: "pending",
+    });
+
+    // Run B was dispatched while A held the session, so it is queued: no
+    // active_runs row, delivery_state 'queued', invisible to the dispatcher.
+    await outbox.enqueue({
+      commandId: "cmd-successor",
+      runnerId: "runner-a",
+      kind: "run.start",
+      payload: { prompt: "successor" },
+      issuedAt: "2026-11-18T00:00:01.000Z",
+      sessionId: "session-1",
+      runId: "run-successor",
+      attemptId: "attempt-successor",
+      workspaceId: "workspace-1",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "workspace-1" },
+    });
+
+    const client = await connect(`${wsUrl}/ws/runner`, { Authorization: "Bearer cck_valid" });
+    client.send({ type: "hello", hello });
+    await waitFor(() => client.messages.some((item) => item["type"] === "hello.ok"));
+
+    // An empty runner inventory: the crashed process is gone. The server's own
+    // durable inventory is what must notice the run is unaccounted for.
+    client.send({ type: "reconcile", runner: [] });
+    await waitFor(() => client.messages.some((item) => item["type"] === "reconcile.ok"));
+
+    // The dead run's slot is gone...
+    expect(db.query("SELECT run_id FROM active_runs ORDER BY run_id").all()).toEqual([
+      { run_id: "run-successor" },
+    ]);
+
+    // ...and the queued successor took it: promoted into active_runs and out
+    // of `queued`. It does not linger at `pending`: the same reconcile promotes
+    // the runner, and `onReady` drains, which marks the promoted command `sent`.
+    // Either non-queued state proves the promotion; `sent` further proves the
+    // successor actually reached this runner instead of deadlocking behind the
+    // crashed run.
+    const successor = outbox.get("cmd-successor");
+    expect(successor?.deliveryState).toBe("sent");
+    expect(
+      db.query("SELECT attempt_id FROM active_runs WHERE run_id = 'run-successor'").get(),
+    ).toEqual({ attempt_id: "attempt-successor" });
+    expect(
+      client.messages.some(
+        (item) =>
+          item["type"] === "command" &&
+          (item["command"] as Record<string, unknown>)["commandId"] === "cmd-successor",
+      ),
+    ).toBe(true);
   });
 
   test("an oversized inbound frame is refused at the transport (§12.6)", async () => {

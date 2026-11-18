@@ -105,6 +105,7 @@ export {
   Scheduler,
   type SchedulerOptions,
 } from "./scheduler.ts";
+export { serverRunsForRunner } from "./server-inventory.ts";
 export { readSessionHistory } from "./session-history.ts";
 export {
   deleteSession,

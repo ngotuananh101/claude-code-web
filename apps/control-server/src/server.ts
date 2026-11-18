@@ -25,6 +25,7 @@ import {
   readSessionEvents,
   readSessionHistory,
   Scheduler,
+  serverRunsForRunner,
   sessionEarliest,
   sessionOwner,
   sessionWatermark,
@@ -240,6 +241,14 @@ export function createServer(options: ServerOptions): ServerHandle {
 
   const runnerGateway = new RunnerGateway({
     runs,
+    // §14.3: reconciliation's server-side inventory comes from durable state.
+    // `active_runs` is where a slot actually lives; the in-memory registry is
+    // never populated in production (nothing calls `createRun`), so reading it
+    // here meant a crashed runner's accepted run held its session forever and
+    // the queued run behind it never promoted. A read failure is a fault, not
+    // a protocol violation: the gateway refuses the reconcile over the still-
+    // open socket and leaves the runner `connected`, so it can retry.
+    serverRuns: (runnerId) => serverRunsForRunner(options.db, runnerId),
     policy: { minProtocolVersion: 1, maxProtocolVersion: 1, maxConcurrentRuns: 4 },
     verifyCredential: options.verifyRunnerCredential,
     onReady: (runnerId) => promoteRunner(runnerId),
