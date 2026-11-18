@@ -460,6 +460,15 @@ export function createServer(options: ServerOptions): ServerHandle {
         if (result === "rejected") {
           console.warn(`runner rejected run.start ${commandId} for run ${runId}: ${reason}`);
         }
+        // `abandoned` means the requeue ceiling was hit and the server journaled
+        // `run.failed { reason: "queue_abandoned" }` instead of retrying. The
+        // operator sees a failed turn in the browser, so the server log must
+        // say why rather than letting the run vanish from the retry loop.
+        if (result === "abandoned") {
+          console.warn(
+            `run ${runId} abandoned after too many requeues (${reason}); journaled run.failed queue_abandoned`,
+          );
+        }
       },
       openSecurePayload: (stored) => openSealedPayload(stored, (sealed) => secretBox.open(sealed)),
     });

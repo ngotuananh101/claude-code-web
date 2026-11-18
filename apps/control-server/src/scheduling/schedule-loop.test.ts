@@ -107,7 +107,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -129,7 +129,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE + 90_000,
       log: () => {},
     });
@@ -159,7 +159,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -175,7 +175,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "offline" },
+      runnerGateway: { stateOf: () => "offline", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -185,7 +185,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -211,7 +211,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -222,10 +222,60 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
+    expect(commands(db)).toHaveLength(2);
+    expect(row(db)["state"]).toBe("done");
+  });
+
+  /**
+   * §"Negotiated concurrency": the literal 1 was hard-coded here, so the value
+   * the runner negotiated in `hello.ok` was discarded for scheduled runs. A
+   * runner advertising 2 had its second scheduled slot refused as
+   * `runner_at_capacity`, silently thinning the schedule's own concurrency.
+   */
+  test("a scheduled run admits up to the runner's negotiated concurrency", async () => {
+    const { db, scheduler } = setup();
+    project(db);
+    const negotiated = (): RunnerCapacity => ({
+      ...capacity(),
+      maxConcurrentRuns: 2,
+    });
+    // A live run on another session and another workspace takes one of the two
+    // slots without colliding with the scheduled run's session or workspace.
+    await scheduler.dispatch(
+      {
+        sessionId: "session-other",
+        runId: "run-other",
+        attemptId: "attempt-other",
+        workspaceId: "workspace-2",
+        prompt: "hello",
+        ownerId: "user-1",
+      },
+      negotiated(),
+    );
+
+    // The count comes from the gateway, never from a literal. A tick that fell
+    // back to 1 would refuse here as `runner_at_capacity` and leave the row due.
+    const asked: string[] = [];
+    await runScheduleTick({
+      db,
+      scheduler,
+      runnerGateway: {
+        stateOf: () => "ready",
+        maxConcurrentRunsOf: (runnerId) => {
+          asked.push(runnerId);
+          return 2;
+        },
+      },
+      now: () => NEXT_FIRE,
+      log: () => {},
+    });
+
+    expect(asked).toEqual(["runner-a"]);
+    // Admitted on the second slot, not refused for capacity.
     expect(commands(db)).toHaveLength(2);
     expect(row(db)["state"]).toBe("done");
   });
@@ -238,7 +288,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -256,7 +306,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -272,7 +322,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -289,7 +339,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -330,7 +380,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -346,7 +396,7 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: () => "ready" },
+      runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -391,7 +441,10 @@ describe("runScheduleTick", () => {
     await runScheduleTick({
       db,
       scheduler,
-      runnerGateway: { stateOf: (runnerId) => (runnerId === "runner-a" ? "ready" : "offline") },
+      runnerGateway: {
+        stateOf: (runnerId) => (runnerId === "runner-a" ? "ready" : "offline"),
+        maxConcurrentRunsOf: () => 1,
+      },
       now: () => NEXT_FIRE,
       log: () => {},
     });
@@ -409,7 +462,7 @@ describe("runScheduleTick", () => {
       runScheduleTick({
         db,
         scheduler,
-        runnerGateway: { stateOf: () => "ready" },
+        runnerGateway: { stateOf: () => "ready", maxConcurrentRunsOf: () => 1 },
         now: () => NEXT_FIRE,
         log: () => {},
       });
