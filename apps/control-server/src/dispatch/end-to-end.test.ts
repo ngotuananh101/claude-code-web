@@ -244,3 +244,124 @@ describe("dispatch over a real socket", () => {
     );
   });
 });
+
+describe("queued run promotion", () => {
+  test("a queued run is delivered over the socket after the first run's terminal event", async () => {
+    const db = controlDb();
+    db.query(
+      "INSERT INTO users (id, username, password_hash, token_version, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("user-1", "owner", "hash", 1, Date.now());
+
+    const outbox = new CommandOutbox(db);
+    const url = startServer(db, outbox);
+    const inbox = runnerInbox();
+    const received: string[] = [];
+
+    const link = await dialWebSocket({ url, credential: "cck_valid" });
+    const opened = new Promise<void>((resolve) => {
+      link.onMessage((raw) => {
+        const frame = JSON.parse(raw) as Record<string, unknown>;
+        if (frame["type"] === "hello.ok") {
+          link.send(JSON.stringify({ type: "reconcile", runner: [], workspaces: [] }));
+        }
+        if (frame["type"] === "reconcile.ok") resolve();
+        if (frame["type"] === "command") {
+          const record = frame["command"] as Record<string, unknown>;
+          const parsed = asCommandEnvelope(record);
+          const commandId = typeof record["commandId"] === "string" ? record["commandId"] : "";
+          const attemptId = typeof record["attemptId"] === "string" ? record["attemptId"] : "";
+          if (parsed !== undefined) {
+            const result = acceptCommand(inbox, parsed, { localRunnerId: "runner-a" });
+            if (result.ok && !result.duplicate) received.push(commandId);
+            link.send(
+              JSON.stringify({
+                type: "command.receipt",
+                commandId,
+                attemptId,
+                accepted: result.ok,
+                ...("reason" in result ? { reason: result.reason } : {}),
+              }),
+            );
+          }
+        }
+      });
+    });
+
+    link.send(
+      JSON.stringify({
+        type: "hello",
+        hello: {
+          protocolVersion: 1,
+          runnerId: "runner-a",
+          bootId: "boot-1",
+          runnerVersion: "0.0.0",
+          sdkVersion: "0.3.309",
+          platform: "linux/x64",
+          maxConcurrentRuns: 1,
+          activeRuns: [],
+          eventOffsets: [],
+        },
+      }),
+    );
+    await opened;
+    await waitFor(() => handle!.runnerGateway.stateOf("runner-a") === "ready");
+
+    try {
+      const first = await handle!.scheduler!.dispatch(
+        {
+          sessionId: "session-1",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          workspaceId: "workspace-1",
+          prompt: "one",
+          ownerId: "user-1",
+        },
+        { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 0 },
+      );
+      expect(first.ok).toBe(true);
+      if (!first.ok) throw new Error("first dispatch failed");
+
+      const second = await handle!.scheduler!.dispatch(
+        {
+          sessionId: "session-1",
+          runId: "run-2",
+          attemptId: "attempt-2",
+          workspaceId: "workspace-1",
+          prompt: "two",
+          ownerId: "user-1",
+        },
+        { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 0 },
+      );
+      expect(second.ok).toBe(true);
+      expect((second as { queued: boolean }).queued).toBe(true);
+      if (!second.ok) throw new Error("second dispatch failed");
+
+      await waitFor(() => received.includes(first.commandId));
+
+      link.send(
+        JSON.stringify({
+          type: "events",
+          events: [
+            {
+              protocolVersion: 1,
+              eventId: "evt-e2e-1",
+              runnerId: "runner-a",
+              bootId: "boot-1",
+              sessionId: "session-1",
+              runId: "run-1",
+              attemptId: "attempt-1",
+              localSequence: 1,
+              occurredAt: new Date().toISOString(),
+              type: "run.finished",
+              payload: {},
+            },
+          ],
+        }),
+      );
+
+      await waitFor(() => received.includes(second.commandId));
+    } finally {
+      link.close();
+    }
+  });
+});
