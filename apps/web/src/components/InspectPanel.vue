@@ -1051,7 +1051,7 @@ watch(source, (next) => {
           >
             {{ t("inspect.listTruncatedFiles") }}
           </p>
-          <ul class="grid gap-0.5">
+          <ul class="grid grid-cols-1 gap-0.5">
             <li v-for="entry in entries" :key="entry.name">
               <button
                 type="button"
@@ -1143,7 +1143,7 @@ watch(source, (next) => {
             >
               {{ t("inspect.listTruncatedChanges") }}
             </p>
-            <ul class="grid gap-0.5">
+            <ul class="grid grid-cols-1 gap-0.5">
               <li v-for="entry in changeEntries" :key="entry.path">
                 <button
                   type="button"
