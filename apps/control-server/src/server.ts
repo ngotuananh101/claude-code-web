@@ -533,6 +533,11 @@ export function createServer(options: ServerOptions): ServerHandle {
 
   const server = Bun.serve<RunnerSocketData | BrowserSocketData>({
     port: options.port ?? 0,
+    // RPC-backed HTTP handlers can wait for the 10s PendingRpcRequests timeout.
+    // Bun's default idle timeout is also 10s, so under load it can close the
+    // client socket before the handler returns its deliberate 503 response.
+    // Keep the transport deadline comfortably beyond the application deadline.
+    idleTimeout: 30,
 
     async fetch(request, srv) {
       const url = new URL(request.url);
