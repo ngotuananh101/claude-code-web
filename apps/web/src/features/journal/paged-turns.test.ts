@@ -225,4 +225,38 @@ describe("cached paged chat turns", () => {
     expect(turns.length).toBeGreaterThan(1);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  test("a replayed in-flight history chunk still reports SDK compacting", () => {
+    const derive = createPagedTurns();
+    const inputs: HistoryTurn[] = [
+      {
+        cursor: 3,
+        kind: "agent",
+        events: [
+          event(1, "run.started", { prompt: "question" }),
+          event(2, "run.status", { type: "system", subtype: "status", status: "compacting" }),
+        ],
+      },
+    ];
+    const turns = derive(inputs, []);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.kind === "agent" && turns[0]!.compacting).toBe(true);
+  });
+
+  test("a compacting live turn clears on the replay's terminal frame", () => {
+    const derive = createPagedTurns();
+    const live = [
+      event(1, "run.started", { prompt: "question" }),
+      event(2, "run.status", { type: "system", subtype: "status", status: "compacting" }),
+    ];
+    const agentTurn = (turns: ReturnType<typeof derive>) =>
+      turns.find((turn) => turn.kind === "agent") as { status: string; compacting?: boolean };
+    expect(agentTurn(derive([], live))).toMatchObject({ status: "running", compacting: true });
+    const replayed: HistoryTurn[] = [
+      { cursor: 4, kind: "agent", events: [...live, event(3, "run.finished", {})] },
+    ];
+    const settled = agentTurn(derive(replayed, []));
+    expect(settled.status).toBe("done");
+    expect(settled.compacting).toBeUndefined();
+  });
 });

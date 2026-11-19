@@ -620,6 +620,7 @@ export const vi: TranslationDictionary = {
     copyOutput: "Sao chép đầu ra",
     noDetails: "Không có dữ liệu chi tiết.",
     liveThinking: "Đang suy nghĩ…",
+    liveCompacting: "Đang nén ngữ cảnh…",
     liveRunning: "Đang chạy…",
     liveRunningTool: "Đang chạy: {tool}",
     liveRunningToolActive: "Đang chạy: {tool}…",

@@ -620,6 +620,7 @@ export const en: TranslationDictionary = {
     copyOutput: "Copy output",
     noDetails: "No detailed data.",
     liveThinking: "Thinking…",
+    liveCompacting: "Compacting context…",
     liveRunning: "Running…",
     liveRunningTool: "Running: {tool}",
     liveRunningToolActive: "Running: {tool}…",

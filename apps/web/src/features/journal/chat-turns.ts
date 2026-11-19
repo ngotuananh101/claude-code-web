@@ -91,6 +91,12 @@ export type AgentTurn = {
   text: string;
   segments: AgentTurnSegment[];
   isStreaming?: boolean;
+  /**
+   * The SDK is compacting this conversation right now (`system/status` with
+   * `status: "compacting"` until the SDK reports `null`/`requesting` or a
+   * `compact_boundary` frame). Only meaningful while `status` is `running`.
+   */
+  compacting?: boolean | undefined;
   rawPayload?: unknown;
 };
 
@@ -337,19 +343,25 @@ export type ActiveStatusInfo = {
  * Resolves the single, unified active status for a running turn (Claude Code CLI style).
  * Prioritizes:
  * 1. Pending approvals waiting on the operator
- * 2. Currently executing tool step with command/path details
- * 3. In-flight thinking step
- * 4. Responding / streaming prose
- * 5. General processing
+ * 2. SDK compacting the conversation — nothing else can run while it does
+ * 3. Currently executing tool step with command/path details
+ * 4. In-flight thinking step
+ * 5. Responding / streaming prose
+ * 6. General processing
  */
 export function resolveActiveStatus(
   steps: readonly AgentStep[],
   hasText: boolean,
   _isStreaming = false,
   pendingApprovalCount = 0,
+  compacting = false,
 ): ActiveStatusInfo {
   if (pendingApprovalCount > 0) {
     return { label: t("chat.awaitingApproval") };
+  }
+
+  if (compacting) {
+    return { label: t("chat.liveCompacting") };
   }
 
   const executionSteps = steps.filter((step) => step.kind !== "approval");
@@ -392,11 +404,48 @@ export function resolveActiveStatus(
   return { label: t("chat.liveProcessing") };
 }
 
+/**
+ * Whether the journal renders the live CLI status line for a turn. A settled
+ * turn never does; a running one shows it until prose arrives, unless a tool
+ * step is in flight — or the SDK is compacting, which blocks all other work
+ * and would otherwise disappear behind the answer already on screen.
+ */
+export function showsLiveStatus(
+  turn: Pick<AgentTurn, "status" | "text" | "steps" | "compacting">,
+): boolean {
+  if (turn.status !== "running") return false;
+  if (turn.compacting === true) return true;
+  const hasRunningTool = (turn.steps ?? []).some(
+    (step) => step.kind === "tool" && step.state === "running",
+  );
+  return turn.text.trim() === "" || hasRunningTool;
+}
+
 const RUN_TERMINALS: ReadonlySet<string> = new Set([
   "run.finished",
   "run.failed",
   "run.interrupted",
 ]);
+
+/**
+ * The compacting signal the SDK reports through `system` frames, or
+ * `undefined` for any frame that says nothing about compaction.
+ *
+ * - `subtype: "status"` with `status: "compacting"` starts it; the SDK's
+ *   `null` and `"requesting"` values end it.
+ * - `subtype: "compact_boundary"` ends it even if no trailing status arrives.
+ * - Any other status value is left alone: an unknown string must not be
+ *   guessed into "still compacting" or "finished".
+ */
+function compactingOf(payload: Record<string, unknown>): boolean | undefined {
+  if (payload["type"] !== "system") return undefined;
+  if (payload["subtype"] === "compact_boundary") return false;
+  if (payload["subtype"] !== "status") return undefined;
+  const status = payload["status"];
+  if (status === "compacting") return true;
+  if (status === null || status === "requesting") return false;
+  return undefined;
+}
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
@@ -941,6 +990,10 @@ export function deriveChatTurns(
               ? "error"
               : "interrupted";
         liveAgentTurn.isStreaming = false;
+        // A terminal ends the run, so nothing is compacting afterwards. Leaving
+        // the flag set would make the rule (`show only while running`) the only
+        // thing hiding a stale signal — and a replayed turn would carry it.
+        liveAgentTurn.compacting = undefined;
         const durationMs = payload["durationMs"] ?? payload["duration_ms"];
         if (typeof durationMs === "number") {
           liveAgentTurn.durationText = formatDuration(durationMs);
@@ -978,6 +1031,15 @@ export function deriveChatTurns(
       } else {
         continue;
       }
+    }
+
+    if (event.type === "run.status") {
+      // The SDK's own status line (§12.3 keeps every status except token
+      // telemetry). Only the compaction flag is derived here; the frame keeps
+      // its raw payload for replay and inspection.
+      const compacting = compactingOf(payload);
+      if (compacting !== undefined) liveAgentTurn.compacting = compacting;
+      continue;
     }
 
     if (event.type === "message.started") {

@@ -606,6 +606,7 @@ export type TranslationDictionary = {
     copyOutput: string;
     noDetails: string;
     liveThinking: string;
+    liveCompacting: string;
     liveRunning: string;
     liveRunningTool: string;
     liveRunningToolActive: string;

@@ -6,7 +6,7 @@ import { toast } from "vue-sonner";
 import { peekApprovalUi } from "@/features/approvals/store.ts";
 import { approvalNeedsDecision } from "@/features/approvals/terminal.ts";
 import type { BackgroundTask } from "@/features/journal/background-tasks.ts";
-import type { AgentStep, AgentTurn } from "@/features/journal/chat-turns";
+import { type AgentStep, type AgentTurn, showsLiveStatus } from "@/features/journal/chat-turns";
 import { proseClasses, renderMarkdown } from "@/features/journal/markdown";
 import { useI18n } from "@/lib/i18n";
 import AgentLiveStatus from "./AgentLiveStatus.vue";
@@ -130,17 +130,11 @@ const pendingApprovalCount = computed(() => {
 });
 
 /**
- * Shows the live CLI status while the turn is running:
- * - Always when prose text has not arrived yet (thinking, running tools, waiting for model).
- * - When a tool step is currently executing even if preliminary text was streamed.
+ * Shows the live CLI status while the turn is running. The rule lives in
+ * `showsLiveStatus` so a regression (compacting disappearing behind streamed
+ * prose) is caught by the reducer's unit tests, not only by the SFC.
  */
-const shouldShowLiveStatus = computed(() => {
-  if (props.turn.status !== "running") return false;
-  const hasRunningTool = (props.turn.steps ?? []).some(
-    (s) => s.kind === "tool" && s.state === "running",
-  );
-  return props.turn.text.trim() === "" || hasRunningTool;
-});
+const showLiveStatus = computed(() => showsLiveStatus(props.turn));
 
 /** Copy the assistant response prose to the clipboard. */
 async function copyResponse(): Promise<void> {
@@ -233,7 +227,7 @@ const rawJson = computed(() => JSON.stringify(props.turn.rawPayload, null, 2));
 
     <!-- Unified CLI-style live status while turn is running -->
     <AgentLiveStatus
-      v-if="shouldShowLiveStatus"
+      v-if="showLiveStatus"
       :turn="turn"
       :steps="turn.steps ?? []"
       :pending-approval-count="pendingApprovalCount"

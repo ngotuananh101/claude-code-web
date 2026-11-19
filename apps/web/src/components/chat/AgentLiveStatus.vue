@@ -19,6 +19,7 @@ const statusInfo = computed(() =>
     props.turn.text.trim() !== "",
     props.turn.isStreaming ?? false,
     props.pendingApprovalCount ?? 0,
+    props.turn.compacting === true,
   ),
 );
 

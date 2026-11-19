@@ -10,6 +10,7 @@ import {
   processBodyVisible,
   processSummaryLabel,
   resolveActiveStatus,
+  showsLiveStatus,
   summarizeProcessState,
   toolStepLabel,
 } from "./chat-turns.ts";
@@ -981,6 +982,138 @@ describe("deriveChatTurns — live events", () => {
   });
 });
 
+describe("deriveChatTurns — SDK compacting status", () => {
+  const status = (value: unknown, subtype = "status") =>
+    liveEvent("run.status", { type: "system", subtype, status: value });
+
+  test("system/status compacting marks the running turn as compacting", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1" }), status("compacting")],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ kind: "agent", status: "running", compacting: true });
+  });
+
+  test("a null status ends compacting while the turn stays running", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1" }), status("compacting"), status(null)],
+    );
+    expect(turns[0]).toMatchObject({ kind: "agent", status: "running", compacting: false });
+  });
+
+  test("a requesting status also ends compacting", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1" }), status("compacting"), status("requesting")],
+    );
+    expect(turns[0]).toMatchObject({ status: "running", compacting: false });
+  });
+
+  test("a compact_boundary frame ends compacting even without a trailing status", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        status("compacting"),
+        liveEvent("run.status", {
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { trigger: "auto", pre_tokens: 190000 },
+        }),
+      ],
+    );
+    expect(turns[0]).toMatchObject({ status: "running", compacting: false });
+  });
+
+  test("an unknown system status neither starts nor claims compacting", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [liveEvent("run.started", { runId: "run-1" }), status("something_else")],
+    );
+    expect((turns[0] as AgentTurn).compacting).toBeUndefined();
+  });
+
+  test("compacting frames after the terminal event do not revive a settled turn", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        liveEvent("run.finished", { runId: "run-1", durationMs: 1000 }),
+        status("compacting"),
+      ],
+    );
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ status: "done" });
+    expect((turns[0] as AgentTurn).compacting).toBeUndefined();
+  });
+
+  test("a terminal event clears the flag so a settled turn never keeps it", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        status("compacting"),
+        liveEvent("run.finished", { runId: "run-1", durationMs: 1000 }),
+      ],
+    );
+    expect((turns[0] as AgentTurn).compacting).toBeUndefined();
+  });
+
+  test("the next run in the same session starts without the previous flag", () => {
+    resetSeq();
+    const turns = deriveChatTurns(
+      [],
+      [
+        liveEvent("run.started", { runId: "run-1" }),
+        status("compacting"),
+        liveEvent("run.finished", { runId: "run-1", durationMs: 1000 }),
+        liveEvent("run.started", { runId: "run-2", prompt: "again" }, "run-2"),
+      ],
+    );
+    const second = turns.find(
+      (turn) => turn.kind === "agent" && (turn as AgentTurn).runId === "run-2",
+    ) as AgentTurn;
+    expect(second).toMatchObject({ status: "running" });
+    expect(second.compacting).toBeUndefined();
+  });
+});
+
+describe("showsLiveStatus — compacting keeps the live line visible", () => {
+  const runningTurn = (patch: Partial<AgentTurn> = {}): AgentTurn => ({
+    kind: "agent",
+    key: "live-run-1",
+    status: "running",
+    steps: [],
+    text: "",
+    segments: [],
+    isStreaming: true,
+    ...patch,
+  });
+
+  test("hides the line once prose has arrived and nothing is running", () => {
+    expect(showsLiveStatus(runningTurn({ text: "Answer in progress" }))).toBe(false);
+  });
+
+  test("shows the line while the SDK is compacting even if prose exists", () => {
+    expect(showsLiveStatus(runningTurn({ text: "Answer in progress", compacting: true }))).toBe(
+      true,
+    );
+  });
+
+  test("never shows the line on a settled turn, compacting flag or not", () => {
+    expect(showsLiveStatus(runningTurn({ status: "done", compacting: true }))).toBe(false);
+  });
+});
+
 describe("deriveChatTurns — merging historical and live", () => {
   test("historical messages render before live events", () => {
     const turns = deriveChatTurns(
@@ -1780,6 +1913,26 @@ describe("resolveActiveStatus", () => {
     });
     expect(resolveActiveStatus([], false, false)).toEqual({
       label: "Đang xử lý…",
+    });
+  });
+
+  test("compacting outranks step labels while the SDK compacts the conversation", () => {
+    const readStep: ToolStep = {
+      kind: "tool",
+      key: "k7",
+      toolCallId: "t7",
+      toolName: "Read",
+      state: "running",
+      filePath: "src/main.ts",
+    };
+    expect(resolveActiveStatus([readStep], true, true, 0, true)).toEqual({
+      label: "Đang nén ngữ cảnh…",
+    });
+  });
+
+  test("a pending approval still outranks compacting", () => {
+    expect(resolveActiveStatus([], false, true, 1, true)).toEqual({
+      label: "Đang chờ phê duyệt…",
     });
   });
 });
