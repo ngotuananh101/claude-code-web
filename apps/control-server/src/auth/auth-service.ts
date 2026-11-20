@@ -34,6 +34,12 @@ export type AuthenticateResult =
     };
 
 type UserRow = { id: string; token_version: number };
+type RefreshVerification =
+  | { ok: true; userId: string; tokenVersion: number; rememberMe?: boolean }
+  | {
+      ok: false;
+      reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
+    };
 
 export class AuthService {
   readonly #db: Database;
@@ -55,15 +61,7 @@ export class AuthService {
       // never authenticate; failing here points at the real problem.
       throw new Error(`unknown user: ${userId}`);
     }
-    return this.#signer.sign(
-      {
-        sub: user.id,
-        tokenVersion: user.token_version,
-        type: "access",
-        ...(rememberMe !== undefined ? { rememberMe } : {}),
-      },
-      this.#accessTtl,
-    );
+    return this.#issueAccessTokenAtVersion(user.id, user.token_version, rememberMe);
   }
 
   async issueRefreshToken(userId: string, rememberMe?: boolean): Promise<string> {
@@ -71,10 +69,34 @@ export class AuthService {
     if (!user) {
       throw new Error(`unknown user: ${userId}`);
     }
+    return this.#issueRefreshTokenAtVersion(user.id, user.token_version, rememberMe);
+  }
+
+  async #issueAccessTokenAtVersion(
+    userId: string,
+    tokenVersion: number,
+    rememberMe?: boolean,
+  ): Promise<string> {
     return this.#signer.sign(
       {
-        sub: user.id,
-        tokenVersion: user.token_version,
+        sub: userId,
+        tokenVersion,
+        type: "access",
+        ...(rememberMe !== undefined ? { rememberMe } : {}),
+      },
+      this.#accessTtl,
+    );
+  }
+
+  async #issueRefreshTokenAtVersion(
+    userId: string,
+    tokenVersion: number,
+    rememberMe?: boolean,
+  ): Promise<string> {
+    return this.#signer.sign(
+      {
+        sub: userId,
+        tokenVersion,
         type: "refresh",
         ...(rememberMe !== undefined ? { rememberMe } : {}),
       },
@@ -117,7 +139,7 @@ export class AuthService {
     };
   }
 
-  async verifyRefreshToken(token: string | undefined): Promise<AuthenticateResult> {
+  async #verifyRefreshToken(token: string | undefined): Promise<RefreshVerification> {
     if (!token) return { ok: false, reason: "missing_token" };
 
     const verified = await this.#signer.verify(token);
@@ -144,10 +166,18 @@ export class AuthService {
     return {
       ok: true,
       userId: user.id,
+      tokenVersion: user.token_version,
       ...(verified.claims.rememberMe !== undefined
         ? { rememberMe: verified.claims.rememberMe }
         : {}),
     };
+  }
+
+  async verifyRefreshToken(token: string | undefined): Promise<AuthenticateResult> {
+    const verified = await this.#verifyRefreshToken(token);
+    if (!verified.ok) return verified;
+    const { tokenVersion: _tokenVersion, ...result } = verified;
+    return result;
   }
 
   async refresh(refreshToken: string | undefined): Promise<
@@ -157,11 +187,32 @@ export class AuthService {
         reason: "missing_token" | "invalid_token" | "revoked" | "unknown_user" | "unavailable";
       }
   > {
-    const verified = await this.verifyRefreshToken(refreshToken);
+    const verified = await this.#verifyRefreshToken(refreshToken);
     if (!verified.ok) return verified;
 
-    const accessToken = await this.issueAccessToken(verified.userId, verified.rememberMe);
-    const newRefreshToken = await this.issueRefreshToken(verified.userId, verified.rememberMe);
+    const accessToken = await this.#issueAccessTokenAtVersion(
+      verified.userId,
+      verified.tokenVersion,
+      verified.rememberMe,
+    );
+    const newRefreshToken = await this.#issueRefreshTokenAtVersion(
+      verified.userId,
+      verified.tokenVersion,
+      verified.rememberMe,
+    );
+
+    // Token signing awaits; make a synchronous DB read afterward so any revoke
+    // during either signing operation prevents these credentials being returned.
+    let currentUser: UserRow | null;
+    try {
+      currentUser = this.#readUser(verified.userId);
+    } catch {
+      return { ok: false, reason: "unavailable" };
+    }
+    if (!currentUser) return { ok: false, reason: "unknown_user" };
+    if (currentUser.token_version !== verified.tokenVersion) {
+      return { ok: false, reason: "revoked" };
+    }
 
     return {
       ok: true,

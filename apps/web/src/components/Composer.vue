@@ -118,7 +118,13 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  started: [sessionId: string, runId: string, promptText?: string, attachments?: AttachmentInfo[]];
+  started: [
+    sessionId: string,
+    runId: string,
+    promptText?: string,
+    attachments?: AttachmentInfo[],
+    queued?: boolean,
+  ];
   openSubagents: [tab?: SubagentDialogTab];
   cancelQueued: [runId: string];
 }>();
@@ -655,7 +661,7 @@ async function send(): Promise<void> {
       if (result.queued) {
         toast.success(t("composer.promptQueued"));
       }
-      emit("started", sessionId, result.runId, promptText, uploadedAttachments);
+      emit("started", sessionId, result.runId, promptText, uploadedAttachments, result.queued);
       return;
     }
     if (result.reason === "session_busy") {

@@ -754,7 +754,8 @@ async function saveFile(): Promise<void> {
   const current = epoch;
   saving.value = true;
   saveError.value = null;
-  const outcome = await writeFile(id, viewer.value.path, draft.value, viewer.value.hash);
+  const content = draft.value;
+  const outcome = await writeFile(id, viewer.value.path, content, viewer.value.hash);
   if (current !== epoch) return;
   saving.value = false;
   if (!outcome.ok) {
@@ -779,11 +780,10 @@ async function saveFile(): Promise<void> {
     return;
   }
 
-  // A clean write clears any in-flight conflict. `viewerAfterSave` already
-  // carries the written draft and the fresh hash, so the draft needs no
-  // reassignment — and `FileWriteResult` has no `content` field to copy from.
+  // Only the submitted bytes became the baseline. Keep any edits typed while
+  // the write was in flight in the draft so they remain dirty.
   conflictIncoming.value = null;
-  viewer.value = viewerAfterSave(viewer.value, draft.value, outcome.value);
+  viewer.value = viewerAfterSave(viewer.value, content, outcome.value);
   // Keep the viewer: the dialog is still open on this file and its header,
   // review state and revert target all read from it.
   void loadFiles(directory.value, { keepViewer: true });
@@ -826,7 +826,8 @@ async function overwriteConflict(): Promise<void> {
     saveError.value = latest.message;
     return;
   }
-  const outcome = await writeFile(id, path, draft.value, latest.value.hash);
+  const content = draft.value;
+  const outcome = await writeFile(id, path, content, latest.value.hash);
   if (current !== epoch) return;
   if (!outcome.ok) {
     // A second hash mismatch keeps the banner: refetch the latest bytes again
@@ -843,9 +844,8 @@ async function overwriteConflict(): Promise<void> {
 
   conflictIncoming.value = null;
   saveError.value = null;
-  // As in `saveFile`: the viewer carries the written draft, and the write
-  // result has no `content` field.
-  viewer.value = viewerAfterSave(latest.value, draft.value, outcome.value);
+  // As in `saveFile`, a later draft must not become the persisted baseline.
+  viewer.value = viewerAfterSave(latest.value, content, outcome.value);
   void loadFiles(directory.value, { keepViewer: true });
 }
 

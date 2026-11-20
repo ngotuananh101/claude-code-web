@@ -546,6 +546,106 @@ describe("scheduler", () => {
     }
   });
 
+  test("concurrent dispatches to different workspaces respect runner capacity", async () => {
+    const { db, scheduler } = setup();
+    const subtle = globalThis.crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    const releases: Array<() => void> = [];
+    subtle.digest = ((...args: Parameters<typeof realDigest>) =>
+      new Promise<ArrayBuffer>((resolve) =>
+        releases.push(() => resolve(realDigest(...args))),
+      )) as typeof subtle.digest;
+    try {
+      const first = scheduler.dispatch(
+        {
+          ...request,
+          sessionId: "capacity-session-1",
+          runId: "capacity-run-1",
+          workspaceId: "workspace-1",
+        },
+        capacity({ maxConcurrentRuns: 1 }),
+      );
+      const second = scheduler.dispatch(
+        {
+          ...request,
+          sessionId: "capacity-session-2",
+          runId: "capacity-run-2",
+          workspaceId: "workspace-2",
+        },
+        capacity({ maxConcurrentRuns: 1 }),
+      );
+      await Bun.sleep(2);
+      releases[0]?.();
+      await Bun.sleep(2);
+      releases[1]?.();
+      const decisions = await Promise.all([first, second]);
+
+      expect(decisions[0]).toMatchObject({ ok: true, queued: false });
+      expect(decisions[1]).toMatchObject({ ok: true, queued: true });
+      expect(
+        db.query("SELECT COUNT(*) AS n FROM active_runs WHERE runner_id = 'runner-a'").get(),
+      ).toEqual({ n: 1 });
+      expect(
+        db.query("SELECT delivery_state FROM command_outbox WHERE run_id = 'capacity-run-2'").get(),
+      ).toEqual({ delivery_state: "queued" });
+    } finally {
+      subtle.digest = realDigest;
+      db.close();
+    }
+  });
+
+  test("queue:false refuses when another dispatch claims the last runner slot", async () => {
+    const { db, scheduler } = setup();
+    const subtle = globalThis.crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    const releases: Array<() => void> = [];
+    subtle.digest = ((...args: Parameters<typeof realDigest>) =>
+      new Promise<ArrayBuffer>((resolve) =>
+        releases.push(() => resolve(realDigest(...args))),
+      )) as typeof subtle.digest;
+    try {
+      const first = scheduler.dispatch(
+        {
+          ...request,
+          sessionId: "capacity-session-1",
+          runId: "capacity-run-1",
+          workspaceId: "workspace-1",
+        },
+        capacity({ maxConcurrentRuns: 1 }),
+      );
+      const second = scheduler.dispatch(
+        {
+          ...request,
+          sessionId: "capacity-session-2",
+          runId: "capacity-run-2",
+          workspaceId: "workspace-2",
+        },
+        capacity({ maxConcurrentRuns: 1 }),
+        { queue: false },
+      );
+      await Bun.sleep(2);
+      releases[0]?.();
+      await Bun.sleep(2);
+      releases[1]?.();
+      const decisions = await Promise.all([first, second]);
+
+      expect(decisions[0]).toMatchObject({ ok: true, queued: false });
+      expect(decisions[1]).toEqual({ ok: false, reason: "runner_at_capacity" });
+      expect(
+        db.query("SELECT COUNT(*) AS n FROM active_runs WHERE runner_id = 'runner-a'").get(),
+      ).toEqual({ n: 1 });
+      expect(
+        db.query("SELECT delivery_state FROM command_outbox WHERE run_id = 'capacity-run-2'").get(),
+      ).toEqual({ delivery_state: "rejected" });
+      expect(
+        db.query("SELECT COUNT(*) AS n FROM sessions WHERE id = 'capacity-session-2'").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      subtle.digest = realDigest;
+      db.close();
+    }
+  });
+
   test("a UNIQUE-race requeue with resumeSessionId keeps payload and fingerprint consistent", async () => {
     const { db, scheduler } = setup();
     const outbox = new CommandOutbox(db);

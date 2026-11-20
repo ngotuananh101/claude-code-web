@@ -316,21 +316,24 @@ const activePendingRun = computed(() => {
   return undefined;
 });
 
-/** A run started from the composer opens the journal it will stream into. */
+/** An accepted submission refreshes its session; only admitted runs become live. */
 function onStarted(
   sessionId: string,
   runId: string,
   promptText?: string,
   attachments?: AttachmentInfo[],
+  queued = false,
 ): void {
-  startedRun.value = { sessionId, runId };
-  if (promptText) {
-    pendingRun.value = {
-      sessionId,
-      runId,
-      prompt: promptText,
-      ...(attachments ? { attachments } : {}),
-    };
+  if (!queued) {
+    startedRun.value = { sessionId, runId };
+    if (promptText) {
+      pendingRun.value = {
+        sessionId,
+        runId,
+        prompt: promptText,
+        ...(attachments ? { attachments } : {}),
+      };
+    }
   }
   void loadSessions();
   void refreshQueue(sessionId);

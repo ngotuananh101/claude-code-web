@@ -296,15 +296,17 @@ export class Scheduler {
       queueSnapshot,
     });
 
-    // A runner refusal can install a cooldown while the fingerprint is being
-    // computed. Do not turn a now-blocked start into an active run.
-    const blockedDuringEnqueue =
-      !queued &&
-      (this.#workspaceCoolingDown(capacity.runnerId, request.workspaceId) ||
-        this.#workspaceBusy(capacity.runnerId, request.workspaceId));
-    if (blockedDuringEnqueue && !queue) {
-      this.#outbox.markRejected(commandId, "workspace_busy");
-      return { ok: false, reason: "workspace_busy" };
+    // The admission snapshot may be stale while enqueue computes the fingerprint.
+    // Re-read every contested resource after that await; in particular, two
+    // dispatches for different sessions/workspaces can otherwise both consume
+    // the same last runner slot. This check and the insert below are synchronous,
+    // so another dispatch cannot interleave between them.
+    const currentBlocker = !queued
+      ? this.#blocker(request, this.capacityFor(capacity.runnerId, capacity))
+      : undefined;
+    if (currentBlocker !== undefined && !queue) {
+      this.#outbox.markRejected(commandId, currentBlocker);
+      return { ok: false, reason: currentBlocker };
     }
 
     // The pin is resolved before the await and written here, in the same
@@ -342,7 +344,13 @@ export class Scheduler {
       }
       return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
     };
-    if (blockedDuringEnqueue) return queueAfterEnqueue();
+    const queueAfterRejection = (reason: NonNullable<typeof currentBlocker>): DispatchDecision => {
+      this.#outbox.markRejected(commandId, reason);
+      return { ok: false, reason };
+    };
+    if (currentBlocker !== undefined) {
+      return queue ? queueAfterEnqueue() : queueAfterRejection(currentBlocker);
+    }
 
     if (!queued) {
       try {

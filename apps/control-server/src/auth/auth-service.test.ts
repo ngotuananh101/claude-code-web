@@ -221,4 +221,34 @@ describe("owner authentication", () => {
 
     expect(await auth.refresh(rememberedRefresh)).toEqual({ ok: false, reason: "revoked" });
   });
+
+  test("an in-flight refresh cannot issue credentials after session revocation", async () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    addUser(db);
+    const underlyingSigner = createSigner(secret);
+    let holdAccessSigning = false;
+    let releaseAccessSigning: (() => void) | undefined;
+    const signer = {
+      sign: async (claims: Parameters<typeof underlyingSigner.sign>[0], ttlSeconds: number) => {
+        if (holdAccessSigning && claims.type === "access") {
+          await new Promise<void>((resolve) => {
+            releaseAccessSigning = resolve;
+          });
+        }
+        return underlyingSigner.sign(claims, ttlSeconds);
+      },
+      verify: underlyingSigner.verify,
+    };
+    const auth = new AuthService({ db, signer });
+    const refreshToken = await auth.issueRefreshToken("user-1");
+
+    holdAccessSigning = true;
+    const refreshPromise = auth.refresh(refreshToken);
+    while (releaseAccessSigning === undefined) await Bun.sleep(0);
+    auth.revokeAllSessions("user-1");
+    releaseAccessSigning();
+
+    expect(await refreshPromise).toEqual({ ok: false, reason: "revoked" });
+  });
 });
