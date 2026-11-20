@@ -293,6 +293,44 @@ describe("dispatcher", () => {
     expect(sent).toHaveLength(1);
   });
 
+  test("a duplicate negative receipt does not reject a queued retry again", async () => {
+    const { outbox, gateway, dispatcher, socket, sent } = setup();
+    readyRunner(gateway, socket, sent);
+    await outbox.enqueue(command);
+    dispatcher.drain("runner-a");
+    outbox.markRejected("cmd-1", "workspace_busy");
+    outbox.requeue("cmd-1");
+
+    dispatcher.handleReceipt("runner-a", {
+      commandId: "cmd-1",
+      attemptId: "attempt-1",
+      accepted: false,
+      reason: "workspace_busy",
+    });
+
+    expect(outbox.get("cmd-1")).toMatchObject({ deliveryState: "queued", requeueCount: 1 });
+    expect(outbox.pendingFor("runner-a")).toEqual([]);
+  });
+
+  test("a late negative receipt cannot replace a terminal abandonment or cancellation", async () => {
+    for (const reason of ["queue_abandoned", "cancelled"]) {
+      const { outbox, dispatcher } = setup();
+      await outbox.enqueue(command);
+      outbox.markRejected("cmd-1", reason);
+      dispatcher.handleReceipt("runner-a", {
+        commandId: "cmd-1",
+        attemptId: "attempt-1",
+        accepted: false,
+        reason: "workspace_busy",
+      });
+      expect(outbox.get("cmd-1")).toMatchObject({
+        deliveryState: "rejected",
+        rejectionReason: reason,
+        requeueCount: 0,
+      });
+    }
+  });
+
   test("a receipt from a superseded socket is refused", async () => {
     const { outbox, gateway, dispatcher, socket, sent } = setup();
     readyRunner(gateway, socket, sent);

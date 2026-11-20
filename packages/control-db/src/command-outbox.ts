@@ -85,6 +85,7 @@ export type OutboxCommand = {
   payloadSecure: unknown | undefined;
   requeueCount: number;
   queueSnapshot: QueueSnapshot | undefined;
+  retryAfter: number | undefined;
 };
 
 type Row = {
@@ -105,6 +106,7 @@ type Row = {
   rejection_reason: string | null;
   requeue_count: number;
   queue_snapshot: string | null;
+  retry_after: number | null;
 };
 
 /** Terminal states never transition again; a late receipt must not reopen one. */
@@ -350,16 +352,22 @@ export class CommandOutbox {
     if (row.delivery_state !== "queued") return;
     this.#db
       .query(
-        "UPDATE command_outbox SET delivery_state = 'pending', queue_snapshot = NULL WHERE command_id = ?",
+        "UPDATE command_outbox SET delivery_state = 'pending', queue_snapshot = NULL, retry_after = NULL WHERE command_id = ?",
       )
       .run(commandId);
   }
 
-  requeue(commandId: string): "requeued" | "ceiling" | "not_rejected" {
+  requeue(
+    commandId: string,
+    options: { now?: number } = {},
+  ): "requeued" | "ceiling" | "not_rejected" {
     const row = this.#require(commandId);
     if (row.delivery_state !== "rejected") return "not_rejected";
     // `requeue_count > MAX_REQUEUES` is the ceiling (MAX_REQUEUES itself still requeues).
     if (row.requeue_count > MAX_REQUEUES) return "ceiling";
+
+    const now = options.now ?? Date.now();
+    const retryAfter = now + Math.min(30000, 1000 * 2 ** Math.min(row.requeue_count, 5));
 
     const snapshot = row.queue_snapshot
       ? row.queue_snapshot
@@ -409,7 +417,8 @@ export class CommandOutbox {
                 queue_snapshot = ?,
                 payload = ?,
                 payload_secure = ?,
-                fingerprint = ?
+                fingerprint = ?,
+                retry_after = ?
           WHERE command_id = ?`,
       )
       .run(
@@ -417,9 +426,54 @@ export class CommandOutbox {
         JSON.stringify(payloadValue ?? null),
         secureValue === undefined ? null : JSON.stringify(secureValue ?? null),
         fingerprintValue,
+        retryAfter,
         commandId,
       );
     return "requeued";
+  }
+
+  workspaceRetryAfter(runnerId: string, workspaceId: string): number | undefined {
+    const rows = this.#db
+      .query(
+        `SELECT workspace_id, queue_snapshot, retry_after FROM command_outbox
+          WHERE runner_id = ?
+            AND delivery_state = 'queued'
+            AND kind = 'run.start'
+            AND retry_after IS NOT NULL`,
+      )
+      .all(runnerId) as Array<{
+      workspace_id: string | null;
+      queue_snapshot: string | null;
+      retry_after: number;
+    }>;
+    let max: number | undefined;
+    for (const r of rows) {
+      let resolved: string | undefined;
+      if (r.queue_snapshot) {
+        const parsed = JSON.parse(r.queue_snapshot) as {
+          runnerId: string;
+          workspaceId?: string | null;
+        };
+        resolved = parsed.workspaceId ?? r.workspace_id ?? undefined;
+      } else {
+        resolved = r.workspace_id ?? undefined;
+      }
+      if (resolved !== workspaceId) continue;
+      if (max === undefined || r.retry_after > max) max = r.retry_after;
+    }
+    return max;
+  }
+
+  runnersWithQueuedStarts(): string[] {
+    const rows = this.#db
+      .query(
+        `SELECT DISTINCT runner_id FROM command_outbox
+          WHERE delivery_state = 'queued'
+            AND kind = 'run.start'
+          ORDER BY runner_id ASC`,
+      )
+      .all() as Array<{ runner_id: string }>;
+    return rows.map((r) => r.runner_id);
   }
 
   queuedFor(runnerId: string): OutboxCommand[] {
@@ -559,5 +613,6 @@ function toCommand(row: Row): OutboxCommand {
     rejectionReason: row.rejection_reason ?? undefined,
     requeueCount: row.requeue_count ?? 0,
     queueSnapshot,
+    retryAfter: row.retry_after ?? undefined,
   };
 }

@@ -7,6 +7,7 @@ import {
   migrate,
   Scheduler,
 } from "@cc-web/control-db";
+import { Dispatcher } from "./dispatcher.ts";
 import { handleRejectedStart } from "./requeue.ts";
 
 function setup() {
@@ -100,7 +101,7 @@ async function dispatchQueued(
 }
 
 describe("handleRejectedStart", () => {
-  test("a transient rejection returns the command to the queue and promotes", async () => {
+  test("a transient rejection waits in the queue while another workspace is promoted", async () => {
     const { db, scheduler, outbox, capacityOf } = setup();
     // run1 admitted (takes the only slot). run2 queued behind it on another session.
     const cmd1 = await dispatchAdmitted(scheduler, {
@@ -141,15 +142,142 @@ describe("handleRejectedStart", () => {
     expect(result).toBe("requeued");
     const row1 = outbox.get(cmd1);
     expect(row1?.requeueCount).toBe(1);
-    // Released, requeued (count bumped), then promoted: run1 is the FIFO head
-    // and eligible again, so promotion admits it; run2 remains queued.
-    expect(scheduler.activeRunFor("session-1")?.runId).toBe("run-1");
-    expect(row1?.deliveryState).toBe("pending");
-    expect(scheduler.activeRunFor("session-2")).toBeUndefined();
+    // The refused workspace is cooling down, not immediately eligible again.
+    // It must not consume all retries or starve another workspace's queued work.
+    expect(scheduler.activeRunFor("session-1")).toBeUndefined();
+    expect(row1?.deliveryState).toBe("queued");
+    expect(scheduler.activeRunFor("session-2")?.runId).toBe("run-2");
     const queued2 = db
       .query("SELECT delivery_state FROM command_outbox WHERE run_id = 'run-2'")
       .get() as { delivery_state: string } | null;
-    expect(queued2?.delivery_state).toBe("queued");
+    expect(queued2?.delivery_state).toBe("pending");
+  });
+
+  test("promotion bursts do not spend retries before a workspace deadline", async () => {
+    const { db, outbox } = setup();
+    let now = 1_000;
+    const scheduler = new Scheduler(db, { now: () => now });
+    const capacityOf = (runnerId: string) =>
+      scheduler.capacityFor(runnerId, {
+        runnerId,
+        state: "ready",
+        maxConcurrentRuns: 1,
+        activeRuns: 0,
+      });
+    const commandId = await dispatchAdmitted(scheduler, {
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+    });
+    try {
+      for (const [rejectedAt, retryAt] of [
+        [1_000, 2_000],
+        [2_000, 4_000],
+        [4_000, 8_000],
+      ]) {
+        now = rejectedAt!;
+        outbox.markRejected(commandId, "workspace_busy");
+        expect(
+          handleRejectedStart({
+            db,
+            outbox,
+            scheduler,
+            capacityOf,
+            runId: "run-1",
+            commandId,
+            reason: "workspace_busy",
+            now,
+          }),
+        ).toBe("requeued");
+        const count = outbox.get(commandId)?.requeueCount;
+        for (let i = 0; i < 100; i++) scheduler.promote("runner-a", capacityOf("runner-a"));
+        expect(outbox.get(commandId)).toMatchObject({
+          deliveryState: "queued",
+          requeueCount: count,
+        });
+        now = retryAt!;
+        expect(scheduler.promote("runner-a", capacityOf("runner-a"))).toEqual(["run-1"]);
+      }
+      outbox.markAccepted(commandId, "attempt-1");
+      expect(outbox.get(commandId)).toMatchObject({ deliveryState: "accepted", requeueCount: 3 });
+      expect(db.query("SELECT type FROM run_events").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("persistent refusals exhaust the ceiling only across due retries and publish one outcome", async () => {
+    const { db, outbox } = setup();
+    let now = 1_000;
+    const scheduler = new Scheduler(db, { now: () => now });
+    const capacityOf = (runnerId: string) =>
+      scheduler.capacityFor(runnerId, {
+        runnerId,
+        state: "ready",
+        maxConcurrentRuns: 1,
+        activeRuns: 0,
+      });
+    const published: unknown[] = [];
+    const dispatcher = new Dispatcher({
+      outbox,
+      gateway: { sendCommand: () => ({ ok: true }) },
+      onRejectedStart: (runId, commandId, reason) => {
+        handleRejectedStart({
+          db,
+          outbox,
+          scheduler,
+          capacityOf,
+          runId,
+          commandId,
+          reason,
+          now,
+          publish: (event) => published.push(event),
+        });
+      },
+    });
+    const commandId = await dispatchAdmitted(scheduler, {
+      sessionId: "session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      workspaceId: "workspace-1",
+    });
+    const receipt = {
+      commandId,
+      attemptId: "attempt-1",
+      accepted: false,
+      reason: "workspace_busy",
+    };
+    try {
+      for (let count = 1; count <= MAX_REQUEUES + 1; count++) {
+        dispatcher.handleReceipt("runner-a", receipt);
+        expect(outbox.get(commandId)).toMatchObject({
+          deliveryState: "queued",
+          requeueCount: count,
+        });
+        dispatcher.handleReceipt("runner-a", receipt);
+        expect(outbox.get(commandId)?.requeueCount).toBe(count);
+        expect(published).toHaveLength(0);
+        const retryAt = outbox.get(commandId)!.retryAfter!;
+        expect(retryAt - now).toBe(Math.min(30_000, 1_000 * 2 ** Math.min(count - 1, 5)));
+        now = retryAt - 1;
+        expect(scheduler.promote("runner-a", capacityOf("runner-a"))).toEqual([]);
+        now = retryAt;
+        expect(scheduler.promote("runner-a", capacityOf("runner-a"))).toEqual(["run-1"]);
+      }
+      dispatcher.handleReceipt("runner-a", receipt);
+      dispatcher.handleReceipt("runner-a", receipt);
+      expect(outbox.get(commandId)).toMatchObject({
+        deliveryState: "rejected",
+        rejectionReason: "queue_abandoned",
+        requeueCount: MAX_REQUEUES + 1,
+      });
+      expect(published).toHaveLength(1);
+      expect(db.query("SELECT type FROM run_events").all()).toEqual([{ type: "run.failed" }]);
+      expect(scheduler.activeRunFor("session-1")).toBeUndefined();
+    } finally {
+      db.close();
+    }
   });
 
   test("a permanent rejection retires the command, journals nothing, and promotes the next queued run", async () => {
@@ -306,8 +434,7 @@ describe("handleRejectedStart", () => {
       resumeSessionId: "sdk-conversation-1",
     });
 
-    // Nothing else is queued on this runner, so run-1 is the FIFO head and
-    // promotion admits it again immediately; the row ends `pending`.
+    // Even as the only queue entry, a refused start must wait before retrying.
     outbox.markRejected(decision.commandId, "workspace_busy");
     expect(
       handleRejectedStart({
@@ -322,7 +449,7 @@ describe("handleRejectedStart", () => {
     ).toBe("requeued");
 
     const row = outbox.get(decision.commandId);
-    expect(row?.deliveryState).toBe("pending");
+    expect(row?.deliveryState).toBe("queued");
     const payload = (row as { payload: Record<string, unknown> }).payload;
     expect("resumeSessionId" in payload).toBe(false);
     expect(row?.payload).toMatchObject({ prompt: "continue this", runId: "run-1" });

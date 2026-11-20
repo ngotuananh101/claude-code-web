@@ -40,6 +40,7 @@ import { clientKey, createRateLimiter, type RateLimiter } from "./auth/rate-limi
 import { createSecretBox, type SecretBox } from "./config/secret-box.ts";
 import { Dispatcher, openSealedPayload } from "./dispatch/dispatcher.ts";
 import { handleRejectedStart } from "./dispatch/requeue.ts";
+import { startRetryLoop } from "./dispatch/retry-loop.ts";
 import { dispatchTelegramNotification, NOTIFIABLE_EVENT_TYPES } from "./notifications/telegram.ts";
 import { handleApprovalDecision } from "./routes/approvals-routes.ts";
 import {
@@ -161,6 +162,8 @@ export type ServerOptions = {
    * it and gets the loop's 15s default.
    */
   scheduleTickMs?: number;
+  /** Wakeup interval for queued starts with durable workspace retry deadlines. */
+  retryTickMs?: number;
   /**
    * Seam for sealing profile API keys at rest (§18.1, P3-C Task 5b). When
    * absent, `createServer` builds an ephemeral box from random bytes so that
@@ -1133,6 +1136,17 @@ export function createServer(options: ServerOptions): ServerHandle {
     },
   });
 
+  // Result frames can precede runner-side lock cleanup. Wake queued retries
+  // without re-sending in-flight commands on ticks that admit nothing.
+  const retryLoop =
+    options.outbox === undefined
+      ? undefined
+      : startRetryLoop({
+          outbox: options.outbox,
+          promoteRunner: (runnerId) => scheduler.promote(runnerId, capacityOf(runnerId)),
+          ...(options.retryTickMs === undefined ? {} : { intervalMs: options.retryTickMs }),
+        });
+
   return {
     server,
     runnerGateway,
@@ -1141,6 +1155,7 @@ export function createServer(options: ServerOptions): ServerHandle {
     scheduler,
     stop: () => {
       if (telegramPollTimer !== undefined) clearInterval(telegramPollTimer);
+      retryLoop?.stop();
       scheduleLoop.stop();
       server.stop(true);
     },
