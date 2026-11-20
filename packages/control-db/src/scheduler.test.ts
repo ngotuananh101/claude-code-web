@@ -513,6 +513,39 @@ describe("scheduler", () => {
     }
   });
 
+  test("an async dispatch race cannot admit two runs in one workspace", async () => {
+    const { db, scheduler } = setup();
+    const subtle = globalThis.crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    const releases: Array<() => void> = [];
+    subtle.digest = ((...args: Parameters<typeof realDigest>) =>
+      new Promise<ArrayBuffer>((resolve) =>
+        releases.push(() => resolve(realDigest(...args))),
+      )) as typeof subtle.digest;
+    try {
+      const first = scheduler.dispatch(
+        { ...request, sessionId: "workspace-session-1", runId: "workspace-run-1" },
+        capacity({ maxConcurrentRuns: 2 }),
+      );
+      const second = scheduler.dispatch(
+        { ...request, sessionId: "workspace-session-2", runId: "workspace-run-2" },
+        capacity({ maxConcurrentRuns: 2 }),
+      );
+      await Bun.sleep(2);
+      releases[0]?.();
+      await Bun.sleep(2);
+      releases[1]?.();
+      const decisions = await Promise.all([first, second]);
+
+      expect(decisions[0]).toMatchObject({ ok: true, queued: false });
+      expect(decisions[1]).toMatchObject({ ok: true, queued: true });
+      expect(db.query("SELECT COUNT(*) AS n FROM active_runs").get()).toEqual({ n: 1 });
+    } finally {
+      subtle.digest = realDigest;
+      db.close();
+    }
+  });
+
   test("a UNIQUE-race requeue with resumeSessionId keeps payload and fingerprint consistent", async () => {
     const { db, scheduler } = setup();
     const outbox = new CommandOutbox(db);
@@ -882,6 +915,133 @@ describe("scheduler — sealSecurePayload (§18.1, P3-C Task 5b)", () => {
     // the real value.
     const sealed = row.payload_secure.slice("SEAL(".length, -1);
     expect(sealed).toContain("sk-env-secret");
+  });
+});
+
+describe("scheduler workspace retry cooldown", () => {
+  test("dispatch blocks the whole workspace during cooldown while other workspaces remain eligible", async () => {
+    const { db } = setup();
+    let now = 1_000;
+    const scheduler = new Scheduler(db, { now: () => now });
+    const outbox = new CommandOutbox(db);
+    const threeSlots = capacity({ maxConcurrentRuns: 3 });
+    try {
+      const first = await scheduler.dispatch(request, threeSlots);
+      if (!first.ok) throw new Error("expected first run admission");
+      outbox.markRejected(first.commandId, "workspace_busy");
+      scheduler.release(request.runId);
+      expect(outbox.requeue(first.commandId, { now })).toBe("requeued");
+
+      const blocked = await scheduler.dispatch(
+        { ...request, sessionId: "session-2", runId: "run-2", attemptId: "attempt-2" },
+        threeSlots,
+        { queue: false },
+      );
+      expect(blocked).toEqual({ ok: false, reason: "workspace_busy" });
+      expect(
+        db.query("SELECT COUNT(*) AS n FROM command_outbox WHERE run_id = 'run-2'").get(),
+      ).toEqual({ n: 0 });
+
+      const sibling = await scheduler.dispatch(
+        { ...request, sessionId: "session-2", runId: "run-2", attemptId: "attempt-2" },
+        threeSlots,
+      );
+      expect(sibling).toMatchObject({ ok: true, queued: true });
+      // Outbox insertion can tie at millisecond resolution; give the retry the FIFO lead.
+      db.query("UPDATE command_outbox SET created_at = 0 WHERE command_id = ?").run(
+        first.commandId,
+      );
+      const otherWorkspace = await scheduler.dispatch(
+        {
+          ...request,
+          sessionId: "session-3",
+          workspaceId: "workspace-2",
+          runId: "run-3",
+          attemptId: "attempt-3",
+        },
+        threeSlots,
+      );
+      expect(otherWorkspace).toMatchObject({ ok: true, queued: false });
+
+      now = 1_999;
+      expect(scheduler.promote("runner-a", threeSlots)).toEqual([]);
+      now = 2_000;
+      expect(scheduler.promote("runner-a", threeSlots)).toEqual(["run-1"]);
+      expect(outbox.queuedFor("runner-a").map((row) => row.runId)).toEqual(["run-2"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test.each([true, false])(
+    "rechecks a cooldown created during enqueue (queue: %s)",
+    async (queue) => {
+      const { db } = setup();
+      const now = 1_000;
+      const scheduler = new Scheduler(db, { now: () => now });
+      const outbox = new CommandOutbox(db);
+      try {
+        const first = await scheduler.dispatch(request, capacity());
+        if (!first.ok) throw new Error("expected first run admission");
+        scheduler.release(request.runId);
+        const second = scheduler.dispatch(
+          {
+            ...request,
+            sessionId: "session-2",
+            runId: "run-2",
+            attemptId: "attempt-2",
+            resumeSessionId: "sdk-previous",
+          },
+          capacity(),
+          { queue },
+        );
+        // The admission check has run, but the async fingerprint has not returned.
+        outbox.markRejected(first.commandId, "workspace_busy");
+        expect(outbox.requeue(first.commandId, { now })).toBe("requeued");
+        const decision = await second;
+        if (queue) {
+          expect(decision).toMatchObject({ ok: true, queued: true });
+          expect(outbox.queuedForSession("session-2")[0]?.payload).not.toHaveProperty(
+            "resumeSessionId",
+          );
+        } else {
+          expect(decision).toEqual({ ok: false, reason: "workspace_busy" });
+          expect(db.query("SELECT id FROM sessions WHERE id = 'session-2'").get()).toBeNull();
+          expect(outbox.pendingFor("runner-a")).toEqual([]);
+        }
+        expect(scheduler.activeRunFor("session-2")).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  test("promotion retires an expired retry instead of admitting it after its deadline", async () => {
+    const { db } = setup();
+    let now = 1_000;
+    const scheduler = new Scheduler(db, { now: () => now });
+    const outbox = new CommandOutbox(db);
+    try {
+      const first = await scheduler.dispatch(request, capacity());
+      if (!first.ok) throw new Error("expected first run admission");
+      outbox.markRejected(first.commandId, "workspace_busy");
+      scheduler.release(request.runId);
+      expect(outbox.requeue(first.commandId, { now })).toBe("requeued");
+      db.query("UPDATE command_outbox SET expires_at = ? WHERE command_id = ?").run(
+        new Date(1_500).toISOString(),
+        first.commandId,
+      );
+
+      now = 2_000;
+      expect(scheduler.promote("runner-a", capacity())).toEqual([]);
+      expect(scheduler.activeRunFor(request.sessionId)).toBeUndefined();
+      expect(outbox.get(first.commandId)).toMatchObject({
+        deliveryState: "rejected",
+        rejectionReason: "expired",
+      });
+    } finally {
+      db.close();
+    }
   });
 });
 

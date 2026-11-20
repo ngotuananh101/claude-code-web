@@ -628,7 +628,11 @@ Execution không xác minh được sau crash → interrupted / unknown observat
 
 User chọn workspace đã gắn Runner; Server kiểm tra Runner ready/capacity rồi enqueue. Không cần scheduler thông minh hoặc worker pool tùy ý.
 
-Runner khai báo `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS` (mặc định `1`) trong `hello`; Server clamp giá trị này theo policy (`maxConcurrentRuns: 4`). Capacity tính theo từng Runner, không phải pool toàn cục. Queue của run nằm trong `command_outbox` (không có bảng queue riêng). Promotion được kích hoạt bởi: terminal event commit, start bị runner từ chối, reconcile interruption, và runner chuyển sang `ready`.
+Runner khai báo `CC_WEB_RUNNER_MAX_CONCURRENT_RUNS` (mặc định `1`) trong `hello`; Server clamp giá trị này theo policy (`maxConcurrentRuns: 4`). Capacity tính theo từng Runner, không phải pool toàn cục. Queue của run nằm trong `command_outbox` (không có bảng queue riêng). Promotion được kích hoạt bởi: terminal event commit, start bị runner từ chối, reconcile interruption, runner chuyển sang `ready`, và vòng wakeup queue mỗi giây do Server sở hữu.
+
+`run.finished`/`run.failed` từ SDK result ghi nhận outcome của turn, không chứng minh iterator SDK đã kết thúc: task/system events có thể tiếp tục đến. Runner giữ workspace lock đến khi stream thực sự kết thúc và cleanup hoàn tất, không nhả lock sớm hay ngừng đọc chỉ vì đã có result. Nếu start tiếp theo bị từ chối với `workspace_busy`/`draining`, Server trả cùng command về queue và persist `command_outbox.retry_after` cùng lần tăng `requeue_count`: chờ 1, 2, 4, 8, 16 giây rồi tối đa 30 giây/lần. Giữ nguyên ceiling `requeue_count > 50` và outcome `run.failed { reason: "queue_abandoned", detail }` cho từ chối kéo dài; không đốt hết lượt bằng vòng gửi lại tức thì.
+
+Cooldown áp dụng cho toàn bộ `(runner_id, workspace_id)` có queued retry chưa tới hạn, cả dispatch mới lẫn promotion, bao gồm kiểm tra lại sau async enqueue. Workspace khác vẫn được xét theo FIFO trong các entry đủ điều kiện. Deadline không thay đổi command/run/attempt identity hay payload fingerprint; run chờ vẫn hiển thị và huỷ được. Vòng wakeup đọc mọi Runner có queued starts từ SQLite rồi đi qua admission thông thường (ready/capacity/session/workspace), nên tự phục hồi sau restart và không bỏ sót sibling khi entry giữ cooldown bị huỷ. Receipt từ chối lặp lại cho command đã queued/terminal không tăng retry hay mở lại outcome; timer dừng cùng Server.
 
 ### 11.4. Locks và assignment epochs
 

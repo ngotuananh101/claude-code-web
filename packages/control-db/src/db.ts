@@ -120,6 +120,7 @@ export function migrate(db: Database): void {
   addColumnIfMissing(db, "command_outbox", "payload_secure", "TEXT");
   addColumnIfMissing(db, "command_outbox", "requeue_count", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "command_outbox", "queue_snapshot", "TEXT");
+  addColumnIfMissing(db, "command_outbox", "retry_after", "INTEGER");
 
   // The drain query is "undelivered commands for one runner", so index exactly
   // that rather than scanning the table per reconnect.

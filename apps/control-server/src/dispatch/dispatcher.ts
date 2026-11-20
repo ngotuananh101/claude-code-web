@@ -116,10 +116,9 @@ export class Dispatcher {
   /**
    * Apply a receipt from a runner (§9.4).
    *
-   * `accepted` means the inbox persisted the command, not that it ran. Both
-   * answers retire the command from delivery, because either way re-offering it
-   * would produce the same receipt again — the runner is not going to change its
-   * mind about a command it already refused.
+   * `accepted` means the inbox persisted the command, not that it ran. A
+   * refusal retires the current delivery; the scheduler can requeue a
+   * transiently refused start for a later attempt at delivery.
    *
    * Throws for an unknown command id: that is a protocol error, and the gateway
    * turns it into an error frame. Recording it would create delivery state for a
@@ -135,6 +134,16 @@ export class Dispatcher {
     // rejected command was a `run.start` (slot must be freed) or a `run.cancel`
     // (the original run may still execute — §14.2).
     const row = this.#outbox.get(receipt.commandId);
+    // A repeated refusal describes a delivery already handled. In particular,
+    // a queued retry must not spend another retry or extend its cooldown, and
+    // a terminal cancellation/abandonment must not be reopened by a late frame.
+    if (
+      row?.deliveryState === "queued" ||
+      row?.deliveryState === "accepted" ||
+      row?.deliveryState === "rejected"
+    ) {
+      return;
+    }
     this.#outbox.markRejected(receipt.commandId, receipt.reason ?? "rejected_by_runner");
 
     if (row?.kind === "run.start" && row.runId !== undefined) {

@@ -163,6 +163,8 @@ export type SchedulerOptions = {
    * sight. Production wires the server's SecretBox here.
    */
   sealSecurePayload?: (value: unknown) => unknown;
+  /** Clock for durable workspace retry admission. */
+  now?: () => number;
 };
 
 export class Scheduler {
@@ -170,12 +172,14 @@ export class Scheduler {
   readonly #outbox: CommandOutbox;
   readonly #onDispatched: DispatchListener | undefined;
   readonly #sealSecurePayload: ((value: unknown) => unknown) | undefined;
+  readonly #now: () => number;
 
   constructor(db: Database, options: SchedulerOptions = {}) {
     this.#db = db;
     this.#outbox = new CommandOutbox(db);
     this.#onDispatched = options.onDispatched;
     this.#sealSecurePayload = options.sealSecurePayload;
+    this.#now = options.now ?? Date.now;
   }
 
   async dispatch(
@@ -292,6 +296,17 @@ export class Scheduler {
       queueSnapshot,
     });
 
+    // A runner refusal can install a cooldown while the fingerprint is being
+    // computed. Do not turn a now-blocked start into an active run.
+    const blockedDuringEnqueue =
+      !queued &&
+      (this.#workspaceCoolingDown(capacity.runnerId, request.workspaceId) ||
+        this.#workspaceBusy(capacity.runnerId, request.workspaceId));
+    if (blockedDuringEnqueue && !queue) {
+      this.#outbox.markRejected(commandId, "workspace_busy");
+      return { ok: false, reason: "workspace_busy" };
+    }
+
     // The pin is resolved before the await and written here, in the same
     // synchronous continuation as the active_runs insert. Writing it as
     // INSERT OR IGNORE means two racing dispatches for the same session converge
@@ -319,6 +334,16 @@ export class Scheduler {
       return { ok: false, reason: "session_pinned" };
     }
 
+    const queueAfterEnqueue = (): DispatchDecision => {
+      if (raceRequeueRewrite === undefined) {
+        this.#outbox.markQueued(commandId);
+      } else {
+        this.#outbox.replaceQueuedPayload(commandId, raceRequeueRewrite);
+      }
+      return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
+    };
+    if (blockedDuringEnqueue) return queueAfterEnqueue();
+
     if (!queued) {
       try {
         this.#db
@@ -333,14 +358,7 @@ export class Scheduler {
         // keeps its place and will be promoted when the slot frees. The rewrite
         // stays synchronous (no await) so a concurrent promote cannot admit the
         // run while it still carries a stale resumeSessionId.
-        if (String(error).includes("UNIQUE")) {
-          if (raceRequeueRewrite === undefined) {
-            this.#outbox.markQueued(commandId);
-          } else {
-            this.#outbox.replaceQueuedPayload(commandId, raceRequeueRewrite);
-          }
-          return { ok: true, runnerId: capacity.runnerId, commandId, queued: true };
-        }
+        if (String(error).includes("UNIQUE")) return queueAfterEnqueue();
         throw error;
       }
 
@@ -373,11 +391,17 @@ export class Scheduler {
     capacity: RunnerCapacity,
   ): "session_busy" | "workspace_busy" | "runner_at_capacity" | undefined {
     if (this.activeRunFor(request.sessionId)) return "session_busy";
+    if (this.#workspaceCoolingDown(capacity.runnerId, request.workspaceId)) return "workspace_busy";
     if (this.#workspaceBusy(capacity.runnerId, request.workspaceId)) return "workspace_busy";
     if (capacity.maxConcurrentRuns <= 0 || capacity.activeRuns >= capacity.maxConcurrentRuns) {
       return "runner_at_capacity";
     }
     return undefined;
+  }
+
+  #workspaceCoolingDown(runnerId: string, workspaceId: string): boolean {
+    const retryAfter = this.#outbox.workspaceRetryAfter(runnerId, workspaceId);
+    return retryAfter !== undefined && retryAfter > this.#now();
   }
 
   #workspaceBusy(runnerId: string, workspaceId: string): boolean {
@@ -513,8 +537,24 @@ export class Scheduler {
     let slots = capacity.maxConcurrentRuns - activeCount;
     if (slots <= 0) return [];
 
+    const now = this.#now();
+    const expiresBy = new Date(now).toISOString();
+    // Resolve workspace deadlines before iterating in FIFO order: an earlier
+    // sibling must not bypass a later entry's cooldown.
+    const coolingWorkspaces = new Set<string>();
+    const eligible = this.#outbox.queuedFor(runnerId).filter((row) => {
+      if (row.expiresAt !== undefined && row.expiresAt <= expiresBy) {
+        this.#outbox.markRejected(row.commandId, "expired");
+        return false;
+      }
+      if (row.retryAfter === undefined || row.retryAfter <= now) return true;
+      const workspaceId = row.queueSnapshot?.workspaceId ?? row.workspaceId;
+      if (workspaceId !== undefined) coolingWorkspaces.add(workspaceId);
+      return false;
+    });
+
     const admitted: Array<{ runId: string; commandId: string }> = [];
-    for (const row of this.#outbox.queuedFor(runnerId)) {
+    for (const row of eligible) {
       if (slots <= 0) break;
 
       const sessionId = row.sessionId;
@@ -525,6 +565,7 @@ export class Scheduler {
       }
 
       const queueWorkspaceId = row.queueSnapshot?.workspaceId ?? row.workspaceId;
+      if (queueWorkspaceId !== undefined && coolingWorkspaces.has(queueWorkspaceId)) continue;
       const sessionBusy =
         this.#db.query("SELECT 1 AS one FROM active_runs WHERE session_id = ?").get(sessionId) !==
         null;

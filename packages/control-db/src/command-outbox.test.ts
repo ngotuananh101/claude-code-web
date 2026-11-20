@@ -288,6 +288,180 @@ describe("command outbox", () => {
     expect(JSON.parse(row.payload)).toEqual({ op: "workspace.revert", planDigest: "d1" });
   });
 
+  test("requeue writes a durable retry deadline, capped, and maps retryAfter (boundary)", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({ ...command, workspaceId: "workspace-1" });
+    o.markRejected("cmd-1", "workspace_busy");
+
+    const now = 1_000_000;
+    expect(o.requeue("cmd-1", { now })).toBe("requeued");
+    const row1 = o.get("cmd-1");
+    expect(row1).toMatchObject({
+      deliveryState: "queued",
+      requeueCount: 1,
+      retryAfter: now + 1000,
+    });
+
+    // previousCount 1 -> 2000, 2 -> 4000, 3 -> 8000, 4 -> 16000, 5 -> 30000 (cap), 6 -> 30000
+    const expectations: Array<[number, number]> = [
+      [2, 2000],
+      [3, 4000],
+      [4, 8000],
+      [5, 16000],
+      [6, 30000],
+      [7, 30000],
+    ];
+    for (const [count, delay] of expectations) {
+      db.query(
+        "UPDATE command_outbox SET delivery_state = 'rejected', rejection_reason = 'workspace_busy' WHERE command_id = 'cmd-1'",
+      ).run();
+      const t = now + count * 10;
+      expect(o.requeue("cmd-1", { now: t })).toBe("requeued");
+      expect(o.get("cmd-1")).toMatchObject({ requeueCount: count, retryAfter: t + delay });
+    }
+
+    // ceiling preserved: > MAX_REQUEUES refuses
+    db.query(
+      "UPDATE command_outbox SET delivery_state = 'rejected', requeue_count = ? WHERE command_id = 'cmd-1'",
+    ).run(MAX_REQUEUES + 1);
+    expect(o.requeue("cmd-1", { now })).toBe("ceiling");
+    expect(o.get("cmd-1")).toMatchObject({
+      deliveryState: "rejected",
+      requeueCount: MAX_REQUEUES + 1,
+    });
+  });
+
+  test("legacy schema defaults leave retry_after null and markPromoted clears the deadline", async () => {
+    const { db, outbox: o } = outbox();
+    await o.enqueue({ ...command, workspaceId: "workspace-1" });
+    // legacy/default: no retry deadline
+    expect(o.get("cmd-1")?.retryAfter).toBeUndefined();
+    expect(
+      (
+        db.query("SELECT retry_after FROM command_outbox WHERE command_id = 'cmd-1'").get() as {
+          retry_after: number | null;
+        }
+      ).retry_after,
+    ).toBeNull();
+
+    o.markRejected("cmd-1", "workspace_busy");
+    o.requeue("cmd-1", { now: 5000 });
+    expect(o.get("cmd-1")?.retryAfter).toBe(6000);
+
+    o.markPromoted("cmd-1");
+    expect(o.get("cmd-1")).toMatchObject({ deliveryState: "pending", retryAfter: undefined });
+    expect(
+      (
+        db.query("SELECT retry_after FROM command_outbox WHERE command_id = 'cmd-1'").get() as {
+          retry_after: number | null;
+        }
+      ).retry_after,
+    ).toBeNull();
+  });
+
+  test("workspaceRetryAfter returns MAX retry_after for queued run.start rows, resolving snapshot then column", async () => {
+    const { db, outbox: o } = outbox();
+    const base = 10_000;
+    // matching workspace, different deadlines
+    await o.enqueue({
+      ...command,
+      commandId: "c1",
+      runId: "r1",
+      workspaceId: "ws-a",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "ws-a" },
+    });
+    await o.enqueue({
+      ...command,
+      commandId: "c2",
+      runId: "r2",
+      workspaceId: "ws-a",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "ws-a" },
+    });
+    await o.enqueue({
+      ...command,
+      commandId: "c3",
+      runId: "r3",
+      workspaceId: "ws-b",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "ws-b" },
+    });
+    // divergent snapshot/column: resolved workspace follows snapshot (ws-a)
+    await o.enqueue({
+      ...command,
+      commandId: "c4",
+      runId: "r4",
+      workspaceId: "ws-b",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "ws-a" },
+    });
+    // plain queued row (no retry_after) must not impose a cooldown
+    await o.enqueue({
+      ...command,
+      commandId: "c5",
+      runId: "r5",
+      workspaceId: "ws-a",
+      deliveryState: "queued",
+      queueSnapshot: { runnerId: "runner-a", workspaceId: "ws-a" },
+    });
+    await o.enqueue({
+      ...command,
+      commandId: "c6",
+      runId: "r6",
+      workspaceId: "ws-a",
+      deliveryState: "queued",
+    });
+    // An older/malformed snapshot with null workspace falls back to workspace_id.
+    db.query("UPDATE command_outbox SET queue_snapshot = ? WHERE command_id = 'c6'").run(
+      JSON.stringify({ runnerId: "runner-a", workspaceId: null }),
+    );
+
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c1'").run(base + 100);
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c2'").run(base + 500);
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c3'").run(base + 9000);
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c4'").run(base + 300);
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c6'").run(base + 700);
+
+    expect(o.workspaceRetryAfter("runner-a", "ws-a")).toBe(base + 700);
+    expect(o.workspaceRetryAfter("runner-a", "ws-b")).toBe(base + 9000);
+    expect(o.workspaceRetryAfter("runner-a", "ws-missing")).toBeUndefined();
+    expect(o.workspaceRetryAfter("runner-b", "ws-a")).toBeUndefined();
+  });
+
+  test("runnersWithQueuedStarts returns every runner with any queued run.start, deterministically", async () => {
+    const { db, outbox: o } = outbox();
+    const mk = async (id: string, runnerId: string, state: "queued" | "pending" = "queued") => {
+      await o.enqueue({
+        ...command,
+        commandId: id,
+        runnerId,
+        runId: `run-${id}`,
+        workspaceId: "ws",
+        deliveryState: state,
+        queueSnapshot: { runnerId, workspaceId: "ws" },
+      });
+    };
+    await mk("a-due", "runner-b");
+    await mk("b-plain", "runner-a"); // null retry_after (ordinary queued sibling)
+    await mk("c-future", "runner-c");
+    await mk("d-dup", "runner-a"); // same runner, must be distinct
+    await mk("e-nonstart", "runner-e");
+    db.query("UPDATE command_outbox SET kind = 'run.cancel' WHERE command_id = 'e-nonstart'").run();
+    await mk("f-terminal", "runner-f");
+    db.query(
+      "UPDATE command_outbox SET delivery_state = 'rejected', rejected_at = 1 WHERE command_id = 'f-terminal'",
+    ).run();
+    await mk("g-pending", "runner-g", "pending");
+
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'a-due'").run(100);
+    db.query("UPDATE command_outbox SET retry_after = ? WHERE command_id = 'c-future'").run(200);
+
+    // ALL queued run.start runners, including plain and future-deadline rows; no
+    // terminal, non-start, or non-queued rows. Deterministic by runner_id.
+    expect(o.runnersWithQueuedStarts()).toEqual(["runner-a", "runner-b", "runner-c"]);
+  });
+
   test("a command with a secure payload stores it separately from the redacted payload", async () => {
     const { db, outbox: o } = outbox();
 

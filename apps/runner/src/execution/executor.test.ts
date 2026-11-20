@@ -2984,6 +2984,60 @@ describe("P3-C profile injection", () => {
 });
 
 describe("task lifecycle frames", () => {
+  test("a completed turn keeps its workspace locked while post-result task events drain", async () => {
+    const { db } = setup();
+    const workspacePath = WORKSPACES.get("workspace-1")!;
+    beginAttempt(db, {
+      attemptId: "attempt-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      workspacePath,
+    });
+    let releaseTail!: () => void;
+    let observedResult!: () => void;
+    const tail = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    const result = new Promise<void>((resolve) => {
+      observedResult = resolve;
+    });
+    const execution = executeRun(db, COMMAND, {
+      workspacePath,
+      sdk: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", result: "foreground complete" };
+          observedResult();
+          await tail;
+          yield {
+            type: "system",
+            subtype: "task_notification",
+            task_id: "task-late",
+            status: "completed",
+            summary: "Background work drained",
+          };
+          yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
+        })(),
+    });
+    try {
+      await result;
+      expect(events(db).map((event) => event.type)).toEqual(["run.started", "run.finished"]);
+      expect(lockHolder(db, workspacePath)).toBe("attempt-1");
+      expect(attemptState(db, "attempt-1")).toBe("starting");
+    } finally {
+      releaseTail();
+      await execution;
+    }
+    expect(events(db).map((event) => event.type)).toEqual([
+      "run.started",
+      "run.finished",
+      "task.completed",
+      "tasks.changed",
+    ]);
+    expect(lockHolder(db, workspacePath)).toBeUndefined();
+    expect(attemptState(db, "attempt-1")).toBe("finished");
+    db.close();
+  });
+
   test("task frames become typed events, not run.status", async () => {
     const { db } = setup();
     beginAttempt(db, {

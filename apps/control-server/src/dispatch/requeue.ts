@@ -57,7 +57,7 @@ export function handleRejectedStart(
     return "requeued";
   }
 
-  const requeueResult = outbox.requeue(commandId);
+  const requeueResult = outbox.requeue(commandId, now === undefined ? {} : { now });
   if (requeueResult === "requeued") {
     promote(promoteRunnerId);
     return "requeued";

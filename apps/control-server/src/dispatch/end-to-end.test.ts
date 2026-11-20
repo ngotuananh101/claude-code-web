@@ -34,7 +34,11 @@ afterEach(() => {
   handle = undefined;
 });
 
-function startServer(db: Database, outbox: CommandOutbox): string {
+function startServer(
+  db: Database,
+  outbox: CommandOutbox,
+  options: { retryTickMs?: number } = {},
+): string {
   handle = createServer({
     db,
     auth: new AuthService({ db, signer: createSigner(new Uint8Array(32).fill(11)) }),
@@ -44,6 +48,7 @@ function startServer(db: Database, outbox: CommandOutbox): string {
         ? { ok: true, runnerId: "runner-a", ownerId: "user-1" }
         : { ok: false, reason: "unknown" },
     outbox,
+    ...options,
   });
 
   return `ws://127.0.0.1:${handle.server.port}/ws/runner`;
@@ -246,6 +251,112 @@ describe("dispatch over a real socket", () => {
 });
 
 describe("queued run promotion", () => {
+  test("a workspace-busy start waits and retries over the socket without incoming activity", async () => {
+    const db = controlDb();
+    const outbox = new CommandOutbox(db);
+    const url = startServer(db, outbox, { retryTickMs: 10 });
+    const deliveries: Array<{ commandId: string; runId: string; at: number }> = [];
+    const link = await dialWebSocket({ url, credential: "cck_valid" });
+    let ready = false;
+    let unlockAt = Number.POSITIVE_INFINITY;
+    try {
+      link.onMessage((raw) => {
+        const frame = JSON.parse(raw) as Record<string, unknown>;
+        if (frame["type"] === "hello.ok") {
+          link.send(JSON.stringify({ type: "reconcile", runner: [], workspaces: [] }));
+        }
+        if (frame["type"] === "reconcile.ok") ready = true;
+        if (frame["type"] !== "command") return;
+        const record = frame["command"] as Record<string, unknown>;
+        const now = Date.now();
+        deliveries.push({
+          commandId: String(record["commandId"]),
+          runId: String(record["runId"]),
+          at: now,
+        });
+        if (deliveries.length === 1) {
+          unlockAt = now + 500;
+          return; // The test holds the first receipt across several retry ticks.
+        }
+        const accepted = now >= unlockAt;
+        link.send(
+          JSON.stringify({
+            type: "command.receipt",
+            commandId: record["commandId"],
+            attemptId: record["attemptId"],
+            accepted,
+            ...(!accepted ? { reason: "workspace_busy" } : {}),
+          }),
+        );
+      });
+      link.send(
+        JSON.stringify({
+          type: "hello",
+          hello: {
+            protocolVersion: 1,
+            runnerId: "runner-a",
+            bootId: "boot-retry",
+            runnerVersion: "0.0.0",
+            sdkVersion: "0.3.309",
+            platform: "linux/x64",
+            maxConcurrentRuns: 1,
+            activeRuns: [],
+            eventOffsets: [],
+          },
+        }),
+      );
+      await waitFor(() => ready && handle!.runnerGateway.stateOf("runner-a") === "ready");
+      const decision = await handle!.scheduler.dispatch(
+        {
+          sessionId: "retry-session",
+          ownerId: "user-1",
+          workspaceId: "workspace-1",
+          runId: "retry-run",
+          attemptId: "retry-attempt",
+          prompt: "Continue when the previous SDK stream has released its lock",
+        },
+        { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 0 },
+      );
+      if (!decision.ok) throw new Error("dispatch failed");
+      await waitFor(() => deliveries.length > 0);
+      const sibling = await handle!.scheduler.dispatch(
+        {
+          sessionId: "retry-session",
+          ownerId: "user-1",
+          workspaceId: "workspace-1",
+          runId: "queued-sibling",
+          attemptId: "sibling-attempt",
+          prompt: "Wait behind the refused run",
+        },
+        { runnerId: "runner-a", state: "ready", maxConcurrentRuns: 1, activeRuns: 1 },
+      );
+      expect(sibling).toMatchObject({ ok: true, queued: true });
+      await Bun.sleep(70);
+      expect(deliveries).toHaveLength(1);
+      const rejectedAt = Date.now();
+      link.send(
+        JSON.stringify({
+          type: "command.receipt",
+          commandId: decision.commandId,
+          attemptId: "retry-attempt",
+          accepted: false,
+          reason: "workspace_busy",
+        }),
+      );
+      await waitFor(() => {
+        const row = outbox.get(decision.commandId);
+        return row?.deliveryState === "accepted" || row?.rejectionReason === "queue_abandoned";
+      });
+      expect(outbox.get(decision.commandId)?.deliveryState).toBe("accepted");
+      expect(deliveries).toHaveLength(2);
+      expect(deliveries[1]!.at - rejectedAt).toBeGreaterThanOrEqual(1_000);
+      expect(new Set(deliveries.map((delivery) => delivery.commandId)).size).toBe(1);
+      expect(db.query("SELECT type FROM run_events WHERE type = 'run.failed'").all()).toEqual([]);
+    } finally {
+      link.close();
+    }
+  });
+
   test("a queued run is delivered over the socket after the first run's terminal event", async () => {
     const db = controlDb();
     db.query(

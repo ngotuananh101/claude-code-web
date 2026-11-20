@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CommandOutbox } from "./command-outbox.ts";
 import { migrate } from "./db.ts";
 import { JOURNAL_EVENT_SQL } from "./replay-filter.ts";
+import { Scheduler } from "./scheduler.ts";
 
 function tableNames(db: Database): string[] {
   return (
@@ -45,10 +50,89 @@ describe("migrate", () => {
     expect(columns).toContain("avatar");
   });
 
+  test("adds a nullable retry deadline without changing queued commands from an older database", async () => {
+    const db = new Database(":memory:");
+    try {
+      migrate(db);
+      await new CommandOutbox(db).enqueue({
+        commandId: "old-queued-start",
+        runnerId: "runner-a",
+        kind: "run.start",
+        payload: { prompt: "Keep existing work" },
+        issuedAt: "2026-11-20T00:00:00.000Z",
+        deliveryState: "queued",
+      });
+      db.exec("ALTER TABLE command_outbox DROP COLUMN retry_after");
+      migrate(db);
+      migrate(db);
+      expect(db.query("SELECT retry_after FROM command_outbox").get()).toEqual({
+        retry_after: null,
+      });
+      expect(new CommandOutbox(db).queuedFor("runner-a")).toMatchObject([
+        { commandId: "old-queued-start", payload: { prompt: "Keep existing work" } },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("is idempotent", () => {
     const db = new Database(":memory:");
     migrate(db);
     expect(() => migrate(db)).not.toThrow();
+  });
+});
+
+describe("workspace retry persistence", () => {
+  test("a reopened database keeps a refused start queued until its stored deadline", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "cc-web-retry-"));
+    const path = join(directory, "control.sqlite");
+    let db: Database | undefined;
+    const capacity = {
+      runnerId: "runner-a",
+      state: "ready",
+      maxConcurrentRuns: 1,
+      activeRuns: 0,
+    } as const;
+    try {
+      db = new Database(path);
+      migrate(db);
+      let now = 1_000;
+      const scheduler = new Scheduler(db, { now: () => now });
+      const decision = await scheduler.dispatch(
+        {
+          sessionId: "session-1",
+          ownerId: "user-1",
+          workspaceId: "workspace-1",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          prompt: "Wait for cleanup",
+        },
+        capacity,
+      );
+      if (!decision.ok || decision.queued) throw new Error("expected admission");
+      const outbox = new CommandOutbox(db);
+      outbox.markRejected(decision.commandId, "workspace_busy");
+      scheduler.release("run-1");
+      expect(outbox.requeue(decision.commandId, { now })).toBe("requeued");
+      db.close();
+
+      db = new Database(path);
+      migrate(db);
+      const restarted = new Scheduler(db, { now: () => now });
+      now = 1_999;
+      expect(restarted.promote("runner-a", capacity)).toEqual([]);
+      expect(new CommandOutbox(db).get(decision.commandId)).toMatchObject({
+        deliveryState: "queued",
+        retryAfter: 2_000,
+        requeueCount: 1,
+      });
+      now = 2_000;
+      expect(restarted.promote("runner-a", capacity)).toEqual(["run-1"]);
+    } finally {
+      db?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
